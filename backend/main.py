@@ -1,6 +1,8 @@
 """FastAPI server — main entry point."""
 import json
 import os
+import re
+import uuid
 import logging
 from typing import AsyncGenerator
 
@@ -10,7 +12,7 @@ MultiPartParser.max_file_size = 200 * 1024 * 1024  # 200 MB
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
@@ -29,12 +31,48 @@ from backend.skills.package_installer import (
     install_from_zip, uninstall_package, restore_from_disk,
     save_package_state, get_readme,
 )
+from backend.prompts import SYNTHESIZER_PROMPT_TEMPLATE
 
 app = FastAPI(title="Multi-Agent Platform", version="1.0.0")
 
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
+SKILL_HTML_DIR = OUTPUTS_DIR / "skills"
+SKILL_HTML_DIR.mkdir(exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
+
+# Regex to detect HTML content in skill results
+_HTML_DETECT_RE = re.compile(r'<!DOCTYPE\s+html|<html[\s>]', re.IGNORECASE)
+
+
+def _save_skill_html(skill_name: str, content: str, title: str = "") -> dict:
+    """Save HTML content from a skill worker to the outputs directory.
+
+    Returns a dict with ``html_url``, ``file_path``, and ``title`` that
+    replaces the raw HTML in the accumulated state (keeps state small).
+    """
+    file_id = uuid.uuid4().hex[:12]
+    safe_name = re.sub(r'[^\w\-]', '_', skill_name)
+    filename = f"{safe_name}_{file_id}.html"
+    filepath = SKILL_HTML_DIR / filename
+
+    # Extract title from HTML if not provided
+    if not title:
+        title_match = re.search(r'<title>(.*?)</title>', content, re.IGNORECASE)
+        if title_match:
+            title = title_match.group(1).strip()
+
+    filepath.write_text(content, encoding="utf-8")
+    html_url = f"/outputs/skills/{filename}"
+
+    logger.info(f"Saved skill HTML: {skill_name} → {filepath}")
+
+    return {
+        "html_url": html_url,
+        "file_path": str(filepath),
+        "title": title or f"{skill_name} output",
+        "source_skill": skill_name,
+    }
 
 app.add_middleware(
     CORSMiddleware,
@@ -283,6 +321,69 @@ async def get_skill_readme(name: str):
     return {"name": name, "content": content}
 
 
+# ── PPTX Export ─────────────────────────────────────────────────────
+
+class PPTXExportRequest(BaseModel):
+    html_content: str = ""
+    html_url: str = ""
+    title: str = ""
+
+
+@app.post("/api/skills/ppt-animation/export-pptx")
+async def export_pptx(req: PPTXExportRequest):
+    """Export HTML slide content as a .pptx PowerPoint file.
+
+    Accepts either raw ``html_content`` or a ``html_url`` pointing to a
+    previously saved skill output file. Returns the .pptx file as a download.
+    """
+    from backend.tools.ppt_export import export_skill_to_pptx
+
+    html = req.html_content
+
+    # If html_url is provided, read from the saved file
+    if not html and req.html_url:
+        # Resolve URL path to filesystem path
+        url_path = req.html_url.replace("/outputs/", "", 1)
+        file_path = OUTPUTS_DIR / url_path
+        if file_path.exists():
+            html = file_path.read_text(encoding="utf-8")
+        else:
+            return {"error": f"HTML file not found: {req.html_url}"}
+
+    if not html:
+        return {"error": "No HTML content provided (use html_content or html_url)"}
+
+    if not re.search(r'<!DOCTYPE\s+html|<html[\s>]', html, re.IGNORECASE):
+        return {"error": "Content does not appear to be HTML"}
+
+    try:
+        result = export_skill_to_pptx(html, title=req.title or "")
+        return {
+            "success": True,
+            "file_url": result["file_url"],
+            "slides": result["slides"],
+            "title": result["title"],
+        }
+    except Exception as e:
+        logger.error(f"PPTX export error: {e}")
+        return {"error": f"Export failed: {e}"}
+
+
+@app.get("/api/skills/ppt-animation/export-pptx/{filename}")
+async def download_pptx(filename: str):
+    """Download a previously exported PPTX file."""
+    # Sanitize filename to prevent path traversal
+    safe_name = Path(filename).name
+    file_path = OUTPUTS_DIR / safe_name
+    if not file_path.exists() or not safe_name.endswith(".pptx"):
+        return {"error": "File not found"}
+    return FileResponse(
+        path=str(file_path),
+        filename=safe_name,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+
+
 # ── SSE Helper ──
 
 def _sse(event: str, data: dict) -> str:
@@ -412,12 +513,27 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
                         elif key == "image_results":
                             yield _sse("token", {"text": "\n\n> " + agent_label + ": image generated\n\n"})
                         elif key == "skill_outputs":
-                            # Flatten skill outputs for accumulated state
+                            # Flatten skill outputs — save HTML to files so frontend can display them
                             if isinstance(results_list, dict):
                                 for skill_name, skill_items in results_list.items():
                                     skill = skill_registry.get(skill_name)
                                     label = f"{skill.emoji} {skill.display_name}" if skill else skill_name
-                                    yield _sse("token", {"text": f"\n\n> {label}: completed ({len(skill_items)} results)\n"})
+                                    # Save HTML results to files for download/preview
+                                    html_urls = []
+                                    for item in (skill_items or []):
+                                        if isinstance(item, dict):
+                                            result_text = item.get("result", "")
+                                            if isinstance(result_text, str) and _HTML_DETECT_RE.search(result_text[:500]):
+                                                saved = _save_skill_html(skill_name, result_text,
+                                                    title=item.get("task", ""))
+                                                item["html_url"] = saved["html_url"]
+                                                item["html_title"] = saved["title"]
+                                                html_urls.append(saved["html_url"])
+                                    if html_urls:
+                                        url_links = ", ".join(f"[{u.split('/')[-1]}]({u})" for u in html_urls)
+                                        yield _sse("token", {"text": f"\n\n> {label}: 已生成 ({len(skill_items)} 个结果)\n\n{url_links}\n"})
+                                    else:
+                                        yield _sse("token", {"text": f"\n\n> {label}: completed ({len(skill_items)} results)\n"})
                         else:
                             yield _sse("token", {"text": "\n\n> " + agent_label + ": done\n"})
 
@@ -497,29 +613,17 @@ def _build_synth_prompt(user_request: str, state: dict) -> str:
             title = cr.get("chart_spec", {}).get("title", "数据表")
             table_blocks += f"\n\n**{title}**\n\n{cr['table_markdown']}\n"
 
-    return f"""Synthesize agent results into a comprehensive markdown response.
-
-Original request: {user_request}
-
-Research data: {research if research != '[]' else 'None'}
-Analyst structured data: {analyst if analyst != '[]' else 'None'}
-Charts generated: {charts if charts != '[]' else 'None'}
-Images generated: {images if images != '[]' else 'None'}
-Videos generated: {videos if videos != '[]' else 'None'}
-Code generated: {codes if codes != '[]' else 'None'}
-Skill agent outputs: {skill_outputs_json if skill_outputs_json != '{{}}' else 'None'}
-
-CRITICAL — Include these markdown tables VERBATIM in your response:
-{table_blocks if table_blocks else "(no tables generated)"}
-
-Instructions:
-- Present findings clearly with markdown formatting
-- If charts were generated, describe them and include links using ![](url) syntax
-- If images were generated, include them using ![](url) syntax
-- Include the data tables above EXACTLY AS-IS for precise numbers
-- Cite sources from research data when available
-- Include skill agent outputs if they provide additional value
-- Be helpful and direct"""
+    return SYNTHESIZER_PROMPT_TEMPLATE.format(
+        user_request=user_request,
+        research=research if research != '[]' else 'None',
+        analyst=analyst if analyst != '[]' else 'None',
+        charts=charts if charts != '[]' else 'None',
+        images=images if images != '[]' else 'None',
+        videos=videos if videos != '[]' else 'None',
+        codes=codes if codes != '[]' else 'None',
+        skill_outputs=skill_outputs_json if skill_outputs_json != '{{}}' else 'None',
+        table_blocks=table_blocks if table_blocks else "(no tables generated)",
+    )
 
 
 # ── Main ──
