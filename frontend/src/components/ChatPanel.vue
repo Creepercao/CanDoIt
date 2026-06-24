@@ -2,6 +2,7 @@
 import { ref, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat.js'
 import { renderMarkdown } from '../utils/markdown.js'
+import { exportPptx } from '../api/index.js'
 import ThinkingPanel from './ThinkingPanel.vue'
 import ImageLightbox from './ImageLightbox.vue'
 
@@ -41,6 +42,31 @@ function formatTime(ts) {
 
 function openLightbox(src, alt) {
   lightbox.value = { visible: true, src, alt }
+}
+
+const exporting = ref({})  // Track export state per html_url
+
+async function doExportPptx(htmlResult) {
+  const key = htmlResult.html_url
+  exporting.value[key] = true
+  try {
+    const result = await exportPptx({ htmlUrl: htmlResult.html_url, title: htmlResult.title || '' })
+    if (result.success && result.file_url) {
+      // Trigger browser download
+      const link = document.createElement('a')
+      link.href = result.file_url
+      link.download = result.file_url.split('/').pop() || 'presentation.pptx'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } else if (result.error) {
+      alert('导出失败: ' + result.error)
+    }
+  } catch (e) {
+    alert('导出失败: ' + e.message)
+  } finally {
+    exporting.value[key] = false
+  }
 }
 
 function renderContent(text) {
@@ -162,6 +188,38 @@ watch(() => store.currentResponse, (val) => {
                   {{ cr.result?.title || cr.chart_spec?.title || cr.task }}
                 </p>
                 <p class="text-[10px] text-gray-500">{{ cr.chart_spec?.chart_type || 'chart' }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- HTML Skill results (flowchart, ppt-animation, etc.) -->
+          <div v-if="msg.html_results?.length" class="mt-3 space-y-2">
+            <div
+              v-for="(hr, hi) in msg.html_results"
+              :key="'html-'+hi"
+              class="rounded-lg border border-gray-600 bg-surface-900 p-3 flex items-center justify-between gap-3"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-gray-200 truncate">{{ hr.title || hr.skill_name }}</p>
+                <p class="text-[10px] text-gray-500 truncate">{{ hr.skill_name }} · {{ hr.task?.slice(0, 60) }}</p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <a
+                  :href="hr.html_url"
+                  target="_blank"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-blue-400 transition-colors"
+                >
+                  预览
+                </a>
+                <button
+                  v-if="hr.skill_name === 'ppt-animation'"
+                  @click="doExportPptx(hr)"
+                  :disabled="exporting[hr.html_url]"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white transition-colors flex items-center gap-1"
+                >
+                  <span v-if="exporting[hr.html_url]" class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  {{ exporting[hr.html_url] ? '导出中...' : '导出 PPTX' }}
+                </button>
               </div>
             </div>
           </div>
