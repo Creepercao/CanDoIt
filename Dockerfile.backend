@@ -1,4 +1,4 @@
-ARG MIRROR=docker.1ms.run/library/
+ARG MIRROR=docker.m.daocloud.io/library/
 
 FROM ${MIRROR}python:3.12-slim
 
