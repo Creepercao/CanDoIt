@@ -29,7 +29,7 @@ Key rules:
 - Simple chat → direct_response only.
 
 {{
-    "tasks": [{{"agent": "...", "prompt": "..."}}],
+    "tasks": [{"agent": "...", "prompt": "..."}],
     "direct_response": "reply here if no tools needed, else empty"
 }}
 

@@ -71,7 +71,7 @@ class AgentState(TypedDict):
 def _build_supervisor_prompt() -> str:
     """Build the supervisor prompt dynamically, including skill agent descriptions."""
     skills_section = skill_registry.build_skills_section()
-    return SUPERVISOR_PROMPT_TEMPLATE.format(skills_section=skills_section)
+    return SUPERVISOR_PROMPT_TEMPLATE.replace("{skills_section}", skills_section)
 
 
 async def supervisor_node(state: AgentState) -> dict:
@@ -84,7 +84,7 @@ async def supervisor_node(state: AgentState) -> dict:
         temperature=0.1, max_tokens=256, provider_config=None,
     )
 
-    prompt = _build_supervisor_prompt().format(user_request=user_req)
+    prompt = _build_supervisor_prompt().replace("{user_request}", user_req)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
 
