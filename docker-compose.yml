@@ -29,6 +29,8 @@ services:
     volumes:
       - ./API.json:/app/API.json:ro
       - ./outputs:/app/outputs
+      - ./backend/skills/packages:/app/backend/skills/packages
+      - ./skills_packages.json:/app/skills_packages.json
 
   frontend:
     build:
