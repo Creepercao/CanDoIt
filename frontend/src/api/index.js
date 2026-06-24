@@ -146,3 +146,12 @@ export async function fetchSkillReadme(name) {
   const { data } = await api.get(`/skills/${encodeURIComponent(name)}/readme`)
   return data
 }
+
+export async function exportPptx({ htmlContent = '', htmlUrl = '', title = '' }) {
+  const { data } = await api.post('/skills/ppt-animation/export-pptx', {
+    html_content: htmlContent,
+    html_url: htmlUrl,
+    title,
+  })
+  return data
+}

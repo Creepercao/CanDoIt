@@ -126,9 +126,10 @@ export const useChatStore = defineStore('chat', () => {
     thinkSteps.value = []
     currentResponse.value = ''
 
-    // Capture chart/image results from final SSE event
+    // Capture chart/image/html results from final SSE event
     let finalChartResults = []
     let finalImageResults = []
+    let finalHtmlResults = []
 
     // Create abort controller for stop button
     abortController = new AbortController()
@@ -167,6 +168,7 @@ export const useChatStore = defineStore('chat', () => {
               }
               finalChartResults = data.chart_results || []
               finalImageResults = data.image_results || []
+              finalHtmlResults = data.html_results || []
               break
             case 'error':
               currentResponse.value = `**Error:** ${data.error}`
@@ -184,6 +186,7 @@ export const useChatStore = defineStore('chat', () => {
         thinkSteps: [...thinkSteps.value],
         chart_results: finalChartResults,
         image_results: finalImageResults,
+        html_results: finalHtmlResults,
       })
     } catch (e) {
       if (e.name === 'AbortError') {

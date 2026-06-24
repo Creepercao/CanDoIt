@@ -17,6 +17,9 @@ outputs/*.png
 outputs/*.jpg
 outputs/*.mp4
 outputs/*.gif
+outputs/*.pptx
+outputs/*.html
+outputs/skills/
 
 # IDE
 .vscode/
