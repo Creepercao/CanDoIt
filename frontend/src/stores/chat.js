@@ -4,6 +4,7 @@ import {
   fetchChatModels, fetchImageModels, fetchVideoModels,
   refreshModels, sendMessage, generateImage, generateVideo,
   fetchSkills, toggleSkill,
+  installSkillPackage, uninstallSkillPackage,
 } from '../api/index.js'
 
 // localStorage helpers
@@ -98,6 +99,18 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       console.error('Failed to toggle skill:', e)
     }
+  }
+
+  async function doInstallPackage(file) {
+    const result = await installSkillPackage(file)
+    await loadSkills()
+    return result
+  }
+
+  async function doUninstallPackage(name) {
+    const result = await uninstallSkillPackage(name)
+    await loadSkills()
+    return result
   }
 
   function addThinkStep(step) {
@@ -243,6 +256,6 @@ export const useChatStore = defineStore('chat', () => {
     skills, enabledSkills, agentEmojiMap,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
-    loadSkills, doToggleSkill,
+    loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
   }
 })
