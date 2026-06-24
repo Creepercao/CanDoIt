@@ -122,3 +122,27 @@ export async function toggleSkill(name, enabled) {
   })
   return data
 }
+
+export async function installSkillPackage(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post('/skills/packages/install', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+export async function uninstallSkillPackage(name) {
+  const { data } = await api.delete(`/skills/packages/${encodeURIComponent(name)}`)
+  return data
+}
+
+export async function fetchSkillPackages() {
+  const { data } = await api.get('/skills/packages')
+  return data
+}
+
+export async function fetchSkillReadme(name) {
+  const { data } = await api.get(`/skills/${encodeURIComponent(name)}/readme`)
+  return data
+}

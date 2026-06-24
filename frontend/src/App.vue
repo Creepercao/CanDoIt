@@ -4,6 +4,7 @@ import { useChatStore } from './stores/chat.js'
 import ChatPanel from './components/ChatPanel.vue'
 import ImageGenerator from './components/ImageGenerator.vue'
 import VideoGenerator from './components/VideoGenerator.vue'
+import SkillManager from './components/SkillManager.vue'
 import ModelSelector from './components/ModelSelector.vue'
 
 const store = useChatStore()
@@ -16,6 +17,7 @@ const tabs = [
   { key: 'chat', label: '💬 对话', component: ChatPanel },
   { key: 'image', label: '🎨 文生图', component: ImageGenerator },
   { key: 'video', label: '🎬 文生视频', component: VideoGenerator },
+  { key: 'skills', label: '🔧 技能', component: SkillManager },
 ]
 </script>
 
@@ -64,6 +66,10 @@ const tabs = [
           <span>视频</span>
           <span class="text-gray-400 truncate ml-2 max-w-[120px]">{{ store.selectedVideoModel || '未选择' }}</span>
         </div>
+        <div class="flex items-center justify-between">
+          <span>技能</span>
+          <span class="text-gray-400">{{ store.enabledSkills.length }}/{{ store.skills.length }}</span>
+        </div>
       </div>
     </aside>
 
@@ -102,6 +108,7 @@ const tabs = [
           <ChatPanel v-if="store.activeTab === 'chat'" key="chat" />
           <ImageGenerator v-else-if="store.activeTab === 'image'" key="image" />
           <VideoGenerator v-else-if="store.activeTab === 'video'" key="video" />
+          <SkillManager v-else-if="store.activeTab === 'skills'" key="skills" />
         </KeepAlive>
       </div>
     </main>
