@@ -33,6 +33,14 @@ from backend.tools.chart_gen import generate_chart
 from backend.tools.data_scraper import search_and_scrape
 from backend.cache import cache
 from backend.skills.registry import skill_registry, _merge_skill_outputs
+from backend.prompts import (
+    SUPERVISOR_PROMPT_TEMPLATE,
+    RESEARCH_QUERY_PROMPT,
+    RESEARCH_SYNTHESIS_PROMPT,
+    ANALYST_PROMPT,
+    IMAGE_ENHANCE_PROMPT,
+    CODE_WORKER_PROMPT,
+)
 
 logger = logging.getLogger("graph")
 
@@ -63,28 +71,7 @@ class AgentState(TypedDict):
 def _build_supervisor_prompt() -> str:
     """Build the supervisor prompt dynamically, including skill agent descriptions."""
     skills_section = skill_registry.build_skills_section()
-
-    return (
-        "Route user request to agents. Output JSON only.\n\n"
-        "Agents:\n"
-        "- research: web search + scraping for real info/data/numbers\n"
-        "- analyst: extract structured numerical data from research text → produce table-ready data. Use AFTER research.\n"
-        "- chart: render charts/tables from analyst's structured data. Use AFTER analyst.\n"
-        "- image_gen: creative/artistic images, illustrations, photos\n"
-        "- video_gen: video, animation\n"
-        "- code: programming, scripts, HTML, app code\n"
-        + skills_section +
-        "\nKey rules:\n"
-        '- "搜索/查数据 + 图表" → research → analyst → chart (all 3, sequential)\n'
-        '- "图表 from data" without search → research → analyst → chart (to find + extract + render)\n'
-        "- photo/illustration/art → image_gen (parallel with research if both needed)\n"
-        "- Simple chat → direct_response only.\n\n"
-        "{{\n"
-        '    "tasks": [{{"agent": "...", "prompt": "..."}}],\n'
-        '    "direct_response": "reply here if no tools needed, else empty"\n'
-        "}}\n\n"
-        "Request: {user_request}"
-    )
+    return SUPERVISOR_PROMPT_TEMPLATE.format(skills_section=skills_section)
 
 
 async def supervisor_node(state: AgentState) -> dict:
@@ -266,10 +253,8 @@ async def research_worker(state: AgentState) -> dict:
             # Generate multiple search queries for better coverage
             search_queries = [prompt_text[:80]]  # Original query first
             if len(prompt_text) > 20:
-                kw_resp = await llm.ainvoke([HumanMessage(content=
-                    f"Generate 3 optimized search queries for this request. "
-                    f"Use different angles (English if original is Chinese, specific terms, site: filters). "
-                    f"Output one query per line, no numbering.\n\n{prompt_text}")])
+                kw_resp = await llm.ainvoke([HumanMessage(
+                    content=RESEARCH_QUERY_PROMPT.format(text=prompt_text))])
                 extra = kw_resp.content if hasattr(kw_resp, "content") else str(kw_resp)
                 for line in extra.strip().split("\n"):
                     q = line.strip().lstrip("0123456789.-) ").strip()
@@ -300,10 +285,8 @@ async def research_worker(state: AgentState) -> dict:
             # Merge and re-synthesize
             combined_text = "\n\n---\n\n".join(all_synthesis) if all_synthesis else ""
             if combined_text:
-                synth = await llm.ainvoke([HumanMessage(content=
-                    f"Synthesize key information from these search results. "
-                    f"Include ALL specific numbers, statistics, data points, names, and facts found. "
-                    f"Be exhaustive and cite which source each fact came from.\n\n{combined_text[:8000]}")])
+                synth = await llm.ainvoke([HumanMessage(
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined_text[:8000]))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
             else:
                 synthesis = "No data found from web search."
@@ -321,48 +304,6 @@ async def research_worker(state: AgentState) -> dict:
 
 
 # ── Analyst Worker (extract structured data from research) ──
-
-ANALYST_PROMPT = """Extract structured numerical data from the text below. Output VALID JSON only.
-
-Chart type selection rules (pick the BEST fit):
-- "bar": comparing categories side-by-side (teams, products, countries, rankings)
-- "horizontal_bar": bar chart with long category names (over 8 chars)
-- "line": single trend over TIME (years, months, dates — ONE series)
-- "multi_line": MULTIPLE trends over time (2+ lines on same chart)
-- "pie": proportions, percentages, parts of a whole (values sum to ~100%)
-- "scatter": correlation between two numeric variables
-- "area": cumulative or stacked values over time
-
-Return format:
-{{
-    "viable": true,
-    "chart_type": "bar",
-    "title": "descriptive chart title in Chinese",
-    "x_label": "X axis label",
-    "y_label": "Y axis label",
-    "labels": ["Category A", "Category B", "Category C"],
-    "datasets": [{{"label": "Data Series Name", "values": [10, 20, 30]}}]
-}}
-
-CRITICAL RULES:
-- ONLY use numbers explicitly present in the text — NEVER invent or estimate
-- labels and values arrays must be the SAME length
-- Each dataset must have a "label" (string) and "values" (array of numbers)
-- If no real numbers found → {{"viable": false}}
-- Extract ALL available data points, not just the first few
-
-Example for sports standings:
-{{
-    "viable": true, "chart_type": "bar", "title": "NBA西部排名积分",
-    "x_label": "球队", "y_label": "胜场",
-    "labels": ["雷霆", "掘金", "森林狼", "快船", "独行侠"],
-    "datasets": [{{"label": "胜场", "values": [57, 56, 55, 51, 50]}},
-                 {{"label": "负场", "values": [25, 26, 27, 31, 32]}}]
-}}
-
-Text to extract from:
-{text}"""
-
 
 async def analyst_worker(state: AgentState) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "analyst"]
@@ -473,8 +414,8 @@ async def image_worker(state: AgentState) -> dict:
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
         try:
-            enhanced = await llm.ainvoke([HumanMessage(content=
-                f'Enhance to detailed image prompt. Output only prompt.\nInput: "{prompt_text}"')])
+            enhanced = await llm.ainvoke([HumanMessage(
+                content=IMAGE_ENHANCE_PROMPT.format(prompt=prompt_text))])
             enhanced_text = enhanced.content if hasattr(enhanced, "content") else str(enhanced)
             result = await generate_image(prompt=enhanced_text.strip(), model_id=image_model)
             results.append({"task": prompt_text, "prompt_used": enhanced_text.strip(), "result": result})
@@ -526,7 +467,8 @@ async def code_worker(state: AgentState) -> dict:
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
         try:
-            resp = await llm.ainvoke([HumanMessage(content=f"Write clean code. Return only code.\nTask: {prompt_text}")])
+            resp = await llm.ainvoke([HumanMessage(
+                content=CODE_WORKER_PROMPT.format(prompt=prompt_text))])
             content = resp.content if hasattr(resp, "content") else str(resp)
             results.append({"task": prompt_text, "code": content})
         except Exception as e:
