@@ -67,6 +67,11 @@ class Skill:
     (the catch-all dict) instead of polluting the top-level state namespace.
     """
 
+    _package_meta: Optional[dict] = field(default=None, repr=False)
+    """Internal metadata for package-based skills (install path, version, etc.).
+    None for Python module skills, a dict for installed standard skill packages.
+    """
+
     def __post_init__(self):
         if not self.result_key:
             self.result_key = f"{self.name}_results"

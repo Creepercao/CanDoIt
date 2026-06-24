@@ -217,7 +217,8 @@ class SkillRegistry:
         """Return skill metadata suitable for the ``/api/skills`` endpoint."""
         result: list[dict] = []
         for skill in self._skills.values():
-            result.append({
+            is_package = skill._package_meta is not None
+            entry = {
                 "name": skill.name,
                 "display_name": skill.display_name,
                 "description": skill.description,
@@ -228,8 +229,18 @@ class SkillRegistry:
                 "is_independent": skill.is_independent,
                 "node_name": skill.node_name,
                 "tool_count": len(skill.tools),
-            })
+                "is_package": is_package,
+                "has_readme": is_package,  # package skills always have SKILL.md
+            }
+            if is_package:
+                entry["package_version"] = skill._package_meta.get("version", "")
+            result.append(entry)
         return result
+
+    def get_readme(self, name: str) -> Optional[str]:
+        """Get the full SKILL.md content for a skill, if available."""
+        from backend.skills.package_installer import get_readme as _get_readme
+        return _get_readme(name)
 
 
 # ── Singleton ──

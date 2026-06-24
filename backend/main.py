@@ -4,7 +4,11 @@ import os
 import logging
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+# Raise Starlette's multipart file size limit (default 1 MB → 200 MB)
+from starlette.formparsers import MultiPartParser
+MultiPartParser.max_file_size = 200 * 1024 * 1024  # 200 MB
+
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +25,10 @@ from backend.agents.graph import get_multi_agent_graph, rebuild_graph
 from backend.tools.image_gen import generate_image
 from backend.tools.video_gen import generate_video
 from backend.skills.registry import skill_registry
+from backend.skills.package_installer import (
+    install_from_zip, uninstall_package, restore_from_disk,
+    save_package_state, get_readme,
+)
 
 app = FastAPI(title="Multi-Agent Platform", version="1.0.0")
 
@@ -103,6 +111,7 @@ def _get_result_keys() -> tuple[str, ...]:
 async def startup():
     await registry.refresh()
     skill_registry.discover()
+    restore_from_disk(skill_registry)  # Restore persisted package skills
     get_multi_agent_graph()  # Build graph after skill discovery
     redis_status = "enabled" if os.environ.get("REDIS_URL") else "disabled"
     logger.info(
@@ -205,8 +214,73 @@ async def toggle_skill(name: str, enabled: bool = True):
         return {"error": f"Skill '{name}' not found"}
     skill.enabled = enabled
     rebuild_graph()
+    # Persist for package skills
+    if skill._package_meta and skill._package_meta.get("source") == "package":
+        save_package_state(name, enabled)
     logger.info(f"Skill '{name}' {'enabled' if enabled else 'disabled'} — graph rebuilt")
     return {"name": name, "enabled": enabled, "graph_rebuilt": True}
+
+
+# ── Skill Package Management ──
+
+@app.post("/api/skills/packages/install")
+async def install_skill_package(file: UploadFile = File(...)):
+    """Upload a .zip file containing standard skill packages (SKILL.md format).
+
+    Extracts, registers, and persists each skill found in the archive.
+    Rebuilds the agent graph on success.
+    """
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        return {"error": "Only .zip files are accepted"}
+
+    try:
+        zip_bytes = await file.read()
+    except Exception as e:
+        return {"error": f"Failed to read uploaded file: {e}"}
+
+    if len(zip_bytes) > 200 * 1024 * 1024:
+        return {"error": "File too large (max 200 MB)"}
+
+    result = install_from_zip(zip_bytes, skill_registry)
+
+    if result["installed"]:
+        rebuild_graph()
+
+    return result
+
+
+@app.delete("/api/skills/packages/{name}")
+async def uninstall_skill_package(name: str):
+    """Uninstall a standard skill package. Removes files, unregisters, rebuilds graph."""
+    skill = skill_registry.get(name)
+    if not skill:
+        return {"error": f"Skill '{name}' not found"}
+
+    if not skill._package_meta or skill._package_meta.get("source") != "package":
+        return {"error": f"'{name}' is not a package skill and cannot be uninstalled"}
+
+    ok = uninstall_package(name, skill_registry)
+    if ok:
+        rebuild_graph()
+        return {"name": name, "uninstalled": True, "graph_rebuilt": True}
+    return {"error": f"Failed to uninstall '{name}'"}
+
+
+@app.get("/api/skills/packages")
+async def list_packages():
+    """List installed standard skill packages."""
+    from backend.skills.package_installer import _load_packages_json
+    packages = _load_packages_json()
+    return {"packages": packages, "count": len(packages)}
+
+
+@app.get("/api/skills/{name}/readme")
+async def get_skill_readme(name: str):
+    """Get the full SKILL.md content for a skill."""
+    content = skill_registry.get_readme(name)
+    if content is None:
+        return {"error": f"No readme found for skill '{name}'"}
+    return {"name": name, "content": content}
 
 
 # ── SSE Helper ──
