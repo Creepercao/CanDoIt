@@ -108,32 +108,4 @@ async def search_and_scrape(query: str, llm, max_pages: int = 3) -> dict:
         f"Extract ALL specific data points from these pages. List every number, score, stat, fact. Be exhaustive.\n\n{combined[:6000]}")])
     synthesis = synth.content if hasattr(synth, "content") else str(synth)
 
-    # Structured data extraction for charts
-    extract = await llm.ainvoke([_HM(content=f"""Extract chart data. Output JSON only.
-
-Chart type rules:
-- "bar": comparing categories (teams, scores) - "pie": proportions/percentages
-- "line": trend over time - "multi_line": multiple trends
-- "horizontal_bar": long labels
-
-Return:
-{{"viable": true, "chart_type": "bar", "title": "...", "x_label": "...", "y_label": "...",
-  "labels": ["A","B"], "datasets": [{{"label": "S1", "values": [1,2]}}]}}
-
-ONLY real numbers from text. None → {{"viable": false}}.
-
-Text:
-{combined[:4000]}""")])
-    extract_text = extract.content if hasattr(extract, "content") else str(extract)
-
-    structured = None
-    m = re.search(r'\{.*\}', extract_text, re.DOTALL)
-    if m:
-        try:
-            d = json.loads(m.group())
-            if d.get("viable") and d.get("labels") and d.get("datasets"):
-                structured = d
-        except Exception:
-            pass
-
-    return {"synthesis": synthesis, "structured_data": structured, "sources": all_sources}
+    return {"synthesis": synthesis, "structured_data": None, "sources": all_sources}

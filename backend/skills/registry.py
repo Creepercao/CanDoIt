@@ -1,9 +1,4 @@
-"""SkillRegistry — discovers, validates, and queries skill modules.
-
-Provides helpers consumed by graph.py (node registration, routing maps)
-and main.py (labels, SSE tracking, API responses).
-"""
-
+"""SkillRegistry — discovers, validates, and queries skill modules."""
 from __future__ import annotations
 
 import importlib
@@ -18,12 +13,7 @@ logger = logging.getLogger("skills")
 
 
 def _merge_skill_outputs(existing: dict, incoming: dict) -> dict:
-    """Reducer for ``skill_outputs`` in AgentState.
-
-    Merges two dicts by concatenating lists under matching keys.
-    Used as the ``Annotated[dict, reducer]`` function so that parallel
-    Send branches accumulate instead of overwriting.
-    """
+    """Reducer for skill_outputs in AgentState — merges dicts by concatenating lists."""
     merged = {**existing}
     for key, value in incoming.items():
         if key in merged:
@@ -34,29 +24,15 @@ def _merge_skill_outputs(existing: dict, incoming: dict) -> dict:
 
 
 class SkillRegistry:
-    """Auto-discovers and manages skill modules under ``backend.skills``.
-
-    Usage::
-
-        from backend.skills.registry import skill_registry
-
-        skill_registry.discover()
-        for skill in skill_registry.get_enabled().values():
-            print(skill.display_name)
-    """
+    """Auto-discovers and manages skill modules under backend.skills."""
 
     def __init__(self, skills_package: str = "backend.skills"):
         self._package = skills_package
         self._skills: dict[str, Skill] = {}
         self._discovered = False
 
-    # ── Discovery ──────────────────────────────────────────────
-
     def discover(self) -> None:
-        """Import all modules under the skills package and register their SKILL instances.
-
-        Idempotent — subsequent calls are no-ops.
-        """
+        """Import all modules under the skills package and register their SKILL instances."""
         if self._discovered:
             return
 
@@ -76,120 +52,49 @@ class SkillRegistry:
                 skill = getattr(mod, "SKILL", None)
                 if isinstance(skill, Skill):
                     self.register(skill)
-                    logger.info(
-                        f"Discovered skill: {skill.name} ({skill.display_name}) "
-                        f"[{'independent' if skill.is_independent else 'chain: ' + ','.join(skill.depends_on)}]"
-                    )
-                else:
-                    logger.debug(f"Module '{name}' has no SKILL instance — skipping")
+                    logger.info(f"Discovered skill: {skill.name} ({skill.display_name})")
             except Exception as e:
                 logger.error(f"Failed to load skill module '{name}': {e}")
 
         self._discovered = True
         logger.info(f"Skill discovery complete: {len(self._skills)} skills found")
 
-    # ── Registration ───────────────────────────────────────────
-
     def register(self, skill: Skill) -> None:
-        """Register a skill (auto-discovered or manually added)."""
-        if skill.name in self._skills:
-            logger.warning(f"Skill '{skill.name}' already registered; overwriting.")
         self._skills[skill.name] = skill
 
     def unregister(self, name: str) -> None:
-        """Remove a skill by name."""
         self._skills.pop(name, None)
 
-    # ── Query ──────────────────────────────────────────────────
-
     def get(self, name: str) -> Optional[Skill]:
-        """Get a skill by name, or None."""
         return self._skills.get(name)
 
     def get_all(self) -> dict[str, Skill]:
-        """Return all registered skills (including disabled)."""
         return dict(self._skills)
 
     def get_enabled(self) -> dict[str, Skill]:
-        """Return only enabled skills."""
         return {k: v for k, v in self._skills.items() if v.enabled}
 
-    # ── Graph-building helpers ─────────────────────────────────
+    # ── Graph-building helpers ──
 
     def get_node_funcs(self) -> dict[str, Callable]:
-        """Return ``{node_name: worker_function}`` for all enabled skills with workers."""
-        result: dict[str, Callable] = {}
-        for skill in self.get_enabled().values():
-            if skill.worker is not None:
-                result[skill.node_name] = skill.worker
-        return result
+        """Return {node_name: worker_function} for all enabled skills."""
+        return {s.node_name: s.worker
+                for s in self.get_enabled().values() if s.worker is not None}
 
     def get_node_for_agent(self) -> dict[str, str]:
-        """Map agent type → node name for all enabled skills with workers."""
-        result: dict[str, str] = {}
-        for skill in self.get_enabled().values():
-            if skill.worker is not None:
-                result[skill.name] = skill.node_name
-        return result
+        """Map agent type → node name for all enabled skills."""
+        return {s.name: s.node_name
+                for s in self.get_enabled().values() if s.worker is not None}
 
     def get_agent_labels(self) -> dict[str, str]:
-        """Return ``{node_name: display_label}`` for SSE / frontend use."""
-        result: dict[str, str] = {}
-        for skill in self.get_enabled().values():
-            if skill.worker is not None:
-                result[skill.node_name] = f"{skill.emoji} {skill.display_name}"
-        return result
+        """Return {node_name: display_label} for SSE / frontend."""
+        return {s.node_name: f"{s.emoji} {s.display_name}"
+                for s in self.get_enabled().values() if s.worker is not None}
 
     def get_independent_agents(self) -> set[str]:
         """Return set of agent-type names for independent (parallel dispatch) skills."""
-        return {
-            s.name for s in self.get_enabled().values()
-            if s.worker is not None and s.is_independent
-        }
-
-    def get_chain_agents(self) -> list[str]:
-        """Return ordered list of agent types in the sequential chain.
-
-        Built-in chain base: ``research → analyst → chart``.
-        Skills with ``depends_on`` are inserted after their last dependency.
-        Insertion order: skills with fewer deps first (deterministic).
-        """
-        chain = ["research", "analyst", "chart"]
-
-        enabled = self.get_enabled()
-        skill_entries: list[tuple[str, list[str]]] = []
-        for skill in enabled.values():
-            if skill.worker is not None and not skill.is_independent:
-                skill_entries.append((skill.name, list(skill.depends_on)))
-
-        # Sort by dependency count (fewer → inserted first)
-        skill_entries.sort(key=lambda x: len(x[1]))
-
-        for name, deps in skill_entries:
-            insert_pos = -1
-            for dep in deps:
-                try:
-                    pos = chain.index(dep)
-                    insert_pos = max(insert_pos, pos)
-                except ValueError:
-                    pass
-            if insert_pos >= 0:
-                chain.insert(insert_pos + 1, name)
-            else:
-                # No dependency found in chain — prepend
-                chain.insert(0, name)
-
-        return chain
-
-    def get_result_keys(self) -> list[str]:
-        """Return all state keys that workers may write results into."""
-        keys: list[str] = ["skill_outputs"]
-        for skill in self.get_enabled().values():
-            if skill.worker is not None and skill.result_key not in keys:
-                keys.append(skill.result_key)
-        return keys
-
-    # ── Supervisor prompt ──────────────────────────────────────
+        return {s.name for s in self.get_enabled().values()
+                if s.worker is not None and s.is_independent}
 
     def build_skills_section(self) -> str:
         """Build the 'Additional skill agents:' section for the supervisor prompt."""
@@ -211,14 +116,11 @@ class SkillRegistry:
             return "Additional skill agents:\n" + "\n".join(lines) + "\n"
         return ""
 
-    # ── Serialization ──────────────────────────────────────────
-
     def to_api_list(self) -> list[dict]:
-        """Return skill metadata suitable for the ``/api/skills`` endpoint."""
+        """Return skill metadata for the /api/skills endpoint."""
         result: list[dict] = []
         for skill in self._skills.values():
-            is_package = skill._package_meta is not None
-            entry = {
+            result.append({
                 "name": skill.name,
                 "display_name": skill.display_name,
                 "description": skill.description,
@@ -228,21 +130,8 @@ class SkillRegistry:
                 "depends_on": skill.depends_on,
                 "is_independent": skill.is_independent,
                 "node_name": skill.node_name,
-                "tool_count": len(skill.tools),
-                "is_package": is_package,
-                "has_readme": is_package,  # package skills always have SKILL.md
-            }
-            if is_package:
-                entry["package_version"] = skill._package_meta.get("version", "")
-            result.append(entry)
+            })
         return result
 
-    def get_readme(self, name: str) -> Optional[str]:
-        """Get the full SKILL.md content for a skill, if available."""
-        from backend.skills.package_installer import get_readme as _get_readme
-        return _get_readme(name)
-
-
-# ── Singleton ──
 
 skill_registry = SkillRegistry()
