@@ -1,12 +1,11 @@
-"""Load model provider config from API.json (lenient JS-like or standard JSON)."""
+"""Load model provider config from API.json."""
 import json
-import re
 from pathlib import Path
-from dataclasses import dataclass
+from typing import Any
+from pydantic import BaseModel
 
 
-@dataclass
-class ProviderConfig:
+class ProviderConfig(BaseModel):
     name: str
     base_url: str
     apikey: str
@@ -20,8 +19,8 @@ def load_providers() -> list[ProviderConfig]:
     with open(api_json, "r", encoding="utf-8") as f:
         raw = f.read()
 
+    # API.json uses JS-like loose syntax — extract values
     providers: list[ProviderConfig] = []
-
     # Try standard JSON first
     try:
         data = json.loads(raw)
@@ -34,8 +33,10 @@ def load_providers() -> list[ProviderConfig]:
     except json.JSONDecodeError:
         pass
 
-    # Fallback: parse JS-like format (unquoted keys, trailing commas)
-    blocks = re.split(r'\}\s*,\s*\{', raw.strip().strip('[]').strip('{}').strip())
+    # Fallback: parse loose JS-like format
+    import re
+    # Split by object boundaries
+    blocks = re.split(r'\}\s*\{', raw.strip().strip('[]').strip())
     for block in blocks:
         block = block.strip().strip('{').strip('}').strip()
         name_match = re.search(r'name\s*:\s*"([^"]+)"', block)

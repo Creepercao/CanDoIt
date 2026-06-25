@@ -2,6 +2,7 @@
 import { ref, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat.js'
 import { renderMarkdown } from '../utils/markdown.js'
+import { exportPptx } from '../api/index.js'
 import ThinkingPanel from './ThinkingPanel.vue'
 import ImageLightbox from './ImageLightbox.vue'
 
@@ -43,16 +44,42 @@ function openLightbox(src, alt) {
   lightbox.value = { visible: true, src, alt }
 }
 
+const exporting = ref({})  // Track export state per html_url
+
+async function doExportPptx(htmlResult) {
+  const key = htmlResult.html_url
+  exporting.value[key] = true
+  try {
+    const result = await exportPptx({ htmlUrl: htmlResult.html_url, title: htmlResult.title || '' })
+    if (result.success && result.file_url) {
+      // Trigger browser download
+      const link = document.createElement('a')
+      link.href = result.file_url
+      link.download = result.file_url.split('/').pop() || 'presentation.pptx'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } else if (result.error) {
+      alert('导出失败: ' + result.error)
+    }
+  } catch (e) {
+    alert('导出失败: ' + e.message)
+  } finally {
+    exporting.value[key] = false
+  }
+}
+
 function renderContent(text) {
   if (!text) return ''
   return renderMarkdown(text)
 }
 
-// Debounced streaming markdown render — 80ms throttle for performance
+// Debounced streaming markdown – re-render at most every 80ms
 const streamingHtml = ref('')
 let debounceTimer = null
 watch(() => store.currentResponse, (val) => {
   if (!store.isLoading) {
+    // Final render: no debounce needed
     streamingHtml.value = renderMarkdown(val)
     return
   }
@@ -91,6 +118,7 @@ watch(() => store.currentResponse, (val) => {
         :key="idx"
         :class="['flex gap-3', msg.role === 'user' ? 'justify-end' : 'justify-start']"
       >
+        <!-- Avatar -->
         <div v-if="msg.role === 'assistant'" class="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-sm shrink-0">
           🤖
         </div>
@@ -106,12 +134,14 @@ watch(() => store.currentResponse, (val) => {
                 : 'bg-surface-800 border border-gray-700/50 rounded-bl-md',
           ]"
         >
+          <!-- Past think steps (collapsed by default) -->
           <ThinkingPanel
             v-if="msg.thinkSteps?.length"
             :steps="msg.thinkSteps"
             :is-streaming="false"
           />
 
+          <!-- Rendered markdown content -->
           <div
             class="prose prose-invert prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300 [&_blockquote]:border-l-primary-500 [&_table]:text-xs"
             v-html="renderContent(msg.content)"
@@ -162,7 +192,7 @@ watch(() => store.currentResponse, (val) => {
             </div>
           </div>
 
-          <!-- HTML Skill results -->
+          <!-- HTML Skill results (flowchart, ppt-animation, etc.) -->
           <div v-if="msg.html_results?.length" class="mt-3 space-y-2">
             <div
               v-for="(hr, hi) in msg.html_results"
@@ -173,13 +203,24 @@ watch(() => store.currentResponse, (val) => {
                 <p class="text-sm font-medium text-gray-200 truncate">{{ hr.title || hr.skill_name }}</p>
                 <p class="text-[10px] text-gray-500 truncate">{{ hr.skill_name }} · {{ hr.task?.slice(0, 60) }}</p>
               </div>
-              <a
-                :href="hr.html_url"
-                target="_blank"
-                class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-blue-400 transition-colors shrink-0"
-              >
-                预览
-              </a>
+              <div class="flex items-center gap-2 shrink-0">
+                <a
+                  :href="hr.html_url"
+                  target="_blank"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-blue-400 transition-colors"
+                >
+                  预览
+                </a>
+                <button
+                  v-if="hr.skill_name === 'ppt-animation'"
+                  @click="doExportPptx(hr)"
+                  :disabled="exporting[hr.html_url]"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white transition-colors flex items-center gap-1"
+                >
+                  <span v-if="exporting[hr.html_url]" class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  {{ exporting[hr.html_url] ? '导出中...' : '导出 PPTX' }}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -195,17 +236,20 @@ watch(() => store.currentResponse, (val) => {
       <div v-if="store.isLoading" class="flex gap-3 justify-start">
         <div class="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-sm shrink-0">🤖</div>
         <div class="max-w-[80%] rounded-2xl rounded-bl-md px-4 py-3 bg-surface-800 border border-gray-700/50 text-sm">
+          <!-- Live thinking panel -->
           <ThinkingPanel
             :steps="store.thinkSteps"
             :is-streaming="true"
           />
 
+          <!-- Streaming response preview (debounced markdown for performance) -->
           <div
             v-if="store.currentResponse"
             class="prose prose-invert prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300"
             v-html="streamingHtml"
           ></div>
 
+          <!-- Initial loading dots if no response yet -->
           <div v-if="!store.currentResponse && store.thinkSteps.length === 0" class="flex gap-1">
             <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay:0ms"></span>
             <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay:150ms"></span>

@@ -31,9 +31,9 @@ SUPERVISOR_PROMPT_TEMPLATE = """你是任务路由器。唯一职责：把用户
 
 记住：用户要任何文档、图表、演示、可视化——必须分派给对应代理，绝不要用纯文字回复。
 
-输出格式（字段名必须用英文，值用中文）：
+输出格式：
 {
-    "tasks": [{"agent": "ppt-animation", "prompt": "生成关于XXX的PPT演示"}],
+    "tasks": [{"agent": "代理名", "prompt": "详细任务描述"}],
     "direct_response": ""
 }
 

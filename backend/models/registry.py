@@ -1,87 +1,92 @@
-"""Model registry — hardcoded model list per provider."""
-from typing import NamedTuple
+"""Model registry — auto-discover available models from providers."""
+import httpx
+from typing import Any
 from backend.config import PROVIDERS, ProviderConfig
 
-IMAGE_KEYWORDS = ["stable", "diffusion", "sd", "image", "flux", "dall-e", "midjourney",
-                   "sdxl", "sd3", "playground"]
-VIDEO_KEYWORDS = ["video", "svd", "animate", "runway", "cogvideo", "cogvideox",
-                   "videocraft", "zeroscope", "kling"]
 
-
-def _classify(model_id: str) -> str:
-    lower = model_id.lower()
-    for kw in VIDEO_KEYWORDS:
-        if kw in lower:
-            return "video"
-    for kw in IMAGE_KEYWORDS:
-        if kw in lower:
-            return "image"
-    return "chat"
-
-
-class ModelInfo(NamedTuple):
-    id: str
-    provider: str
-    type: str  # chat, image, video
+class ModelInfo:
+    def __init__(self, model_id: str, provider: str, model_type: str = "chat"):
+        self.id = model_id
+        self.provider = provider
+        self.type = model_type  # chat, image, video
 
 
 class ModelRegistry:
-    """Hardcoded model registry — add known models here or let the frontend
-    use the provider's /models endpoint directly."""
+    """Auto-fetch available models from each provider."""
 
-    # Default models known to work — add more as needed
-    _DEFAULT_MODELS: dict[str, list[ModelInfo]] = {}
+    IMAGE_KEYWORDS = ["stable", "diffusion", "sd", "image", "flux", "dall-e", "midjourney",
+                       "sdxl", "sd3", "playground"]
+    VIDEO_KEYWORDS = ["video", "svd", "animate", "runway", "cogvideo", "cogvideox",
+                       "videocraft", "zeroscope", "kling"]
 
     def __init__(self):
-        self._models: dict[str, list[ModelInfo]] = dict(self._DEFAULT_MODELS)
+        self.models: dict[str, list[ModelInfo]] = {}  # provider -> models
         self._fetched = False
 
-    def _ensure_defaults(self):
-        """Populate with sensible defaults per provider if no models loaded."""
-        if not self._models and PROVIDERS:
-            for p in PROVIDERS:
-                models = [
-                    ModelInfo("deepseek-ai/DeepSeek-V3", p.name, "chat"),
-                    ModelInfo("stabilityai/stable-diffusion-3-5-large", p.name, "image"),
-                ]
-                self._models[p.name] = models
+    async def fetch_models(self, provider: ProviderConfig) -> list[ModelInfo]:
+        """Fetch available models from a provider's /models endpoint."""
+        models: list[ModelInfo] = []
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{provider.base_url}/models",
+                    headers={"Authorization": f"Bearer {provider.apikey}"}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    model_list = data.get("data", []) or data.get("models", [])
+                    for item in model_list:
+                        model_id = item.get("id", "") or item.get("name", "")
+                        if not model_id:
+                            continue
+                        mtype = self._classify(model_id)
+                        models.append(ModelInfo(model_id, provider.name, mtype))
+        except Exception:
+            pass
+        return models
+
+    def _classify(self, model_id: str) -> str:
+        lower = model_id.lower()
+        for kw in self.VIDEO_KEYWORDS:
+            if kw in lower:
+                return "video"
+        for kw in self.IMAGE_KEYWORDS:
+            if kw in lower:
+                return "image"
+        return "chat"
 
     async def refresh(self):
-        """Load hardcoded models (no HTTP fetch)."""
-        self._ensure_defaults()
+        """Fetch all models from all providers."""
+        self.models.clear()
+        for provider in PROVIDERS:
+            self.models[provider.name] = await self.fetch_models(provider)
         self._fetched = True
 
-    def list_models(self, model_type: str = "") -> list[ModelInfo]:
-        self._ensure_defaults()
+    def get_all(self) -> list[ModelInfo]:
         result = []
-        for provider_models in self._models.values():
-            for m in provider_models:
-                if not model_type or m.type == model_type:
-                    result.append(m)
+        for provider_models in self.models.values():
+            result.extend(provider_models)
         return result
 
-    def get_all(self) -> list[ModelInfo]:
-        return self.list_models()
-
     def get_by_type(self, model_type: str) -> list[ModelInfo]:
-        return self.list_models(model_type)
+        return [m for m in self.get_all() if m.type == model_type]
 
     def get_chat_models(self) -> list[ModelInfo]:
-        return self.list_models("chat")
+        return self.get_by_type("chat")
 
     def get_image_models(self) -> list[ModelInfo]:
-        return self.list_models("image")
+        return self.get_by_type("image")
 
     def get_video_models(self) -> list[ModelInfo]:
-        return self.list_models("video")
+        return self.get_by_type("video")
 
     def find_provider_config(self, model_id: str) -> ProviderConfig | None:
-        self._ensure_defaults()
         for provider in PROVIDERS:
-            if provider.name in self._models:
-                for m in self._models[provider.name]:
+            if provider.name in self.models:
+                for m in self.models[provider.name]:
                     if m.id == model_id:
                         return provider
+        # If model not found in registry, return first provider (user may know)
         return PROVIDERS[0] if PROVIDERS else None
 
 
