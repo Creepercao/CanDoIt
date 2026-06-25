@@ -4,14 +4,8 @@ Agents: supervisor, research, analyst, chart, image_gen, video_gen, code
         + skill agents (auto-discovered from backend.skills)
 
 Data flow: research(scrape) → analyst(extract structured data) → chart(render)
-
-Graph topology (dynamic):
-  - Built-in chain: research → analyst → chart (skill chain agents inserted after deps)
-  - Independent workers (image, video, code + skill independents) run in parallel via Send
-  - All paths converge at synthesizer, then END.
-
-The graph is built lazily via get_multi_agent_graph() so that skill
-enable/disable toggles can trigger a rebuild.
+Independent workers (image, video, code + skill independents) run in parallel via Send.
+All paths converge at synthesizer, then END.
 """
 from __future__ import annotations
 
@@ -25,21 +19,21 @@ from langgraph.graph import StateGraph, END
 from langgraph.constants import Send
 from langchain_core.messages import HumanMessage, BaseMessage
 
-from backend.models.provider import get_default_chat_model, create_chat_model
+from backend.models.provider import create_chat_model
 from backend.models.registry import registry
 from backend.tools.image_gen import generate_image
 from backend.tools.video_gen import generate_video
 from backend.tools.chart_gen import generate_chart
 from backend.tools.data_scraper import search_and_scrape
-from backend.cache import cache
+from backend.cache import get as cache_get, set as cache_set, hash_key
 from backend.skills.registry import skill_registry, _merge_skill_outputs
 from backend.prompts import (
     SUPERVISOR_PROMPT_TEMPLATE,
-    RESEARCH_QUERY_PROMPT,
     RESEARCH_SYNTHESIS_PROMPT,
     ANALYST_PROMPT,
     IMAGE_ENHANCE_PROMPT,
     CODE_WORKER_PROMPT,
+    SYNTHESIZER_PROMPT_TEMPLATE,
 )
 
 logger = logging.getLogger("graph")
@@ -63,25 +57,63 @@ class AgentState(TypedDict):
     image_model_id: str
     video_model_id: str
     router_model_id: str
-    _skip_synthesizer: bool  # If True, synthesizer_node is a no-op (streaming path handles it)
+    _skip_synthesizer: bool
+
+
+# ── Shared constants (used by main.py) ──
+
+AGENT_MAP = {
+    "research": "research_worker", "analyst": "analyst_worker",
+    "chart": "chart_worker", "image_gen": "image_worker",
+    "video_gen": "video_worker", "code": "code_worker",
+}
+
+AGENT_LABELS = {
+    "supervisor": "🧠 主管", "research_worker": "🔍 研究员",
+    "analyst_worker": "🔢 分析师", "chart_worker": "📊 图表师",
+    "image_worker": "🎨 画师", "video_worker": "🎬 视频师",
+    "code_worker": "💻 程序员", "synthesizer": "📝 整合",
+}
+
+INDEPENDENT_AGENTS = {"image_gen", "video_gen", "code"}
+
+CHAIN_AGENTS = ["research", "analyst", "chart"]
+
+WORKER_NODES = {
+    "research_worker", "analyst_worker", "chart_worker",
+    "image_worker", "video_worker", "code_worker",
+}
+
+RESULT_KEYS = (
+    "research_results", "analyst_results", "chart_results",
+    "image_results", "video_results", "code_results",
+    "skill_outputs",
+)
+
+
+def _refresh_shared_constants():
+    """Update shared constants with skill agents after discovery."""
+    AGENT_MAP.update(skill_registry.get_node_for_agent())
+    AGENT_LABELS.update(skill_registry.get_agent_labels())
+    INDEPENDENT_AGENTS.update(skill_registry.get_independent_agents())
+    WORKER_NODES.update(skill_registry.get_node_funcs().keys())
 
 
 # ── Supervisor ──
 
 def _build_supervisor_prompt() -> str:
-    """Build the supervisor prompt dynamically, including skill agent descriptions."""
     skills_section = skill_registry.build_skills_section()
     return SUPERVISOR_PROMPT_TEMPLATE.replace("{skills_section}", skills_section)
 
 
 async def supervisor_node(state: AgentState) -> dict:
     user_req = state["user_request"]
-    cache_key = f"route:{cache.hash_key(user_req)}"
+    cache_key = f"route:{hash_key(user_req)}"
 
     router_id = state.get("router_model_id", "") or state.get("chat_model_id", "")
     llm = create_chat_model(
         model_id=router_id or "deepseek-ai/DeepSeek-V3",
-        temperature=0.1, max_tokens=256, provider_config=None,
+        temperature=0.1, max_tokens=512, provider_config=None,
     )
 
     prompt = _build_supervisor_prompt().replace("{user_request}", user_req)
@@ -98,113 +130,41 @@ async def supervisor_node(state: AgentState) -> dict:
             direct = data.get("direct_response", "")
         except json.JSONDecodeError:
             direct = content
+    else:
+        direct = content
 
     if direct and not tasks:
         return {"tasks": [], "final_response": direct}
     if tasks:
-        await cache.set(cache_key, tasks, ttl=300)
+        await cache_set(cache_key, tasks, ttl=300)
     return {"tasks": tasks}
 
 
 # ── Routing ──
 
-# Built-in agent→node mapping (skill agents are merged in dynamically)
-_BUILTIN_NODE_FOR_AGENT = {
-    "research": "research_worker", "analyst": "analyst_worker",
-    "chart": "chart_worker", "image_gen": "image_worker",
-    "video_gen": "video_worker", "code": "code_worker",
-}
-
-# Built-in independent (parallel) agents
-_BUILTIN_INDEPENDENT = {"image_gen", "video_gen", "code"}
-
-# Built-in chain base order
-_BUILTIN_CHAIN = ["research", "analyst", "chart"]
-
-
 def _get_agent_map() -> dict[str, str]:
-    """Merge built-in and skill agent→node mappings."""
-    result = dict(_BUILTIN_NODE_FOR_AGENT)
+    result = dict(AGENT_MAP)
     result.update(skill_registry.get_node_for_agent())
     return result
 
 
 def _get_independent_agents() -> set[str]:
-    """All agent types that can run in parallel (no upstream dependencies)."""
-    return _BUILTIN_INDEPENDENT | skill_registry.get_independent_agents()
-
-
-def _get_chain_agents() -> list[str]:
-    """Ordered list of agent types in the sequential chain (built-in + skill)."""
-    return skill_registry.get_chain_agents()
-
-
-def _get_all_worker_nodes() -> set[str]:
-    """All worker node names (built-in + skill)."""
-    nodes = {
-        "research_worker", "analyst_worker", "chart_worker",
-        "image_worker", "video_worker", "code_worker",
-    }
-    nodes.update(skill_registry.get_node_funcs().keys())
-    return nodes
+    return INDEPENDENT_AGENTS | skill_registry.get_independent_agents()
 
 
 def _base_from_state(state: dict) -> dict:
-    """Extract model config from state for Send payload."""
     return {
         "chat_model_id": state.get("chat_model_id", ""),
         "image_model_id": state.get("image_model_id", ""),
         "video_model_id": state.get("video_model_id", ""),
+        "router_model_id": state.get("router_model_id", ""),
+        "tasks": state.get("tasks", []),
+        "user_request": state.get("user_request", ""),
     }
 
 
-def _make_chain_router(
-    my_agent_type: str,
-    agent_map: dict[str, str],
-    remaining_chain: list[str],
-):
-    """Create a routing function for a chain agent.
-
-    After this agent completes, dispatch the next agent in the chain
-    that has tasks. If no more chain agents have tasks, go to synthesizer.
-
-    Returns a closure usable as a LangGraph conditional edge function.
-    """
-    async def router(state: AgentState):
-        tasks = state.get("tasks", [])
-        agent_types_in_tasks = set(t.get("agent", "") for t in tasks)
-        base = _base_from_state(state)
-
-        try:
-            my_idx = remaining_chain.index(my_agent_type)
-        except ValueError:
-            return "synthesizer"
-
-        for next_agent in remaining_chain[my_idx + 1:]:
-            if next_agent in agent_types_in_tasks:
-                next_node = agent_map.get(next_agent)
-                if next_node:
-                    # For skill agents, verify dependencies are met
-                    skill = skill_registry.get(next_agent)
-                    if skill and not skill.is_independent:
-                        unmet = [d for d in skill.depends_on
-                                 if d not in agent_types_in_tasks]
-                        if unmet:
-                            continue  # skip — deps not satisfied
-                    return [Send(next_node, base)]
-
-        return "synthesizer"
-
-    return router
-
-
 def route_after_supervisor(state: AgentState):
-    """Fan out to entry-point workers only.
-
-    Independent workers always get Send if tasks exist.
-    The chain: only Send to the FIRST chain agent that has tasks.
-    Subsequent chain agents are triggered by conditional edges from their upstream node.
-    """
+    """Fan out to independent workers + first chain agent with tasks."""
     tasks = state.get("tasks", [])
     if state.get("final_response") or not tasks:
         return END
@@ -212,32 +172,56 @@ def route_after_supervisor(state: AgentState):
     agent_types = set(t.get("agent", "") for t in tasks)
     base = _base_from_state(state)
     agent_map = _get_agent_map()
+    indep_set = _get_independent_agents()
     sends = []
 
-    # Independent workers — dispatch directly (parallel with chain)
-    for agent in _get_independent_agents():
+    # Independent workers — dispatch in parallel
+    for agent in indep_set:
         if agent in agent_types:
             node = agent_map.get(agent)
             if node:
                 sends.append(Send(node, base))
 
-    # Chain entry: only Send to the earliest chain agent that has tasks
-    for agent in _get_chain_agents():
+    # Chain entry: only the first chain agent with tasks
+    for agent in CHAIN_AGENTS:
         if agent in agent_types:
             node = agent_map.get(agent)
             if node:
                 sends.append(Send(node, base))
-            break  # Only the first in the chain gets dispatched
+            break
 
-    if not sends:
-        return END
-    return sends
+    return sends if sends else END
 
 
-# ── Research Worker (search + scrape raw pages) ──
+def route_after_research(state: AgentState):
+    """After research: go to analyst if tasks exist, else synthesizer."""
+    tasks = state.get("tasks", [])
+    agent_types = set(t.get("agent", "") for t in tasks)
+    base = _base_from_state(state)
+    agent_map = _get_agent_map()
 
-_RESEARCH_AGENT_TYPES = {"research"}
+    if "analyst" in agent_types:
+        node = agent_map.get("analyst")
+        if node:
+            return [Send(node, base)]
+    return "synthesizer"
 
+
+def route_after_analyst(state: AgentState):
+    """After analyst: go to chart if tasks exist, else synthesizer."""
+    tasks = state.get("tasks", [])
+    agent_types = set(t.get("agent", "") for t in tasks)
+    base = _base_from_state(state)
+    agent_map = _get_agent_map()
+
+    if "chart" in agent_types:
+        node = agent_map.get("chart")
+        if node:
+            return [Send(node, base)]
+    return "synthesizer"
+
+
+# ── Research Worker ──
 
 async def research_worker(state: AgentState) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "research"]
@@ -250,51 +234,21 @@ async def research_worker(state: AgentState) -> dict:
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
         try:
-            # Generate multiple search queries for better coverage
-            search_queries = [prompt_text[:80]]  # Original query first
-            if len(prompt_text) > 20:
-                kw_resp = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_QUERY_PROMPT.format(text=prompt_text))])
-                extra = kw_resp.content if hasattr(kw_resp, "content") else str(kw_resp)
-                for line in extra.strip().split("\n"):
-                    q = line.strip().lstrip("0123456789.-) ").strip()
-                    if q and len(q) > 5:
-                        search_queries.append(q[:120])
+            scraped = await search_and_scrape(prompt_text, llm, max_pages=3)
+            raw_text = scraped.get("synthesis", "")
+            sources = scraped.get("sources", [])
 
-            # Search with multiple queries and merge results
-            all_sources = []
-            all_synthesis = []
-            seen_urls = set()
-
-            for query in search_queries[:4]:  # Max 4 queries
-                scraped = await search_and_scrape(query, llm, max_pages=3)
-                raw_text = scraped.get("synthesis", "")
-                sources = scraped.get("sources", [])
-                structured_data = scraped.get("structured_data")
-
-                # Deduplicate sources
-                for src in sources:
-                    url = src.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_sources.append(src)
-
-                if raw_text and len(raw_text) > 50:
-                    all_synthesis.append(raw_text)
-
-            # Merge and re-synthesize
-            combined_text = "\n\n---\n\n".join(all_synthesis) if all_synthesis else ""
-            if combined_text:
+            synthesis = raw_text
+            if raw_text and len(raw_text) > 50:
                 synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined_text[:8000]))])
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=raw_text[:8000]))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
             else:
                 synthesis = "No data found from web search."
 
             results.append({
-                "task": prompt_text, "sources": all_sources[:8],
-                "synthesis": synthesis, "raw_text": combined_text[:4000],
-                "structured_data": structured_data,
+                "task": prompt_text, "sources": sources[:8],
+                "synthesis": synthesis, "raw_text": raw_text[:4000],
             })
         except Exception as e:
             logger.error(f"Research worker error: {e}")
@@ -303,14 +257,13 @@ async def research_worker(state: AgentState) -> dict:
     return {"research_results": results}
 
 
-# ── Analyst Worker (extract structured data from research) ──
+# ── Analyst Worker ──
 
 async def analyst_worker(state: AgentState) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "analyst"]
     if not my_tasks:
         return {"analyst_results": []}
 
-    # Build data source from research results (now available since analyst runs after research)
     research_data = state.get("research_results", [])
     data_source = ""
     if research_data:
@@ -324,7 +277,6 @@ async def analyst_worker(state: AgentState) -> dict:
 
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
-        # Use research data if available, otherwise fall back to task prompt
         source = data_source or prompt_text
         try:
             prompt = ANALYST_PROMPT.format(text=source[:6000])
@@ -353,14 +305,13 @@ async def analyst_worker(state: AgentState) -> dict:
     return {"analyst_results": results}
 
 
-# ── Chart Worker (render only — takes analyst's structured data) ──
+# ── Chart Worker ──
 
 async def chart_worker(state: AgentState) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "chart"]
     if not my_tasks:
         return {"chart_results": []}
 
-    # Get structured data from analyst first, then fall back to research
     chart_spec = None
     for r in state.get("analyst_results", []):
         if r.get("structured_data"):
@@ -391,7 +342,6 @@ async def chart_worker(state: AgentState) -> dict:
                 results.append({
                     "task": prompt_text,
                     "result": {"error": "No structured data from analyst/research"},
-                    "fallback": True,
                 })
         except Exception as e:
             logger.error(f"Chart worker error: {e}")
@@ -481,41 +431,30 @@ async def code_worker(state: AgentState) -> dict:
 # ── Synthesizer ──
 
 async def synthesizer_node(state: AgentState) -> dict:
-    """Synthesize all worker results into a markdown response.
-
-    When _skip_synthesizer is True (streaming path), this is a no-op —
-    the streaming orchestrator handles synthesis with token-level streaming.
-    """
-    if state.get("final_response") or state.get("_skip_synthesizer"):
+    """Synthesize all worker results into a markdown response."""
+    if state.get("final_response"):
         return {}
 
     llm = _get_chat_llm(state)
 
-    # Collect markdown tables
     table_blocks = ""
     for cr in state.get("chart_results", []):
         if cr.get("table_markdown"):
             title = cr.get("chart_spec", {}).get("title", "数据表")
             table_blocks += f"\n\n**{title}**\n\n{cr['table_markdown']}\n"
 
-    prompt = f"""Synthesize agent results.
+    prompt = SYNTHESIZER_PROMPT_TEMPLATE.format(
+        user_request=state["user_request"],
+        research=_fmt(state.get("research_results", [])),
+        analyst=_fmt(state.get("analyst_results", [])),
+        charts=_fmt(state.get("chart_results", [])),
+        images=_fmt(state.get("image_results", [])),
+        videos=_fmt(state.get("video_results", [])),
+        codes=_fmt(state.get("code_results", [])),
+        skill_outputs=_fmt(state.get("skill_outputs", {})),
+        table_blocks=table_blocks if table_blocks else "(no tables generated)",
+    )
 
-Original request: {state["user_request"]}
-
-Research: {_fmt(state.get("research_results", []))}
-Analyst data: {_fmt(state.get("analyst_results", []))}
-Charts: {_fmt(state.get("chart_results", []))}
-Images: {_fmt(state.get("image_results", []))}
-Videos: {_fmt(state.get("video_results", []))}
-Code: {_fmt(state.get("code_results", []))}
-Skill outputs: {_fmt(state.get("skill_outputs", {}))}
-
-Include these tables in response (copy verbatim):
-{table_blocks}
-
-Create comprehensive markdown response with data tables and chart descriptions."""
-
-    # Use astream for token-level streaming via astream_events
     full = ""
     async for chunk in llm.astream([HumanMessage(content=prompt)]):
         text = chunk.content if hasattr(chunk, "content") else str(chunk)
@@ -554,21 +493,17 @@ def _build_table_md(spec: dict) -> str:
 
 # ── Build Graph ──
 
-def build_graph() -> StateGraph:
-    """Build the multi-agent graph incorporating both built-in and skill agents.
+def build_graph():
+    """Build the multi-agent graph incorporating both built-in and skill agents."""
+    _refresh_shared_constants()
 
-    The graph topology adapts to the currently enabled skills:
-    - Skill independent agents are added as parallel workers (like image/video/code)
-    - Skill chain agents are inserted into the research→analyst→chart chain
-    - All workers converge at synthesizer → END
-    """
     workflow = StateGraph(AgentState)
 
-    # ── Core nodes (always present) ──
+    # Core nodes
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("synthesizer", synthesizer_node)
 
-    # ── Built-in worker nodes ──
+    # Built-in worker nodes
     builtin_nodes = {
         "research_worker": research_worker,
         "analyst_worker": analyst_worker,
@@ -577,69 +512,49 @@ def build_graph() -> StateGraph:
         "video_worker": video_worker,
         "code_worker": code_worker,
     }
-    for name, func in builtin_nodes.items():
-        workflow.add_node(name, func)
+    for n, f in builtin_nodes.items():
+        workflow.add_node(n, f)
 
-    # ── Skill worker nodes ──
-    skill_nodes = skill_registry.get_node_funcs()
-    for name, func in skill_nodes.items():
-        workflow.add_node(name, func)
+    # Skill worker nodes
+    for n, f in skill_registry.get_node_funcs().items():
+        workflow.add_node(n, f)
 
     workflow.set_entry_point("supervisor")
 
-    # ── Supervisor fan-out ──
-    all_worker_nodes = list(builtin_nodes.keys()) + list(skill_nodes.keys())
+    # Supervisor fan-out
+    all_nodes = list(builtin_nodes.keys()) + list(skill_registry.get_node_funcs().keys())
     workflow.add_conditional_edges(
         "supervisor", route_after_supervisor,
-        {n: n for n in all_worker_nodes} | {END: END}
+        {n: n for n in all_nodes} | {END: END}
     )
 
-    # ── Chain routing ──
-    agent_map = _get_agent_map()
-    chain = _get_chain_agents()
+    # Chain routing: research → analyst → chart
+    workflow.add_conditional_edges(
+        "research_worker", route_after_research,
+        {"analyst_worker": "analyst_worker", "synthesizer": "synthesizer"}
+    )
+    workflow.add_conditional_edges(
+        "analyst_worker", route_after_analyst,
+        {"chart_worker": "chart_worker", "synthesizer": "synthesizer"}
+    )
 
-    for i, agent_type in enumerate(chain):
-        node_name = agent_map.get(agent_type)
-        if not node_name or node_name not in workflow.channels:
-            continue
-
-        # Build the set of possible next nodes for the edge map
-        next_options: dict[str, str] = {}
-        for j in range(i + 1, len(chain)):
-            next_agent = chain[j]
-            next_node = agent_map.get(next_agent)
-            if next_node and next_node in workflow.channels:
-                next_options[next_node] = next_node
-        next_options["synthesizer"] = "synthesizer"
-
-        router = _make_chain_router(agent_type, agent_map, chain)
-        workflow.add_conditional_edges(node_name, router, next_options)
-
-    # ── Terminal workers → synthesizer ──
+    # Terminal workers → synthesizer
     for agent in _get_independent_agents():
-        node = agent_map.get(agent)
+        node = _get_agent_map().get(agent)
         if node and node in workflow.channels:
-            # Only add edge if not already added via chain routing
             workflow.add_edge(node, "synthesizer")
-
-    # Built-in terminal edges (belt-and-suspenders)
     workflow.add_edge("chart_worker", "synthesizer")
-    workflow.add_edge("image_worker", "synthesizer")
-    workflow.add_edge("video_worker", "synthesizer")
-    workflow.add_edge("code_worker", "synthesizer")
 
-    # Synthesizer → END
     workflow.add_edge("synthesizer", END)
 
     return workflow.compile()
 
 
-# Lazy graph — rebuilt when skills are toggled
+# Lazy graph singleton
 _multi_agent_graph = None
 
 
 def get_multi_agent_graph():
-    """Return the compiled graph, building it on first access or after skill toggle."""
     global _multi_agent_graph
     if _multi_agent_graph is None:
         _multi_agent_graph = build_graph()
@@ -647,7 +562,6 @@ def get_multi_agent_graph():
 
 
 def rebuild_graph():
-    """Force graph rebuild (call after enabling/disabling skills)."""
     global _multi_agent_graph
     _multi_agent_graph = None
     return get_multi_agent_graph()

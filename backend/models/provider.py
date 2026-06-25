@@ -22,6 +22,7 @@ def create_chat_model(
         max_tokens=max_tokens,
         openai_api_key=provider_config.apikey,
         openai_api_base=provider_config.base_url,
+        request_timeout=180,  # 3 min timeout for long generations
     )
 
 
