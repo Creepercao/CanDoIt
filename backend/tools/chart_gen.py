@@ -5,6 +5,8 @@ Returns PNG image path. Supports Chinese labels.
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 OUTPUT_DIR = Path(__file__).parent.parent.parent / "outputs"
@@ -157,3 +159,47 @@ async def generate_chart(
     except Exception as e:
         plt.close("all")
         return {"error": str(e), "url": "", "local_path": ""}
+
+
+async def extract_chart_data(text: str, llm) -> dict | None:
+    """Use LLM to extract structured chart data from text."""
+    prompt = f"""Extract chart data ONLY from real numbers in this text. Output valid JSON only.
+
+Chart type rules (pick BEST fit, not always bar):
+- "bar": comparing categories (teams, products, countries)
+- "horizontal_bar": bar with long category names
+- "line": trend over time (dates, years, months) — SINGLE series
+- "multi_line": MULTIPLE trends over time, comparing multiple series
+- "pie": proportions, percentages, parts of a whole
+- "scatter": correlation between two numeric variables
+- "area": cumulative stacking over time
+
+Return:
+{{
+    "viable": true,
+    "chart_type": "bar",
+    "title": "chart title",
+    "x_label": "x axis",
+    "y_label": "y axis",
+    "labels": ["A", "B", "C"],
+    "datasets": [{{"label": "Series", "values": [1, 2, 3]}}]
+}}
+
+No real numbers → {{"viable": false}}. Do NOT hallucinate.
+
+Text:
+{text[:3000]}"""
+
+    from langchain_core.messages import HumanMessage as _HM
+    resp = await llm.ainvoke([_HM(content=prompt)])
+    content = resp.content if hasattr(resp, "content") else str(resp)
+
+    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+    if json_match:
+        try:
+            data = json.loads(json_match.group())
+            if data.get("viable") and data.get("labels") and data.get("datasets"):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return None
