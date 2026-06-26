@@ -81,17 +81,8 @@ def _get_agent_map() -> dict[str, str]:
 
 
 def _get_worker_nodes() -> set[str]:
-    """Get all worker node names from registry + built-in worker map."""
-    from backend.agents.builtin_workers import WORKER_MAP as BUILTIN_WORKERS
-    nodes: set[str] = set()
-    # Built-in worker node names
-    agent_map = skill_registry.get_node_for_agent()
-    for agent_name in BUILTIN_WORKERS:
-        node_name = agent_map.get(agent_name, f"{agent_name}_worker")
-        nodes.add(node_name)
-    # Skill worker nodes
-    nodes.update(skill_registry.get_node_funcs().keys())
-    return nodes
+    """Get all worker node names from the registry (covers built-in + skills)."""
+    return set(skill_registry.get_node_funcs().keys())
 
 
 def _get_result_keys() -> tuple[str, ...]:

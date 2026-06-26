@@ -51,12 +51,12 @@ async def startup():
     from backend.models.registry import registry
     from backend.skills.registry import skill_registry
     from backend.skills.package_installer import restore_from_disk
-    from backend.agents.builtin_configs import BUILTIN_SKILLS
+    from backend.agents.agent_loader import load_builtin_agents
     from backend.agents.graph import get_multi_agent_graph
 
     await registry.refresh()
     skill_registry.discover()
-    skill_registry.register_builtins(BUILTIN_SKILLS)
+    skill_registry.register_builtins(load_builtin_agents())
     restore_from_disk(skill_registry)
 
     # Validate agent dependency chains
