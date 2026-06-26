@@ -1,0 +1,60 @@
+# Built-in sub-agent configurations.
+# Each agent declares its worker (key in WORKER_MAP), dependencies,
+# and display metadata.  Adding a new agent = adding an entry here +
+# implementing its worker in builtin_workers.py.
+#
+# Skills (add-on capabilities) live separately in:
+#   - backend/skills/*.py          (Python module skills)
+#   - backend/skills/packages/*/   (SKILL.md package skills)
+
+agents:
+  - name: research
+    display_name: Research
+    description: "Web search + scrape for real information, data, and numbers"
+    emoji: "🔍"
+    worker: research
+    depends_on: []
+    result_key: research_results
+
+  - name: analyst
+    display_name: Analyst
+    description: "Extract structured numerical data from research text"
+    emoji: "📊"
+    worker: analyst
+    depends_on: [research]
+    result_key: analyst_results
+
+  - name: chart
+    display_name: Chart Maker
+    description: "Render analyst structured data as charts (bar/line/pie/scatter)"
+    emoji: "📈"
+    worker: chart
+    depends_on: [analyst]
+    result_key: chart_results
+
+  - name: image_gen
+    display_name: Image Generator
+    description: "Creative/artistic images, illustrations, photos"
+    emoji: "🎨"
+    worker: image_gen
+    depends_on: []
+    prompt_contribution: "- image_gen: creative images, illustrations, photos"
+    result_key: image_results
+
+  - name: video_gen
+    display_name: Video Generator
+    description: "Videos and animations"
+    emoji: "🎬"
+    worker: video_gen
+    depends_on: []
+    prompt_contribution: "- video_gen: video, animation"
+    result_key: video_results
+
+  - name: code
+    display_name: Programmer
+    description: "Programming, scripts, HTML, application code"
+    emoji: "💻"
+    worker: code
+    depends_on: []
+    prompt_contribution: "- code: programming, scripts, app code"
+    result_key: code_results

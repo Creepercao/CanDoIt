@@ -28,10 +28,7 @@ from langchain_core.messages import HumanMessage, BaseMessage
 from backend.models.provider import create_chat_model
 from backend.cache import cache
 from backend.skills.registry import skill_registry, _merge_skill_outputs
-from backend.agents.builtin_workers import (
-    synthesizer_node,
-    WORKER_MAP as BUILTIN_WORKERS,
-)
+from backend.agents.builtin_workers import synthesizer_node
 from backend.prompts import SUPERVISOR_PROMPT_TEMPLATE
 
 logger = logging.getLogger("graph")
@@ -227,23 +224,17 @@ def build_graph() -> StateGraph:
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("synthesizer", synthesizer_node)
 
-    # ── Built-in worker nodes (from WORKER_MAP + registry naming) ──
-    agent_map = _get_agent_map()
-    builtin_nodes: dict[str, callable] = {}
-    for agent_name, worker_func in BUILTIN_WORKERS.items():
-        node_name = agent_map.get(agent_name, f"{agent_name}_worker")
-        builtin_nodes[node_name] = worker_func
-        workflow.add_node(node_name, worker_func)
-
-    # ── Skill worker nodes ──
-    skill_nodes = skill_registry.get_node_funcs()
-    for name, func in skill_nodes.items():
+    # ── All worker nodes (built-in + skill) from the registry ──
+    # Built-in agents now have workers populated via agent_loader, so
+    # get_node_funcs() covers everything — no more manual WORKER_MAP iteration.
+    all_worker_nodes_map = skill_registry.get_node_funcs()
+    for name, func in all_worker_nodes_map.items():
         workflow.add_node(name, func)
+    all_worker_nodes = list(all_worker_nodes_map.keys())
 
     workflow.set_entry_point("supervisor")
 
     # ── Supervisor fan-out ──
-    all_worker_nodes = list(builtin_nodes.keys()) + list(skill_nodes.keys())
     workflow.add_conditional_edges(
         "supervisor", route_after_supervisor,
         {n: n for n in all_worker_nodes} | {END: END}
