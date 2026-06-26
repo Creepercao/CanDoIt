@@ -51,11 +51,19 @@ async def startup():
     from backend.models.registry import registry
     from backend.skills.registry import skill_registry
     from backend.skills.package_installer import restore_from_disk
+    from backend.agents.builtin_configs import BUILTIN_SKILLS
     from backend.agents.graph import get_multi_agent_graph
 
     await registry.refresh()
     skill_registry.discover()
+    skill_registry.register_builtins(BUILTIN_SKILLS)
     restore_from_disk(skill_registry)
+
+    # Validate agent dependency chains
+    warnings = skill_registry.validate_dependencies()
+    for w in warnings:
+        logger.warning(f"Dependency warning: {w}")
+
     get_multi_agent_graph()  # build graph after skill discovery
 
     redis_status = "enabled" if os.environ.get("REDIS_URL") else "disabled"

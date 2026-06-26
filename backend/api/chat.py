@@ -61,38 +61,35 @@ class VideoGenRequest(BaseModel):
 # ---- Agent helpers (dynamic, depends on skill_registry) ----
 
 def _get_agent_labels() -> dict[str, str]:
+    """Build agent label map from registry (covers built-in + skill agents)."""
     base = {
         "supervisor": "supervisor",
-        "research_worker": "researcher",
-        "analyst_worker": "analyst",
-        "chart_worker": "chart maker",
-        "image_worker": "artist",
-        "video_worker": "video maker",
-        "code_worker": "programmer",
         "synthesizer": "synthesizer",
     }
+    # Built-in agents — get their display names from the registry
+    for name, skill in skill_registry.get_all().items():
+        if skill_registry._has_worker(skill):
+            base[skill.node_name] = f"{skill.emoji} {skill.display_name}"
+    # Skill agent labels (may override)
     base.update(skill_registry.get_agent_labels())
     return base
 
 
 def _get_agent_map() -> dict[str, str]:
-    base = {
-        "research": "research_worker",
-        "analyst": "analyst_worker",
-        "chart": "chart_worker",
-        "image_gen": "image_worker",
-        "video_gen": "video_worker",
-        "code": "code_worker",
-    }
-    base.update(skill_registry.get_node_for_agent())
-    return base
+    """Build agent→node mapping from registry (covers both built-in and skills)."""
+    return skill_registry.get_node_for_agent()
 
 
 def _get_worker_nodes() -> set[str]:
-    nodes = {
-        "research_worker", "analyst_worker", "chart_worker",
-        "image_worker", "video_worker", "code_worker",
-    }
+    """Get all worker node names from registry + built-in worker map."""
+    from backend.agents.builtin_workers import WORKER_MAP as BUILTIN_WORKERS
+    nodes: set[str] = set()
+    # Built-in worker node names
+    agent_map = skill_registry.get_node_for_agent()
+    for agent_name in BUILTIN_WORKERS:
+        node_name = agent_map.get(agent_name, f"{agent_name}_worker")
+        nodes.add(node_name)
+    # Skill worker nodes
     nodes.update(skill_registry.get_node_funcs().keys())
     return nodes
 
