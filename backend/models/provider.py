@@ -1,6 +1,6 @@
 """Model provider abstraction — create LangChain models from config."""
 from langchain_openai import ChatOpenAI
-from backend.config import PROVIDERS, ProviderConfig
+from backend.config import PROVIDERS, ProviderConfig, get_provider_by_type
 from backend.models.registry import registry
 
 
@@ -14,13 +14,13 @@ def create_chat_model(
     if provider_config is None:
         provider_config = registry.find_provider_config(model_id)
     if provider_config is None:
-        provider_config = PROVIDERS[0]
+        provider_config = get_provider_by_type("llm")
 
     return ChatOpenAI(
         model=model_id,
         temperature=temperature,
         max_tokens=max_tokens,
-        openai_api_key=provider_config.apikey,
+        openai_api_key=provider_config.api_key,
         openai_api_base=provider_config.base_url,
     )
 

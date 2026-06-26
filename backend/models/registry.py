@@ -1,7 +1,7 @@
 """Model registry — auto-discover available models from providers."""
 import httpx
 from typing import Any
-from backend.config import PROVIDERS, ProviderConfig
+from backend.config import PROVIDERS, ProviderConfig, get_provider_by_type
 
 
 class ModelInfo:
@@ -30,7 +30,7 @@ class ModelRegistry:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     f"{provider.base_url}/models",
-                    headers={"Authorization": f"Bearer {provider.apikey}"}
+                    headers={"Authorization": f"Bearer {provider.api_key}"}
                 )
                 if resp.status_code == 200:
                     data = resp.json()
@@ -56,9 +56,15 @@ class ModelRegistry:
         return "chat"
 
     async def refresh(self):
-        """Fetch all models from all providers."""
+        """Fetch all models from all providers.
+
+        Only queries LLM and image/video providers (types that expose a
+        ``/models`` endpoint).  Search-type providers are skipped.
+        """
         self.models.clear()
         for provider in PROVIDERS:
+            if provider.type == "search":
+                continue  # search APIs don't expose /models
             self.models[provider.name] = await self.fetch_models(provider)
         self._fetched = True
 
@@ -86,8 +92,8 @@ class ModelRegistry:
                 for m in self.models[provider.name]:
                     if m.id == model_id:
                         return provider
-        # If model not found in registry, return first provider (user may know)
-        return PROVIDERS[0] if PROVIDERS else None
+        # If model not found in registry, return LLM provider as fallback
+        return get_provider_by_type("llm")
 
 
 registry = ModelRegistry()

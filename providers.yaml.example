@@ -1,0 +1,18 @@
+# Provider configuration — copy to providers.yaml and fill in your API keys.
+# providers.yaml is gitignored; this file is a template only.
+providers:
+  - name: "硅基流动"
+    type: llm
+    base_url: "https://api.siliconflow.cn/v1"
+    api_key: "sk-your-api-key-here"
+
+  - name: "硅基流动-image"
+    type: image
+    base_url: "https://api.siliconflow.cn/v1"
+    api_key: "sk-your-api-key-here"
+
+  # Add search providers below (type: search)
+  # - name: "Tavily"
+  #   type: search
+  #   base_url: "https://api.tavily.com"
+  #   api_key: "tvly-your-key-here"
