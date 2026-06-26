@@ -176,13 +176,47 @@ def route_after_supervisor(state: AgentState):
     Independent workers always get Send if tasks exist.
     The chain: only Send to the FIRST chain agent that has tasks.
     Subsequent chain agents are triggered by conditional edges from their upstream node.
+
+    **Dependency injection**: if a chain agent has tasks but its ``depends_on``
+    agents are missing, they are auto-injected.  This guarantees the chain runs
+    completely even when the supervisor LLM omits upstream tasks.
     """
-    tasks = state.get("tasks", [])
+    tasks: list[dict] = list(state.get("tasks", []))
     if state.get("final_response") or not tasks:
         return END
 
     agent_types = set(t.get("agent", "") for t in tasks)
+    chain = _get_chain_agents()
+
+    # ── Auto-inject missing dependencies ──
+    for agent_type in list(agent_types):
+        skill = skill_registry.get(agent_type)
+        if not skill or not skill.depends_on:
+            continue
+        for dep in skill.depends_on:
+            if dep not in agent_types:
+                # Build a research / data-gathering prompt from the dependent task
+                dep_task = next(
+                    (t for t in tasks if t.get("agent") == agent_type), {}
+                )
+                dep_prompt = dep_task.get("prompt", "")
+                tasks.insert(0, {
+                    "agent": dep,
+                    "prompt": f"Search and gather factual data for: {dep_prompt or agent_type}",
+                })
+                agent_types.add(dep)
+                logger.info(
+                    f"Auto-injected '{dep}' task (required by '{agent_type}' — "
+                    f"supervisor omitted it)"
+                )
+
+    # Rebuild agent_types after injection
+    agent_types = set(t.get("agent", "") for t in tasks)
+
     base = _base_from_state(state)
+    # Include the (possibly augmented) tasks in the Send payload so
+    # worker nodes see the full list
+    base["tasks"] = tasks
     agent_map = _get_agent_map()
     sends = []
 
@@ -194,7 +228,7 @@ def route_after_supervisor(state: AgentState):
                 sends.append(Send(node, base))
 
     # Chain entry: only Send to the earliest chain agent that has tasks
-    for agent in _get_chain_agents():
+    for agent in chain:
         if agent in agent_types:
             node = agent_map.get(agent)
             if node:
