@@ -2,7 +2,7 @@
 import httpx
 import base64
 from pathlib import Path
-from backend.config import PROVIDERS
+from backend.config import get_provider_by_type
 
 
 OUTPUT_DIR = Path(__file__).parent.parent.parent / "outputs"
@@ -19,7 +19,7 @@ async def generate_image(
     seed: int = -1,
 ) -> dict:
     """Generate image via provider API. Returns {url, local_path, prompt}."""
-    provider = PROVIDERS[0] if PROVIDERS else None
+    provider = get_provider_by_type("image")
     if not provider:
         return {"error": "No provider configured", "url": "", "local_path": ""}
 
@@ -39,7 +39,7 @@ async def generate_image(
             resp = await client.post(
                 f"{provider.base_url}/images/generations",
                 headers={
-                    "Authorization": f"Bearer {provider.apikey}",
+                    "Authorization": f"Bearer {provider.api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload,

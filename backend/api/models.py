@@ -25,8 +25,9 @@ async def list_providers():
     return [
         {
             "name": p.name,
+            "type": p.type,
             "base_url": p.base_url,
-            "api_key_masked": p.apikey[:8] + "***" + p.apikey[-4:],
+            "api_key_masked": p.api_key[:8] + "***" + p.api_key[-4:],
         }
         for p in PROVIDERS
     ]
