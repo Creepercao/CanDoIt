@@ -147,15 +147,9 @@ async def search_and_scrape(query: str, llm, max_pages: int = 3) -> dict:
     combined = "\n\n".join(all_raw_texts)
 
     # ── LLM synthesis ──
-    # With Tavily: get_search_context() can supplement the combined raw texts
+    # With Tavily: the AI answer + raw_content from search is already high quality.
+    # Just do one synthesis pass instead of calling get_search_context separately.
     synth_input = combined[:8000]
-    if has_tavily:
-        try:
-            ctx = await get_search_context(query, max_tokens=3000)
-            if ctx:
-                synth_input = f"## 搜索上下文\n{ctx}\n\n## 原始页面内容\n{combined[:5000]}"
-        except Exception:
-            pass
 
     from langchain_core.messages import HumanMessage as _HM
 

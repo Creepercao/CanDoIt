@@ -73,21 +73,27 @@ async def research_worker(state: dict) -> dict:
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
         try:
-            search_queries = [prompt_text[:80]]
-            if len(prompt_text) > 20:
+            all_sources = []
+            all_synthesis = []
+            seen_urls = set()
+
+            # With Tavily (agent-optimised search), one call is usually enough.
+            # Without Tavily, generate multiple queries for broader coverage.
+            from backend.config import get_provider_by_type
+            has_tavily = get_provider_by_type("search") is not None
+
+            queries = [prompt_text]
+            if not has_tavily and len(prompt_text) > 20:
                 kw_resp = await llm.ainvoke([HumanMessage(
                     content=RESEARCH_QUERY_PROMPT.format(text=prompt_text))])
                 extra = kw_resp.content if hasattr(kw_resp, "content") else str(kw_resp)
                 for line in extra.strip().split("\n"):
                     q = line.strip().lstrip("0123456789.-) ").strip()
                     if q and len(q) > 5:
-                        search_queries.append(q[:120])
+                        queries.append(q[:120])
 
-            all_sources = []
-            all_synthesis = []
-            seen_urls = set()
-
-            for query in search_queries[:4]:
+            max_queries = 2 if has_tavily else 4  # Tavily returns richer results
+            for query in queries[:max_queries]:
                 scraped = await search_and_scrape(query, llm, max_pages=3)
                 raw_text = scraped.get("synthesis", "")
                 sources = scraped.get("sources", [])
