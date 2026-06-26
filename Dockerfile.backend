@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
 
 # App code
 COPY backend/ ./backend/
-COPY API.json ./
+COPY providers.yaml ./
 
 EXPOSE 8000
 
