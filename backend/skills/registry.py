@@ -349,7 +349,11 @@ class SkillRegistry:
                 rule_num += 1
                 dep_hint = ""
                 if skill.depends_on:
-                    dep_hint = f"（需要先经过 {', '.join(skill.depends_on)}）"
+                    dep_names = " + ".join([f'"{d}"' for d in skill.depends_on])
+                    dep_hint = (
+                        f" 必须同时创建 {dep_names} 任务（搜集数据/资料），"
+                        f"{', '.join(skill.depends_on)} 完成后自动执行 {skill.name}。"
+                    )
                 lines.append(
                     f'{rule_num}. 用户要 {trigger_str} → 必须分派给 "{skill.name}"。'
                     f"{dep_hint} 禁止用文字回复。"

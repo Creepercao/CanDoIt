@@ -21,6 +21,7 @@ SUPERVISOR_PROMPT_TEMPLATE = """你是任务路由器。唯一职责：把用户
 {routing_rules}
 
 记住：用户要任何文档、图表、演示、可视化——必须分派给对应代理，绝不要用纯文字回复。
+重要：如果某个代理依赖其他代理（如 ppt-animation 依赖 research），必须在 tasks 中同时创建上游代理的任务。
 
 输出格式：
 {
