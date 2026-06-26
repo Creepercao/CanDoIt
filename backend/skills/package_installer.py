@@ -362,12 +362,21 @@ def build_skill(skill_dir: str, frontmatter: dict[str, Any], body_text: str) -> 
         prompt_template=body_text,
     )
 
+    depends_on = frontmatter.get("depends_on", [])
+    if not isinstance(depends_on, list):
+        depends_on = []
+
     triggers_str = ", ".join(triggers[:5]) if isinstance(triggers, list) else ""
+    if depends_on:
+        dep_hint = f"Use AFTER {', '.join(depends_on)}."
+    else:
+        dep_hint = "Runs independently."
+
     prompt_contribution = (
         f"- {name}: {description}. "
         f"Standard skill (v{version}). "
         f"Triggers: {triggers_str}. "
-        f"Runs independently."
+        f"{dep_hint}"
     )
 
     return Skill(
@@ -377,7 +386,7 @@ def build_skill(skill_dir: str, frontmatter: dict[str, Any], body_text: str) -> 
         emoji=emoji,
         enabled=False,  # safety: disabled by default after install
         worker=worker_fn,
-        depends_on=[],  # standard skills are independent
+        depends_on=depends_on,
         prompt_contribution=prompt_contribution,
         _package_meta=_package_meta,
     )
