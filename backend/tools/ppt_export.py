@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from bs4 import BeautifulSoup
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -60,7 +61,30 @@ def _extract_slides_from_html(html: str) -> list[dict]:
     Returns a list of ``{title, content, index}`` dicts.
     Handles ``<div class="slide">`` and ``<section class="slide">`` patterns.
     """
-    # Try div.slide first
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "head"]):
+        tag.decompose()
+
+    slide_nodes = soup.select(".slide, .page, section, article")
+    slides: list[dict] = []
+    for i, node in enumerate(slide_nodes):
+        text = node.get_text("\n", strip=True)
+        if not text:
+            continue
+        title_node = node.find(["h1", "h2", "h3"])
+        title = title_node.get_text(" ", strip=True) if title_node else f"Slide {len(slides) + 1}"
+        if title and text.startswith(title):
+            text = text[len(title):].strip()
+        slides.append({
+            "title": title,
+            "content": text[:2000],
+            "index": len(slides),
+        })
+
+    if slides:
+        return slides
+
+    # Try div.slide first as a fallback for malformed HTML
     slides_raw = _SLIDE_RE.findall(html)
     if not slides_raw:
         slides_raw = _SLIDE_TAG_RE.findall(html)
@@ -80,7 +104,7 @@ def _extract_slides_from_html(html: str) -> list[dict]:
         if current.strip():
             slides_raw.append(current)
 
-    slides: list[dict] = []
+    slides = []
     for i, raw in enumerate(slides_raw):
         # Extract title
         title = ""
@@ -228,6 +252,7 @@ def export_skill_to_pptx(
 
     return {
         "file_url": f"/outputs/{Path(file_path).name}",
+        "download_url": f"/api/skills/ppt-animation/export-pptx/{Path(file_path).name}",
         "file_path": file_path,
         "slides": len(slides),
         "title": title,

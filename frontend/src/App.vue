@@ -10,7 +10,7 @@ import ModelSelector from './components/ModelSelector.vue'
 const store = useChatStore()
 
 onMounted(async () => {
-  await Promise.all([store.loadModels(), store.loadSkills()])
+  await Promise.all([store.loadModels(), store.loadSkills(), store.loadSessions()])
 })
 
 const tabs = [
@@ -51,6 +51,42 @@ const tabs = [
           <span class="hidden lg:block">{{ tab.label.slice(3) }}</span>
         </button>
       </nav>
+
+      <!-- Sessions -->
+      <div class="hidden lg:block px-2 py-2 border-t border-gray-700/30">
+        <div class="flex items-center justify-between px-2 mb-1">
+          <span class="text-[10px] text-gray-500 uppercase tracking-wider">Sessions</span>
+          <button
+            @click="store.newSession()"
+            class="text-xs text-gray-500 hover:text-white px-2 py-0.5 rounded hover:bg-surface-700 transition-colors"
+            title="New Chat"
+          >+</button>
+        </div>
+        <div class="space-y-0.5 max-h-48 overflow-y-auto">
+          <button
+            v-for="s in store.sessions"
+            :key="s.id"
+            @click="store.switchSession(s.id)"
+            :class="[
+              'w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors truncate block',
+              store.currentSessionId === s.id
+                ? 'bg-primary-600/20 text-primary-400'
+                : 'text-gray-400 hover:text-white hover:bg-surface-800',
+            ]"
+          >
+            {{ s.meta?.title || 'New Chat' }}
+          </button>
+          <div v-if="store.sessions.length === 0" class="text-[10px] text-gray-600 px-2">
+            No sessions yet
+          </div>
+        </div>
+        <div v-if="store.currentSessionId" class="px-2 mt-1">
+          <button
+            @click="store.deleteCurrentSession()"
+            class="text-[10px] text-gray-600 hover:text-red-400 transition-colors"
+          >Delete session</button>
+        </div>
+      </div>
 
       <!-- Model info footer -->
       <div class="hidden lg:block px-4 py-3 border-t border-gray-700/50 space-y-2 text-xs text-gray-500">
