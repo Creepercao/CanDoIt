@@ -1,129 +1,140 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { useChatStore } from '../stores/chat.js'
 
 const props = defineProps({
-  steps: { type: Array, default: () => [] },   // [{type, label, task, timestamp}]
+  steps: { type: Array, default: () => [] },
   isStreaming: { type: Boolean, default: false },
 })
-
-const store = useChatStore()
 
 const expanded = ref(true)
 const userCollapsed = ref(false)
 
-// Auto-expand when streaming, respect user choice when done
 watch(() => props.isStreaming, (val) => {
   if (val) {
     expanded.value = true
     userCollapsed.value = false
   } else if (!userCollapsed.value) {
-    // Auto-collapse 1.5s after done
     setTimeout(() => {
-      if (!userCollapsed.value) {
-        expanded.value = false
-      }
-    }, 1500)
+      if (!userCollapsed.value) expanded.value = false
+    }, 1800)
   }
 })
 
 function toggle() {
   expanded.value = !expanded.value
-  if (!props.isStreaming) {
-    userCollapsed.value = !expanded.value
-  }
+  if (!props.isStreaming) userCollapsed.value = !expanded.value
 }
 
-const phaseIcon = (step) => {
-  if (step.type === 'phase') return step.phase === 'supervisor' ? '🧠' : '📝'
-  if (step.type === 'plan') return '📋'
-  if (step.type === 'agent_start') return '▶️'
-  if (step.type === 'agent_done') return '✅'
-  return '•'
-}
+const planStep = computed(() => props.steps.find(s => s.type === 'plan'))
+const phaseSteps = computed(() => props.steps.filter(s => s.type === 'phase'))
+const agentSteps = computed(() => props.steps.filter(s => s.type === 'agent_start' || s.type === 'agent_done'))
+const activeAgents = computed(() => agentSteps.value.filter(s => s.type === 'agent_start' && !s.done))
+const doneAgents = computed(() => agentSteps.value.filter(s => s.done || s.type === 'agent_done'))
+const progress = computed(() => {
+  const total = planStep.value?.count || agentSteps.value.length || 0
+  const done = doneAgents.value.length
+  return { total, done, pct: total ? Math.min(100, Math.round((done / total) * 100)) : 0 }
+})
 
 const headerSummary = computed(() => {
-  if (props.steps.length === 0) return ''
-  const agentSteps = props.steps.filter(s => s.type === 'agent_done')
-  const planStep = props.steps.find(s => s.type === 'plan')
-  if (planStep) {
-    const labels = planStep.tasks?.map(t => {
-      return store.agentEmojiMap[t.agent] || t.agent
-    }).join(' → ') || ''
-    return `🧠 分析 → ${labels} → ✅ 完成`
+  if (!props.steps.length) return ''
+  if (props.isStreaming) {
+    if (activeAgents.value.length) return `${activeAgents.value.length} 个智能体运行中`
+    return '正在规划任务'
   }
-  return `已调用 ${agentSteps.length} 个智能体`
+  return `已完成 ${progress.value.done}/${progress.value.total || progress.value.done} 个智能体任务`
 })
+
+function statusClass(step) {
+  if (step.done || step.type === 'agent_done') return 'border-green-500/30 bg-green-500/10'
+  return 'border-blue-500/30 bg-blue-500/10'
+}
 </script>
 
 <template>
   <div v-if="steps.length > 0" class="mb-3">
-    <!-- Collapsed summary -->
-    <div
+    <button
       v-if="!expanded"
       @click="toggle"
-      class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer hover:text-gray-300
-             bg-surface-800/50 rounded-lg px-3 py-2 border border-gray-700/30 transition-colors"
+      class="w-full flex items-center gap-2 text-xs text-gray-400 hover:text-gray-200
+             bg-surface-800/70 rounded-lg px-3 py-2 border border-gray-700/40 transition-colors"
     >
-      <span>{{ isStreaming ? '⏳' : '✅' }}</span>
-      <span>{{ headerSummary }}</span>
-      <span class="text-gray-600 ml-auto">展开 ▸</span>
-    </div>
+      <span v-if="isStreaming" class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+      <span v-else class="w-2 h-2 rounded-full bg-green-500"></span>
+      <span class="font-medium">{{ headerSummary }}</span>
+      <span class="ml-auto text-gray-500">展开</span>
+    </button>
 
-    <!-- Expanded panel -->
-    <div
-      v-else
-      class="bg-surface-800/80 border border-gray-700/50 rounded-xl overflow-hidden text-sm"
-    >
-      <!-- Header bar -->
-      <div
+    <div v-else class="bg-surface-800/85 border border-gray-700/50 rounded-xl overflow-hidden">
+      <button
         @click="toggle"
-        class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-700/50 transition-colors border-b border-gray-700/30"
+        class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-700/40 transition-colors border-b border-gray-700/40"
       >
-        <span v-if="isStreaming" class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-        <span v-else>✅</span>
-        <span class="text-xs font-medium text-gray-300">{{ headerSummary }}</span>
-        <span class="text-gray-600 ml-auto text-xs">收起 ▾</span>
-      </div>
-
-      <!-- Timeline -->
-      <div class="px-3 py-2 space-y-1.5 max-h-64 overflow-y-auto">
-        <div
-          v-for="(step, idx) in steps"
-          :key="idx"
-          class="flex items-start gap-2 text-xs"
-          :class="{
-            'text-gray-400': step.type === 'agent_done',
-            'text-primary-400': step.type === 'phase' || step.type === 'plan',
-            'text-green-400': step.type === 'agent_start',
-          }"
-        >
-          <span class="shrink-0 mt-0.5">{{ phaseIcon(step) }}</span>
-          <div class="min-w-0">
-            <template v-if="step.type === 'phase'">
-              <span>{{ step.message }}</span>
-            </template>
-            <template v-else-if="step.type === 'plan'">
-              <span>创建 {{ step.count }} 个任务</span>
-            </template>
-            <template v-else-if="step.type === 'agent_start'">
-              <span>{{ step.label }}: </span>
-              <span class="text-gray-500 truncate">{{ step.task }}</span>
-              <span v-if="isStreaming && !steps.some(s => s.type === 'agent_done' && s.agent === step.agent)"
-                    class="text-gray-600"> ...</span>
-            </template>
-            <template v-else-if="step.type === 'agent_done'">
-              <span>{{ step.label }} 完成</span>
-            </template>
+        <span v-if="isStreaming" class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+        <span v-else class="w-2 h-2 rounded-full bg-green-500"></span>
+        <div class="min-w-0 flex-1 text-left">
+          <div class="text-xs font-medium text-gray-200">{{ headerSummary }}</div>
+          <div class="mt-1 h-1.5 rounded-full bg-surface-900 overflow-hidden">
+            <div
+              class="h-full rounded-full bg-primary-500 transition-all duration-300"
+              :style="{ width: `${progress.pct}%` }"
+            ></div>
           </div>
-          <span class="text-gray-600 shrink-0 ml-auto text-[10px]">{{ step.timestamp }}</span>
+        </div>
+        <span class="text-xs text-gray-500">收起</span>
+      </button>
+
+      <div class="p-3 space-y-3">
+        <div v-if="planStep" class="rounded-lg border border-gray-700/50 bg-surface-900/60 p-2.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-medium text-gray-200">执行计划</span>
+            <span class="text-gray-500">{{ planStep.count }} 个任务</span>
+          </div>
+          <div class="mt-2 space-y-1.5">
+            <div
+              v-for="(task, idx) in planStep.tasks"
+              :key="idx"
+              class="grid grid-cols-[1.5rem_7rem_1fr] items-start gap-2 text-xs"
+            >
+              <span class="text-gray-500 tabular-nums">{{ idx + 1 }}</span>
+              <span class="text-primary-300 truncate">{{ task.label || task.agent }}</span>
+              <span class="text-gray-400 line-clamp-1">{{ task.prompt }}</span>
+            </div>
+          </div>
         </div>
 
-        <!-- Spinner when streaming -->
-        <div v-if="isStreaming" class="flex items-center gap-2 text-xs text-gray-500 pt-1">
-          <span class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay:0ms"></span>
-          <span class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay:150ms"></span>
-          <span class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay:300ms"></span>
+        <div class="space-y-2">
+          <div
+            v-for="(step, idx) in agentSteps"
+            :key="`${step.agent}-${idx}`"
+            class="rounded-lg border p-2.5 transition-colors"
+            :class="statusClass(step)"
+          >
+            <div class="flex items-center gap-2">
+              <span
+                class="w-2 h-2 rounded-full"
+                :class="step.done || step.type === 'agent_done' ? 'bg-green-400' : 'bg-blue-400 animate-pulse'"
+              ></span>
+              <span class="text-xs font-medium text-gray-200 truncate">{{ step.label }}</span>
+              <span class="ml-auto text-[10px] text-gray-500">{{ step.doneAt || step.timestamp }}</span>
+            </div>
+            <div v-if="step.task" class="mt-1 text-xs text-gray-400 line-clamp-2">
+              {{ step.task }}
+            </div>
+            <div v-if="step.summary" class="mt-1 text-xs text-green-300">
+              {{ step.summary }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="phaseSteps.length" class="flex flex-wrap gap-1.5">
+          <span
+            v-for="(step, idx) in phaseSteps"
+            :key="idx"
+            class="text-[10px] text-gray-400 bg-surface-900 border border-gray-700/40 rounded px-2 py-1"
+          >
+            {{ step.message }}
+          </span>
         </div>
       </div>
     </div>

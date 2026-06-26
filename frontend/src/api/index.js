@@ -40,12 +40,14 @@ export async function sendMessage({
   chatModelId = '',
   imageModelId = '',
   videoModelId = '',
+  sessionId = '',
+  history = [],
   stream = false,
   onEvent = null,
   abortSignal = null,
 }) {
   if (stream && onEvent) {
-    return await streamChat({ message, chatModelId, imageModelId, videoModelId, onEvent, abortSignal })
+    return await streamChat({ message, chatModelId, imageModelId, videoModelId, sessionId, history, onEvent, abortSignal })
   }
   const { data } = await api.post('/chat/sync', {
     message,
@@ -57,7 +59,7 @@ export async function sendMessage({
   return data
 }
 
-async function streamChat({ message, chatModelId, imageModelId, videoModelId, onEvent, abortSignal }) {
+async function streamChat({ message, chatModelId, imageModelId, videoModelId, sessionId, history, onEvent, abortSignal }) {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,6 +68,8 @@ async function streamChat({ message, chatModelId, imageModelId, videoModelId, on
       chat_model_id: chatModelId,
       image_model_id: imageModelId,
       video_model_id: videoModelId,
+      session_id: sessionId || '',
+      history: history || [],
       stream: true,
     }),
     signal: abortSignal,
@@ -153,5 +157,32 @@ export async function exportPptx({ htmlContent = '', htmlUrl = '', title = '' })
     html_url: htmlUrl,
     title,
   })
+  return data
+}
+
+// ---- Session API ----
+
+export async function createSession() {
+  const { data } = await api.post('/sessions')
+  return data
+}
+
+export async function fetchSessions() {
+  const { data } = await api.get('/sessions')
+  return data
+}
+
+export async function fetchSession(id) {
+  const { data } = await api.get(`/sessions/${encodeURIComponent(id)}`)
+  return data
+}
+
+export async function saveSession(id, messages) {
+  const { data } = await api.put(`/sessions/${encodeURIComponent(id)}`, { messages })
+  return data
+}
+
+export async function deleteSessionApi(id) {
+  const { data } = await api.delete(`/sessions/${encodeURIComponent(id)}`)
   return data
 }

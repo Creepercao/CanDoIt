@@ -51,11 +51,12 @@ async function doExportPptx(htmlResult) {
   exporting.value[key] = true
   try {
     const result = await exportPptx({ htmlUrl: htmlResult.html_url, title: htmlResult.title || '' })
-    if (result.success && result.file_url) {
+    const downloadUrl = result.download_url || result.file_url
+    if (result.success && downloadUrl) {
       // Trigger browser download
       const link = document.createElement('a')
-      link.href = result.file_url
-      link.download = result.file_url.split('/').pop() || 'presentation.pptx'
+      link.href = downloadUrl
+      link.download = downloadUrl.split('/').pop() || 'presentation.pptx'
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)

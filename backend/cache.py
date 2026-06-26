@@ -70,6 +70,10 @@ class Cache:
     def available(self) -> bool:
         return self._redis is not None or True  # memory always available
 
+    @property
+    def backend(self) -> str:
+        return "redis" if self._redis is not None else "memory"
+
 
 # Global cache instance
 cache = Cache()

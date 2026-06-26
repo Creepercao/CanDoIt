@@ -5,6 +5,8 @@ import {
   refreshModels, sendMessage, generateImage, generateVideo,
   fetchSkills, toggleSkill,
   installSkillPackage, uninstallSkillPackage,
+  createSession, fetchSessions, fetchSession,
+  saveSession, deleteSessionApi,
 } from '../api/index.js'
 
 // localStorage helpers
@@ -13,6 +15,25 @@ function loadSetting(key, fallback = '') {
 }
 function saveSetting(key, val) {
   try { localStorage.setItem('multiagent_' + key, val) } catch {}
+}
+
+function loadLocalMessages() {
+  try {
+    const raw = localStorage.getItem('multiagent_msgs')
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function saveLocalMessages(msgs) {
+  try { localStorage.setItem('multiagent_msgs', JSON.stringify(msgs)) } catch {}
+}
+
+function loadLocalSessionId() {
+  try { return localStorage.getItem('multiagent_sid') || '' } catch { return '' }
+}
+
+function saveLocalSessionId(sid) {
+  try { localStorage.setItem('multiagent_sid', sid) } catch {}
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -33,6 +54,10 @@ export const useChatStore = defineStore('chat', () => {
   const activeTab = ref('chat')
   const imageResults = ref([])
   const videoResults = ref([])
+
+  // Sessions
+  const sessions = ref([])
+  const currentSessionId = ref('')
 
   // Skills
   const skills = ref([])
@@ -117,6 +142,120 @@ export const useChatStore = defineStore('chat', () => {
     thinkSteps.value.push({ ...step, timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) })
   }
 
+  function finishThinkStep(data) {
+    const idx = [...thinkSteps.value].reverse().findIndex(
+      s => s.type === 'agent_start' && s.agent === data.agent && !s.done
+    )
+    if (idx >= 0) {
+      const realIdx = thinkSteps.value.length - 1 - idx
+      thinkSteps.value[realIdx] = {
+        ...thinkSteps.value[realIdx],
+        done: true,
+        summary: data.summary || '完成',
+        resultKey: data.result_key || '',
+        resultCount: data.count || 0,
+        doneAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      }
+    } else {
+      addThinkStep({ type: 'agent_done', ...data })
+    }
+  }
+
+  // ---- Session management ----
+
+  async function loadSessions() {
+    try {
+      const result = await fetchSessions()
+      sessions.value = result.sessions || []
+      // Restore last session if available
+      const lastId = loadLocalSessionId()
+      if (lastId && sessions.value.find(s => s.id === lastId)) {
+        currentSessionId.value = lastId
+        // Load messages from localStorage (fast, works offline)
+        const localMsgs = loadLocalMessages()
+        if (localMsgs.length > 0) {
+          messages.value = localMsgs
+        } else {
+          // Fallback: load from backend
+          const session = await fetchSession(lastId)
+          if (session && !session.error) {
+            messages.value = session.messages || []
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load sessions:', e)
+      // Fallback: load from localStorage only
+      messages.value = loadLocalMessages()
+      currentSessionId.value = loadLocalSessionId()
+    }
+  }
+
+  async function newSession() {
+    currentSessionId.value = ''
+    messages.value = []
+    thinkSteps.value = []
+    currentResponse.value = ''
+    saveLocalMessages([])
+    saveLocalSessionId('')
+    // Backend session will be created on first message
+  }
+
+  async function switchSession(id) {
+    if (id === currentSessionId.value) return
+    currentSessionId.value = id
+    saveLocalSessionId(id)
+    try {
+      const session = await fetchSession(id)
+      if (session && !session.error) {
+        messages.value = session.messages || []
+        saveLocalMessages(messages.value)
+      }
+    } catch (e) {
+      console.error('Failed to load session:', e)
+    }
+  }
+
+  async function deleteCurrentSession() {
+    const id = currentSessionId.value
+    if (!id) return
+    try {
+      await deleteSessionApi(id)
+    } catch (e) {
+      console.error('Failed to delete session:', e)
+    }
+    sessions.value = sessions.value.filter(s => s.id !== id)
+    newSession()
+  }
+
+  async function _ensureSession() {
+    // Auto-create backend session if needed (await so session_id is ready before message sent)
+    if (!currentSessionId.value) {
+      try {
+        const res = await createSession()
+        if (res && res.session_id) {
+          currentSessionId.value = res.session_id
+          saveLocalSessionId(res.session_id)
+        }
+      } catch (e) {
+        console.error('Failed to create session:', e)
+      }
+    }
+  }
+
+  function _persistMessages() {
+    // Save to localStorage always
+    saveLocalMessages(messages.value)
+    // Save to backend if we have a session
+    if (currentSessionId.value && messages.value.length > 0) {
+      saveSession(currentSessionId.value, messages.value).catch(() => {})
+      // Refresh session list (title may have been updated)
+      if (messages.value.length <= 2) {
+        loadSessions()
+      }
+    }
+  }
+
   async function sendChatMessage(text) {
     if (!text.trim() || isLoading.value) return
 
@@ -135,11 +274,14 @@ export const useChatStore = defineStore('chat', () => {
     abortController = new AbortController()
 
     try {
+      await _ensureSession()
       await sendMessage({
         message: text,
         chatModelId: selectedChatModel.value,
         imageModelId: selectedImageModel.value,
         videoModelId: selectedVideoModel.value,
+        sessionId: currentSessionId.value,
+        history: messages.value.slice(-20),
         stream: true,
         abortSignal: abortController.signal,
         onEvent: (eventType, data) => {
@@ -151,10 +293,18 @@ export const useChatStore = defineStore('chat', () => {
               addThinkStep({ type: 'plan', tasks: data.tasks, count: data.count })
               break
             case 'agent_start':
-              addThinkStep({ type: 'agent_start', agent: data.agent, label: data.label, task: data.task, index: data.index })
+              addThinkStep({
+                type: 'agent_start',
+                agent: data.agent,
+                agentType: data.agent_type,
+                label: data.label,
+                task: data.task,
+                taskCount: data.task_count || 0,
+                done: false,
+              })
               break
             case 'agent_done':
-              addThinkStep({ type: 'agent_done', agent: data.agent, label: data.label })
+              finishThinkStep(data)
               break
             case 'token':
               // Incremental token streaming from synthesizer
@@ -210,6 +360,7 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       isLoading.value = false
       abortController = null
+      _persistMessages()
     }
   }
 
@@ -257,8 +408,10 @@ export const useChatStore = defineStore('chat', () => {
     selectedChatModel, selectedImageModel, selectedVideoModel,
     activeTab, imageResults, videoResults, allModels,
     skills, enabledSkills, agentEmojiMap,
+    sessions, currentSessionId,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
+    loadSessions, newSession, switchSession, deleteCurrentSession,
   }
 })
