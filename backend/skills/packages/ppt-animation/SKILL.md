@@ -2,6 +2,8 @@
 name: "ppt-animation"
 description: "生成 PPT 风格的翻页 HTML 演示动画，支持暗色炫酷、暖色报纸、简约白色等多套主题，适合视频科普、技术讲解场景"
 version: "0.1.0"
+depends_on:
+  - "research"
 triggers:
   - "PPT 演示"
   - "翻页演示"
