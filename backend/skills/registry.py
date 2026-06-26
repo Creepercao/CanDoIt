@@ -49,6 +49,7 @@ class SkillRegistry:
         self._package = skills_package
         self._skills: dict[str, Skill] = {}
         self._discovered = False
+        self._builtins_registered = False
 
     # ── Discovery ──────────────────────────────────────────────
 
@@ -88,6 +89,23 @@ class SkillRegistry:
         self._discovered = True
         logger.info(f"Skill discovery complete: {len(self._skills)} skills found")
 
+    # ── Built-in registration ────────────────────────────────────
+
+    def register_builtins(self, skills: list[Skill]) -> None:
+        """Register built-in agent configurations.
+
+        Must be called BEFORE ``get_chain_agents()`` or graph-building so that
+        built-in agents participate in chain ordering and routing rules.
+        Idempotent — subsequent calls are no-ops.
+        """
+        if self._builtins_registered:
+            return
+        for skill in skills:
+            if skill.name not in self._skills:
+                self.register(skill)
+        self._builtins_registered = True
+        logger.info(f"Registered {len(skills)} built-in agent configs")
+
     # ── Registration ───────────────────────────────────────────
 
     def register(self, skill: Skill) -> None:
@@ -116,6 +134,21 @@ class SkillRegistry:
 
     # ── Graph-building helpers ─────────────────────────────────
 
+    def _has_worker(self, skill: Skill) -> bool:
+        """Check whether a skill has a resolvable worker function.
+
+        Returns True if the skill defines its own worker OR is a built-in
+        agent whose worker lives in ``builtin_workers.WORKER_MAP``.
+        """
+        if skill.worker is not None:
+            return True
+        # Check built-in worker map (lazy import to avoid circular deps)
+        try:
+            from backend.agents.builtin_workers import WORKER_MAP
+            return skill.name in WORKER_MAP
+        except ImportError:
+            return False
+
     def get_node_funcs(self) -> dict[str, Callable]:
         """Return ``{node_name: worker_function}`` for all enabled skills with workers."""
         result: dict[str, Callable] = {}
@@ -127,8 +160,9 @@ class SkillRegistry:
     def get_node_for_agent(self) -> dict[str, str]:
         """Map agent type → node name for all enabled skills with workers."""
         result: dict[str, str] = {}
+        # Built-in agents: use their node_name from the Skill config
         for skill in self.get_enabled().values():
-            if skill.worker is not None:
+            if self._has_worker(skill):
                 result[skill.name] = skill.node_name
         return result
 
@@ -141,26 +175,35 @@ class SkillRegistry:
         return result
 
     def get_independent_agents(self) -> set[str]:
-        """Return set of agent-type names for independent (parallel dispatch) skills."""
+        """Return set of agent-type names for independent (parallel dispatch) agents.
+
+        Includes both built-in agents and skills whose workers are resolvable
+        and whose ``depends_on`` is empty.
+        """
         return {
             s.name for s in self.get_enabled().values()
-            if s.worker is not None and s.is_independent
+            if self._has_worker(s) and s.is_independent
         }
 
     def get_chain_agents(self) -> list[str]:
         """Return ordered list of agent types in the sequential chain.
 
-        Built-in chain base: ``research → analyst → chart``.
+        The base chain is built dynamically from all registered agents that have
+        ``depends_on`` relationships (via topological sort), so the core
+        ``research → analyst → chart`` order is derived rather than hardcoded.
+
         Skills with ``depends_on`` are inserted after their last dependency.
         Insertion order: skills with fewer deps first (deterministic).
         """
-        chain = ["research", "analyst", "chart"]
+        chain = self._build_base_chain()
 
         enabled = self.get_enabled()
         skill_entries: list[tuple[str, list[str]]] = []
         for skill in enabled.values():
-            if skill.worker is not None and not skill.is_independent:
-                skill_entries.append((skill.name, list(skill.depends_on)))
+            if self._has_worker(skill) and not skill.is_independent:
+                # Only insert skills that aren't already in the base chain
+                if skill.name not in chain:
+                    skill_entries.append((skill.name, list(skill.depends_on)))
 
         # Sort by dependency count (fewer → inserted first)
         skill_entries.sort(key=lambda x: len(x[1]))
@@ -181,6 +224,62 @@ class SkillRegistry:
 
         return chain
 
+    def _build_base_chain(self) -> list[str]:
+        """Build base chain from registered agents with dependency relationships.
+
+        Uses topological sort on the dependency graph formed by all registered
+        agents (both built-in and skill).  Agents with no deps and no dependents
+        are excluded — they are independent workers, not chain members.
+        """
+        enabled = self.get_enabled()
+
+        # Collect all agents that participate in dependency relationships
+        deps_graph: dict[str, set[str]] = {}  # name → set of depends_on
+        for skill in enabled.values():
+            if skill.depends_on:
+                deps_graph[skill.name] = set(skill.depends_on)
+
+        if not deps_graph:
+            # Fallback — ensure the classic chain exists
+            return ["research", "analyst", "chart"]
+
+        # Collect all nodes (agents named in deps_graph or as dependencies)
+        all_nodes: set[str] = set(deps_graph.keys())
+        for deps in deps_graph.values():
+            all_nodes.update(deps)
+
+        # Topological sort (Kahn's algorithm)
+        in_degree: dict[str, int] = {n: 0 for n in all_nodes}
+        for n, deps in deps_graph.items():
+            for dep in deps:
+                if dep in in_degree:
+                    in_degree[n] = in_degree.get(n, 0) + 1
+
+        queue = [n for n in all_nodes if in_degree.get(n, 0) == 0]
+        result: list[str] = []
+
+        while queue:
+            n = queue.pop(0)
+            result.append(n)
+            # Find agents that depend on n
+            for other in all_nodes:
+                if n in deps_graph.get(other, set()):
+                    in_degree[other] -= 1
+                    if in_degree[other] == 0:
+                        queue.append(other)
+
+        # If topological sort didn't cover all nodes, there's a cycle.
+        # Append remaining nodes at the end and log a warning.
+        remaining = [n for n in all_nodes if n not in result]
+        if remaining:
+            logger.warning(
+                f"Circular dependency detected among: {remaining}. "
+                f"Appending to end of chain."
+            )
+            result.extend(remaining)
+
+        return result
+
     def get_result_keys(self) -> list[str]:
         """Return all state keys that workers may write results into."""
         keys: list[str] = ["skill_outputs"]
@@ -192,11 +291,24 @@ class SkillRegistry:
     # ── Supervisor prompt ──────────────────────────────────────
 
     def build_skills_section(self) -> str:
-        """Build the 'Additional skill agents:' section for the supervisor prompt."""
+        """Build the 'Additional skill agents:' section for the supervisor prompt.
+
+        Only includes non-built-in skills — built-in agents are already listed
+        in the hardcoded portion of the supervisor template.
+        """
+        # Names of built-in agents (already in the prompt template)
+        try:
+            from backend.agents.builtin_workers import WORKER_MAP as _BW
+            _BUILTIN_NAMES = set(_BW.keys())
+        except ImportError:
+            _BUILTIN_NAMES = set()
+
         lines: list[str] = []
         for skill in self.get_enabled().values():
-            if skill.worker is None:
+            if not self._has_worker(skill):
                 continue
+            if skill.name in _BUILTIN_NAMES:
+                continue  # built-in agents are already in the template
             if skill.prompt_contribution:
                 lines.append(skill.prompt_contribution)
             else:
@@ -223,7 +335,7 @@ class SkillRegistry:
 
         # Dynamic rules from enabled skills that have worker functions
         for skill in self.get_enabled().values():
-            if skill.worker is None:
+            if not self._has_worker(skill):
                 continue
 
             triggers = []
@@ -251,6 +363,35 @@ class SkillRegistry:
         lines.append(f"{rule_num + 5}. 只有纯闲聊（问候、无产出的简单问题）才用 direct_response。")
 
         return "\n".join(lines)
+
+    # ── Validation ──────────────────────────────────────────────
+
+    def validate_dependencies(self) -> list[str]:
+        """Check all registered agents for missing or circular dependencies.
+
+        Returns a list of human-readable warning messages.
+        """
+        warnings: list[str] = []
+        all_names = set(self._skills.keys())
+
+        for skill in self._skills.values():
+            if not skill.enabled:
+                continue
+            for dep in skill.depends_on:
+                if dep not in all_names:
+                    warnings.append(
+                        f"Skill '{skill.name}': dependency '{dep}' is not registered. "
+                        f"'{skill.name}' will be placed at chain entry."
+                    )
+                elif dep in all_names:
+                    dep_skill = self._skills.get(dep)
+                    if dep_skill and not dep_skill.enabled:
+                        warnings.append(
+                            f"Skill '{skill.name}': dependency '{dep}' is disabled. "
+                            f"'{skill.name}' may not receive its expected input."
+                        )
+
+        return warnings
 
     # ── Serialization ──────────────────────────────────────────
 

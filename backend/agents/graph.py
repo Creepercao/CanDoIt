@@ -25,22 +25,14 @@ from langgraph.graph import StateGraph, END
 from langgraph.constants import Send
 from langchain_core.messages import HumanMessage, BaseMessage
 
-from backend.models.provider import get_default_chat_model, create_chat_model
-from backend.models.registry import registry
-from backend.tools.image_gen import generate_image
-from backend.tools.video_gen import generate_video
-from backend.tools.chart_gen import generate_chart
-from backend.tools.data_scraper import search_and_scrape
+from backend.models.provider import create_chat_model
 from backend.cache import cache
 from backend.skills.registry import skill_registry, _merge_skill_outputs
-from backend.prompts import (
-    SUPERVISOR_PROMPT_TEMPLATE,
-    RESEARCH_QUERY_PROMPT,
-    RESEARCH_SYNTHESIS_PROMPT,
-    ANALYST_PROMPT,
-    IMAGE_ENHANCE_PROMPT,
-    CODE_WORKER_PROMPT,
+from backend.agents.builtin_workers import (
+    synthesizer_node,
+    WORKER_MAP as BUILTIN_WORKERS,
 )
+from backend.prompts import SUPERVISOR_PROMPT_TEMPLATE
 
 logger = logging.getLogger("graph")
 
@@ -110,46 +102,26 @@ async def supervisor_node(state: AgentState) -> dict:
 
 
 # ── Routing ──
-
-# Built-in agent→node mapping (skill agents are merged in dynamically)
-_BUILTIN_NODE_FOR_AGENT = {
-    "research": "research_worker", "analyst": "analyst_worker",
-    "chart": "chart_worker", "image_gen": "image_worker",
-    "video_gen": "video_worker", "code": "code_worker",
-}
-
-# Built-in independent (parallel) agents
-_BUILTIN_INDEPENDENT = {"image_gen", "video_gen", "code"}
-
-# Built-in chain base order
-_BUILTIN_CHAIN = ["research", "analyst", "chart"]
+# All agent metadata (names, dependencies, node mappings) is now sourced
+# from the SkillRegistry — built-in agents are registered there at startup
+# via skill_registry.register_builtins(BUILTIN_SKILLS).
+#
+# Worker functions live in builtin_workers.py and are imported directly.
 
 
 def _get_agent_map() -> dict[str, str]:
-    """Merge built-in and skill agent→node mappings."""
-    result = dict(_BUILTIN_NODE_FOR_AGENT)
-    result.update(skill_registry.get_node_for_agent())
-    return result
+    """Build agent→node mapping from registry (covers both built-in and skill agents)."""
+    return skill_registry.get_node_for_agent()
 
 
 def _get_independent_agents() -> set[str]:
     """All agent types that can run in parallel (no upstream dependencies)."""
-    return _BUILTIN_INDEPENDENT | skill_registry.get_independent_agents()
+    return skill_registry.get_independent_agents()
 
 
 def _get_chain_agents() -> list[str]:
-    """Ordered list of agent types in the sequential chain (built-in + skill)."""
+    """Ordered list of agent types in the sequential chain."""
     return skill_registry.get_chain_agents()
-
-
-def _get_all_worker_nodes() -> set[str]:
-    """All worker node names (built-in + skill)."""
-    nodes = {
-        "research_worker", "analyst_worker", "chart_worker",
-        "image_worker", "video_worker", "code_worker",
-    }
-    nodes.update(skill_registry.get_node_funcs().keys())
-    return nodes
 
 
 def _base_from_state(state: dict) -> dict:
@@ -237,322 +209,6 @@ def route_after_supervisor(state: AgentState):
     return sends
 
 
-# ── Research Worker (search + scrape raw pages) ──
-
-_RESEARCH_AGENT_TYPES = {"research"}
-
-
-async def research_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "research"]
-    if not my_tasks:
-        return {"research_results": []}
-
-    llm = _get_chat_llm(state)
-    results = []
-
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        try:
-            # Generate multiple search queries for better coverage
-            search_queries = [prompt_text[:80]]  # Original query first
-            if len(prompt_text) > 20:
-                kw_resp = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_QUERY_PROMPT.format(text=prompt_text))])
-                extra = kw_resp.content if hasattr(kw_resp, "content") else str(kw_resp)
-                for line in extra.strip().split("\n"):
-                    q = line.strip().lstrip("0123456789.-) ").strip()
-                    if q and len(q) > 5:
-                        search_queries.append(q[:120])
-
-            # Search with multiple queries and merge results
-            all_sources = []
-            all_synthesis = []
-            seen_urls = set()
-
-            for query in search_queries[:4]:  # Max 4 queries
-                scraped = await search_and_scrape(query, llm, max_pages=3)
-                raw_text = scraped.get("synthesis", "")
-                sources = scraped.get("sources", [])
-                structured_data = scraped.get("structured_data")
-
-                # Deduplicate sources
-                for src in sources:
-                    url = src.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_sources.append(src)
-
-                if raw_text and len(raw_text) > 50:
-                    all_synthesis.append(raw_text)
-
-            # Merge and re-synthesize
-            combined_text = "\n\n---\n\n".join(all_synthesis) if all_synthesis else ""
-            if combined_text:
-                synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined_text[:8000]))])
-                synthesis = synth.content if hasattr(synth, "content") else str(synth)
-            else:
-                synthesis = "No data found from web search."
-
-            results.append({
-                "task": prompt_text, "sources": all_sources[:8],
-                "synthesis": synthesis, "raw_text": combined_text[:4000],
-                "structured_data": structured_data,
-            })
-        except Exception as e:
-            logger.error(f"Research worker error: {e}")
-            results.append({"task": prompt_text, "error": str(e), "synthesis": f"Search error: {e}"})
-
-    return {"research_results": results}
-
-
-# ── Analyst Worker (extract structured data from research) ──
-
-async def analyst_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "analyst"]
-    if not my_tasks:
-        return {"analyst_results": []}
-
-    # Build data source from research results (now available since analyst runs after research)
-    research_data = state.get("research_results", [])
-    data_source = ""
-    if research_data:
-        data_source = "\n\n".join(
-            r.get("synthesis", "") + "\n" + r.get("raw_text", "")[:2000]
-            for r in research_data
-        )
-
-    llm = _get_chat_llm(state)
-    results = []
-
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        # Use research data if available, otherwise fall back to task prompt
-        source = data_source or prompt_text
-        try:
-            prompt = ANALYST_PROMPT.format(text=source[:6000])
-            resp = await llm.ainvoke([HumanMessage(content=prompt)])
-            content = resp.content if hasattr(resp, "content") else str(resp)
-
-            structured = None
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group())
-                    if data.get("viable") and data.get("labels") and data.get("datasets"):
-                        structured = data
-                except json.JSONDecodeError:
-                    pass
-
-            results.append({
-                "task": prompt_text,
-                "structured_data": structured,
-                "source_data": source[:500],
-            })
-        except Exception as e:
-            logger.error(f"Analyst worker error: {e}")
-            results.append({"task": prompt_text, "error": str(e)})
-
-    return {"analyst_results": results}
-
-
-# ── Chart Worker (render only — takes analyst's structured data) ──
-
-async def chart_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "chart"]
-    if not my_tasks:
-        return {"chart_results": []}
-
-    # Get structured data from analyst first, then fall back to research
-    chart_spec = None
-    for r in state.get("analyst_results", []):
-        if r.get("structured_data"):
-            chart_spec = r["structured_data"]
-            break
-    if not chart_spec:
-        for r in state.get("research_results", []):
-            if r.get("structured_data"):
-                chart_spec = r["structured_data"]
-                break
-
-    results = []
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        try:
-            if chart_spec:
-                result = await generate_chart(
-                    chart_type=chart_spec["chart_type"], title=chart_spec["title"],
-                    labels=chart_spec["labels"], datasets=chart_spec["datasets"],
-                    x_label=chart_spec.get("x_label", ""), y_label=chart_spec.get("y_label", ""),
-                )
-                table_md = _build_table_md(chart_spec)
-                results.append({
-                    "task": prompt_text, "chart_spec": chart_spec,
-                    "result": result, "table_markdown": table_md,
-                })
-            else:
-                results.append({
-                    "task": prompt_text,
-                    "result": {"error": "No structured data from analyst/research"},
-                    "fallback": True,
-                })
-        except Exception as e:
-            logger.error(f"Chart worker error: {e}")
-            results.append({"task": prompt_text, "result": {"error": str(e)}})
-
-    return {"chart_results": results}
-
-
-# ── Image Worker ──
-
-async def image_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "image_gen"]
-    if not my_tasks:
-        return {"image_results": []}
-
-    image_model = state.get("image_model_id", "stabilityai/stable-diffusion-3-5-large")
-    llm = _get_chat_llm(state)
-    results = []
-
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        try:
-            enhanced = await llm.ainvoke([HumanMessage(
-                content=IMAGE_ENHANCE_PROMPT.format(prompt=prompt_text))])
-            enhanced_text = enhanced.content if hasattr(enhanced, "content") else str(enhanced)
-            result = await generate_image(prompt=enhanced_text.strip(), model_id=image_model)
-            results.append({"task": prompt_text, "prompt_used": enhanced_text.strip(), "result": result})
-        except Exception as e:
-            logger.error(f"Image worker error: {e}")
-            results.append({"task": prompt_text, "error": str(e)})
-
-    return {"image_results": results}
-
-
-# ── Video Worker ──
-
-async def video_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "video_gen"]
-    if not my_tasks:
-        return {"video_results": []}
-
-    video_model = state.get("video_model_id", "")
-    results = []
-
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        try:
-            result = await generate_video(prompt=prompt_text, model_id=video_model)
-            if result.get("status") == "unsupported":
-                img_result = await generate_image(
-                    prompt=f"Key frame of video: {prompt_text}",
-                    model_id=state.get("image_model_id", "stabilityai/stable-diffusion-3-5-large"))
-                results.append({"task": prompt_text, "result": result, "fallback_image": img_result})
-            else:
-                results.append({"task": prompt_text, "result": result})
-        except Exception as e:
-            logger.error(f"Video worker error: {e}")
-            results.append({"task": prompt_text, "error": str(e)})
-
-    return {"video_results": results}
-
-
-# ── Code Worker ──
-
-async def code_worker(state: AgentState) -> dict:
-    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "code"]
-    if not my_tasks:
-        return {"code_results": []}
-
-    llm = _get_chat_llm(state)
-    results = []
-
-    for task in my_tasks:
-        prompt_text = task.get("prompt", "")
-        try:
-            resp = await llm.ainvoke([HumanMessage(
-                content=CODE_WORKER_PROMPT.format(prompt=prompt_text))])
-            content = resp.content if hasattr(resp, "content") else str(resp)
-            results.append({"task": prompt_text, "code": content})
-        except Exception as e:
-            logger.error(f"Code worker error: {e}")
-            results.append({"task": prompt_text, "error": str(e)})
-
-    return {"code_results": results}
-
-
-# ── Synthesizer ──
-
-async def synthesizer_node(state: AgentState) -> dict:
-    """Synthesize all worker results into a markdown response.
-
-    When _skip_synthesizer is True (streaming path), this is a no-op —
-    the streaming orchestrator handles synthesis with token-level streaming.
-    """
-    if state.get("final_response") or state.get("_skip_synthesizer"):
-        return {}
-
-    llm = _get_chat_llm(state)
-
-    # Collect markdown tables
-    table_blocks = ""
-    for cr in state.get("chart_results", []):
-        if cr.get("table_markdown"):
-            title = cr.get("chart_spec", {}).get("title", "数据表")
-            table_blocks += f"\n\n**{title}**\n\n{cr['table_markdown']}\n"
-
-    prompt = f"""Synthesize agent results.
-
-Original request: {state["user_request"]}
-
-Research: {_fmt(state.get("research_results", []))}
-Analyst data: {_fmt(state.get("analyst_results", []))}
-Charts: {_fmt(state.get("chart_results", []))}
-Images: {_fmt(state.get("image_results", []))}
-Videos: {_fmt(state.get("video_results", []))}
-Code: {_fmt(state.get("code_results", []))}
-Skill outputs: {_fmt(state.get("skill_outputs", {}))}
-
-Include these tables in response (copy verbatim):
-{table_blocks}
-
-Create comprehensive markdown response with data tables and chart descriptions."""
-
-    # Use astream for token-level streaming via astream_events
-    full = ""
-    async for chunk in llm.astream([HumanMessage(content=prompt)]):
-        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-        if text:
-            full += text
-
-    return {"final_response": full}
-
-
-# ── Helpers ──
-
-def _get_chat_llm(state: dict) -> Any:
-    model_id = state.get("chat_model_id", "")
-    return create_chat_model(model_id or "deepseek-ai/DeepSeek-V3", temperature=0.7, max_tokens=4096)
-
-def _fmt(data) -> str:
-    return json.dumps(data, ensure_ascii=False, indent=2) if data else "None"
-
-def _build_table_md(spec: dict) -> str:
-    labels = spec.get("labels", [])
-    datasets = spec.get("datasets", [])
-    if not labels or not datasets:
-        return ""
-    headers = ["类别"] + [ds.get("label", "值") for ds in datasets]
-    header_line = "| " + " | ".join(headers) + " |"
-    align_line = "| " + " | ".join(["---"] * len(headers)) + " |"
-    rows = []
-    for i, label in enumerate(labels):
-        row = [str(label)]
-        for ds in datasets:
-            vals = ds.get("values", [])
-            row.append(str(vals[i]) if i < len(vals) else "-")
-        rows.append("| " + " | ".join(row) + " |")
-    return header_line + "\n" + align_line + "\n" + "\n".join(rows)
 
 
 # ── Build Graph ──
@@ -571,17 +227,13 @@ def build_graph() -> StateGraph:
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("synthesizer", synthesizer_node)
 
-    # ── Built-in worker nodes ──
-    builtin_nodes = {
-        "research_worker": research_worker,
-        "analyst_worker": analyst_worker,
-        "chart_worker": chart_worker,
-        "image_worker": image_worker,
-        "video_worker": video_worker,
-        "code_worker": code_worker,
-    }
-    for name, func in builtin_nodes.items():
-        workflow.add_node(name, func)
+    # ── Built-in worker nodes (from WORKER_MAP + registry naming) ──
+    agent_map = _get_agent_map()
+    builtin_nodes: dict[str, callable] = {}
+    for agent_name, worker_func in BUILTIN_WORKERS.items():
+        node_name = agent_map.get(agent_name, f"{agent_name}_worker")
+        builtin_nodes[node_name] = worker_func
+        workflow.add_node(node_name, worker_func)
 
     # ── Skill worker nodes ──
     skill_nodes = skill_registry.get_node_funcs()
@@ -598,6 +250,7 @@ def build_graph() -> StateGraph:
     )
 
     # ── Chain routing ──
+    # Re-fetch agent_map (might have been updated by skill node registration)
     agent_map = _get_agent_map()
     chain = _get_chain_agents()
 
@@ -622,14 +275,7 @@ def build_graph() -> StateGraph:
     for agent in _get_independent_agents():
         node = agent_map.get(agent)
         if node and node in workflow.channels:
-            # Only add edge if not already added via chain routing
             workflow.add_edge(node, "synthesizer")
-
-    # Built-in terminal edges (belt-and-suspenders)
-    workflow.add_edge("chart_worker", "synthesizer")
-    workflow.add_edge("image_worker", "synthesizer")
-    workflow.add_edge("video_worker", "synthesizer")
-    workflow.add_edge("code_worker", "synthesizer")
 
     # Synthesizer → END
     workflow.add_edge("synthesizer", END)
