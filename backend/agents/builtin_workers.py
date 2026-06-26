@@ -331,10 +331,24 @@ Include these tables in response (copy verbatim):
 Create comprehensive markdown response with data tables and chart descriptions."""
 
     full = ""
-    async for chunk in llm.astream([HumanMessage(content=prompt)]):
-        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-        if text:
-            full += text
+    try:
+        async for chunk in llm.astream([HumanMessage(content=prompt)]):
+            text = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if text:
+                full += text
+    except Exception as e:
+        logger.error(f"Synthesizer stream error: {e}")
+
+    if not full:
+        # Fallback: return research data directly instead of empty response
+        logger.warning("Synthesizer produced empty output — using raw research")
+        research_text = ""
+        for r in state.get("research_results", []):
+            syn = r.get("synthesis", "")
+            if syn and len(syn) > 50:
+                research_text = syn[:2000]
+                break
+        return {"final_response": research_text or "No data available."}
 
     return {"final_response": full}
 

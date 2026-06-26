@@ -95,7 +95,9 @@ async def supervisor_node(state: AgentState) -> dict:
         return {"tasks": [], "final_response": direct}
     if tasks:
         await cache.set(cache_key, tasks, ttl=300)
-    return {"tasks": tasks}
+        return {"tasks": tasks}
+    # Neither tasks nor direct_response — use full LLM content as fallback
+    return {"tasks": [], "final_response": content[:1000] or "I didn't understand that. Could you rephrase?"}
 
 
 # ── Routing ──
@@ -232,11 +234,25 @@ def route_after_supervisor(state: AgentState):
         if agent in agent_types:
             node = agent_map.get(agent)
             if node:
+                logger.info(
+                    f"Dispatching chain entry: '{agent}' → node '{node}' "
+                    f"(chain={chain[:5]}, agent_types={agent_types})"
+                )
                 sends.append(Send(node, base))
+            else:
+                logger.warning(
+                    f"Agent '{agent}' has no node mapping in agent_map "
+                    f"(available: {list(agent_map.keys())})"
+                )
             break  # Only the first in the chain gets dispatched
 
     if not sends:
+        logger.warning(
+            f"No sends generated! agent_types={agent_types}, chain={chain[:5]}, "
+            f"sends_count={len(sends)}, indep={_get_independent_agents()}"
+        )
         return END
+    logger.info(f"Sending {len(sends)} worker(s) to start")
     return sends
 
 
