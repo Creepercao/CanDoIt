@@ -27,7 +27,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./API.json:/app/API.json:ro
+      - ./providers.yaml:/app/providers.yaml:ro
       - ./outputs:/app/outputs
       - ./backend/skills/packages:/app/backend/skills/packages
       - ./skills_packages.json:/app/skills_packages.json
