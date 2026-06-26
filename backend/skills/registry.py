@@ -211,6 +211,47 @@ class SkillRegistry:
             return "Additional skill agents:\n" + "\n".join(lines) + "\n"
         return ""
 
+    def build_routing_rules(self) -> str:
+        """Build dynamic routing rules from all enabled skills + built-in rules.
+
+        Generated rules include trigger-based dispatch instructions for each
+        enabled package skill, followed by the static built-in agent rules.
+        Rule numbering is consistent regardless of which skills are enabled.
+        """
+        lines: list[str] = []
+        rule_num = 0
+
+        # Dynamic rules from enabled skills that have worker functions
+        for skill in self.get_enabled().values():
+            if skill.worker is None:
+                continue
+
+            triggers = []
+            if skill._package_meta:
+                triggers = skill._package_meta.get("triggers", [])
+            if not isinstance(triggers, list):
+                triggers = []
+
+            if triggers:
+                trigger_str = "、".join(triggers[:5])
+                rule_num += 1
+                dep_hint = ""
+                if skill.depends_on:
+                    dep_hint = f"（需要先经过 {', '.join(skill.depends_on)}）"
+                lines.append(
+                    f'{rule_num}. 用户要 {trigger_str} → 必须分派给 "{skill.name}"。'
+                    f"{dep_hint} 禁止用文字回复。"
+                )
+
+        # Static built-in rules (always present)
+        lines.append(f"{rule_num + 1}. 用户要 数据统计图表（柱状图/折线/饼图）→ 必须用 research→analyst→chart 链路。")
+        lines.append(f'{rule_num + 2}. 用户要 图片/照片/插画 → 必须分派给 "image_gen"。')
+        lines.append(f'{rule_num + 3}. 用户要 视频/动画 → 必须分派给 "video_gen"。')
+        lines.append(f'{rule_num + 4}. 用户要 写代码/编程 → 必须分派给 "code"。')
+        lines.append(f"{rule_num + 5}. 只有纯闲聊（问候、无产出的简单问题）才用 direct_response。")
+
+        return "\n".join(lines)
+
     # ── Serialization ──────────────────────────────────────────
 
     def to_api_list(self) -> list[dict]:
