@@ -69,9 +69,12 @@ class AgentState(TypedDict):
 # ── Supervisor ──
 
 def _build_supervisor_prompt() -> str:
-    """Build the supervisor prompt dynamically, including skill agent descriptions."""
+    """Build the supervisor prompt dynamically, including skill agent descriptions
+    and auto-generated routing rules from the skill registry."""
     skills_section = skill_registry.build_skills_section()
-    return SUPERVISOR_PROMPT_TEMPLATE.replace("{skills_section}", skills_section)
+    routing_rules = skill_registry.build_routing_rules()
+    prompt = SUPERVISOR_PROMPT_TEMPLATE.replace("{skills_section}", skills_section)
+    return prompt.replace("{routing_rules}", routing_rules)
 
 
 async def supervisor_node(state: AgentState) -> dict:
