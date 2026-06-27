@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], operator.add]
     user_request: str
     tasks: list[dict[str, Any]]
+    plan_steps: list[dict[str, Any]]  # 🆕 Plan Mode — full execution plan
     research_results: Annotated[list[dict[str, Any]], operator.add]
     analyst_results: Annotated[list[dict[str, Any]], operator.add]
     chart_results: Annotated[list[dict[str, Any]], operator.add]
@@ -67,13 +68,19 @@ def _build_supervisor_prompt() -> str:
 
 
 async def supervisor_node(state: AgentState) -> dict:
+    """Plan Mode supervisor — generates a step-by-step execution plan.
+
+    Parses the LLM output as a structured plan (JSON with ``plan`` key),
+    extracts tasks from the plan, and stores both ``tasks`` and ``plan_steps``
+    in the state for graph routing and frontend display.
+    """
     user_req = state["user_request"]
     cache_key = f"route:{cache.hash_key(user_req)}"
 
     router_id = state.get("router_model_id", "") or state.get("chat_model_id", "")
     llm = create_chat_model(
         model_id=router_id or "deepseek-ai/DeepSeek-V3",
-        temperature=0.1, max_tokens=1024, provider_config=None,
+        temperature=0.1, max_tokens=2048, provider_config=None,
     )
 
     prompt = _build_supervisor_prompt().replace("{user_request}", user_req)
@@ -81,23 +88,57 @@ async def supervisor_node(state: AgentState) -> dict:
     content = response.content if hasattr(response, "content") else str(response)
 
     json_match = re.search(r'\{.*\}', content, re.DOTALL)
-    tasks = []
+    tasks: list[dict] = []
+    plan_steps: list[dict] = []
     direct = ""
     if json_match:
         try:
             data = json.loads(json_match.group())
-            tasks = data.get("tasks", [])
+            # ── Plan Mode: parse structured plan ──
+            plan = data.get("plan", [])
+            if plan:
+                for step in plan:
+                    tasks.append({
+                        "agent": step.get("agent", ""),
+                        "prompt": step.get("prompt", ""),
+                    })
+                    plan_steps.append({
+                        "step": step.get("step", len(plan_steps) + 1),
+                        "agent": step.get("agent", ""),
+                        "prompt": step.get("prompt", ""),
+                        "depends_on": step.get("depends_on", []),
+                        "reason": step.get("reason", ""),
+                    })
+                logger.info(
+                    f"Plan Mode: parsed {len(plan_steps)} steps → "
+                    f"agents: {[s['agent'] for s in plan_steps]}"
+                )
+            else:
+                # ── Legacy format fallback ──
+                tasks = data.get("tasks", [])
+                for i, t in enumerate(tasks):
+                    plan_steps.append({
+                        "step": i + 1,
+                        "agent": t.get("agent", ""),
+                        "prompt": t.get("prompt", ""),
+                        "depends_on": [],
+                        "reason": "",
+                    })
             direct = data.get("direct_response", "")
         except json.JSONDecodeError:
             direct = content
 
     if direct and not tasks:
-        return {"tasks": [], "final_response": direct}
+        return {"tasks": [], "plan_steps": [], "final_response": direct}
     if tasks:
         await cache.set(cache_key, tasks, ttl=300)
-        return {"tasks": tasks}
-    # Neither tasks nor direct_response — use full LLM content as fallback
-    return {"tasks": [], "final_response": content[:1000] or "I didn't understand that. Could you rephrase?"}
+        return {"tasks": tasks, "plan_steps": plan_steps}
+    # Neither plan nor direct_response — use full LLM content as fallback
+    return {
+        "tasks": [],
+        "plan_steps": [],
+        "final_response": content[:1000] or "I didn't understand that. Could you rephrase?",
+    }
 
 
 # ── Routing ──

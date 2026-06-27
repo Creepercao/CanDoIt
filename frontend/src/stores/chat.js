@@ -290,7 +290,12 @@ export const useChatStore = defineStore('chat', () => {
               addThinkStep({ type: 'phase', phase: data.phase, message: data.message })
               break
             case 'plan':
-              addThinkStep({ type: 'plan', tasks: data.tasks, count: data.count })
+              addThinkStep({
+                type: 'plan',
+                tasks: data.tasks,
+                count: data.count,
+                steps: data.steps || [],  // 🆕 Plan Mode steps with deps & reasons
+              })
               break
             case 'agent_start':
               addThinkStep({

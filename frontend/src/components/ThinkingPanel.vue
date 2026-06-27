@@ -30,6 +30,20 @@ const phaseSteps = computed(() => props.steps.filter(s => s.type === 'phase'))
 const agentSteps = computed(() => props.steps.filter(s => s.type === 'agent_start' || s.type === 'agent_done'))
 const activeAgents = computed(() => agentSteps.value.filter(s => s.type === 'agent_start' && !s.done))
 const doneAgents = computed(() => agentSteps.value.filter(s => s.done || s.type === 'agent_done'))
+
+// 🆕 Plan Mode — compute step status from agent execution
+const planStepStatus = (stepAgent) => {
+  const done = doneAgents.value.some(a =>
+    (a.agentType || a.agent) === stepAgent || a.agent === stepAgent
+  )
+  const active = activeAgents.value.some(a =>
+    (a.agentType || a.agent) === stepAgent || a.agent === stepAgent
+  )
+  if (done) return 'done'
+  if (active) return 'running'
+  return 'pending'
+}
+
 const progress = computed(() => {
   const total = planStep.value?.count || agentSteps.value.length || 0
   const done = doneAgents.value.length
@@ -48,6 +62,13 @@ const headerSummary = computed(() => {
 function statusClass(step) {
   if (step.done || step.type === 'agent_done') return 'border-green-500/30 bg-green-500/10'
   return 'border-blue-500/30 bg-blue-500/10'
+}
+
+// 🆕 Plan step status styles
+function planStepStatusClass(status) {
+  if (status === 'done') return 'border-green-500/50 bg-green-500/10 text-green-300'
+  if (status === 'running') return 'border-blue-400/50 bg-blue-500/15 text-blue-300 ring-1 ring-blue-400/30'
+  return 'border-gray-600/30 bg-surface-900/50 text-gray-400'
 }
 </script>
 
@@ -86,11 +107,69 @@ function statusClass(step) {
 
       <div class="p-3 space-y-3">
         <div v-if="planStep" class="rounded-lg border border-gray-700/50 bg-surface-900/60 p-2.5">
-          <div class="flex items-center justify-between text-xs">
-            <span class="font-medium text-gray-200">执行计划</span>
+          <div class="flex items-center justify-between text-xs mb-2">
+            <span class="font-medium text-gray-200">📋 执行计划</span>
             <span class="text-gray-500">{{ planStep.count }} 个任务</span>
           </div>
-          <div class="mt-2 space-y-1.5">
+
+          <!-- 🆕 Plan Mode: step-by-step with deps & reasons -->
+          <div v-if="planStep.steps && planStep.steps.length > 0" class="space-y-1.5">
+            <div
+              v-for="(step, idx) in planStep.steps"
+              :key="idx"
+              class="rounded-lg border p-2 transition-all duration-300"
+              :class="planStepStatusClass(planStepStatus(step.agent))"
+            >
+              <div class="flex items-start gap-2">
+                <!-- Step number + status dot -->
+                <div class="flex items-center gap-1.5 min-w-[2.5rem]">
+                  <span
+                    class="w-2 h-2 rounded-full flex-shrink-0"
+                    :class="{
+                      'bg-green-400': planStepStatus(step.agent) === 'done',
+                      'bg-blue-400 animate-pulse': planStepStatus(step.agent) === 'running',
+                      'bg-gray-500': planStepStatus(step.agent) === 'pending',
+                    }"
+                  ></span>
+                  <span class="text-xs tabular-nums" :class="{
+                    'text-green-400': planStepStatus(step.agent) === 'done',
+                    'text-blue-300': planStepStatus(step.agent) === 'running',
+                    'text-gray-500': planStepStatus(step.agent) === 'pending',
+                  }">{{ step.step || idx + 1 }}</span>
+                </div>
+
+                <!-- Content -->
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-medium truncate">{{ step.label || step.agent }}</span>
+                    <!-- Dependency badges -->
+                    <span
+                      v-if="step.depends_on && step.depends_on.length > 0"
+                      class="text-[10px] text-gray-500"
+                    >
+                      ← 步骤 {{ step.depends_on.join(', ') }}
+                    </span>
+                  </div>
+                  <div class="text-[11px] line-clamp-1 mt-0.5 opacity-70">{{ step.prompt }}</div>
+                  <div v-if="step.reason" class="text-[10px] text-gray-500 mt-0.5 italic">
+                    {{ step.reason }}
+                  </div>
+                </div>
+
+                <!-- Status tag -->
+                <span class="text-[10px] flex-shrink-0 px-1.5 py-0.5 rounded" :class="{
+                  'bg-green-500/20 text-green-300': planStepStatus(step.agent) === 'done',
+                  'bg-blue-500/20 text-blue-300': planStepStatus(step.agent) === 'running',
+                  'bg-gray-600/30 text-gray-500': planStepStatus(step.agent) === 'pending',
+                }">
+                  {{ planStepStatus(step.agent) === 'done' ? '✓' : planStepStatus(step.agent) === 'running' ? '⚡' : '○' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fallback: legacy task list (no steps) -->
+          <div v-else class="space-y-1.5">
             <div
               v-for="(task, idx) in planStep.tasks"
               :key="idx"

@@ -281,6 +281,9 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
                     return
 
                 planned_tasks = tasks
+                plan_steps = output.get("plan_steps", [])
+
+                # 🆕 Plan Mode — send full execution plan with deps & reasons
                 yield _sse("plan", {
                     "tasks": [
                         {
@@ -291,6 +294,17 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
                         for t in tasks
                     ],
                     "count": len(tasks),
+                    "steps": [
+                        {
+                            "step": s.get("step", i + 1),
+                            "agent": s.get("agent", ""),
+                            "label": agent_labels.get(_get_agent_map().get(s.get("agent", ""), ""), s.get("agent", "")),
+                            "prompt": s.get("prompt", "")[:120],
+                            "depends_on": s.get("depends_on", []),
+                            "reason": s.get("reason", ""),
+                        }
+                        for i, s in enumerate(plan_steps)
+                    ] if plan_steps else [],
                 })
 
             elif kind == "on_chain_start" and name in worker_nodes:
