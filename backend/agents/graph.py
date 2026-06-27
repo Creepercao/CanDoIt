@@ -73,7 +73,7 @@ async def supervisor_node(state: AgentState) -> dict:
     router_id = state.get("router_model_id", "") or state.get("chat_model_id", "")
     llm = create_chat_model(
         model_id=router_id or "deepseek-ai/DeepSeek-V3",
-        temperature=0.1, max_tokens=256, provider_config=None,
+        temperature=0.1, max_tokens=1024, provider_config=None,
     )
 
     prompt = _build_supervisor_prompt().replace("{user_request}", user_req)

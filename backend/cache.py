@@ -66,6 +66,22 @@ class Cache:
     def hash_key(text: str) -> str:
         return hashlib.md5(text.encode()).hexdigest()[:12]
 
+    async def exists(self, key: str) -> bool:
+        """Check if a key exists and has not expired."""
+        if self._redis:
+            try:
+                return await self._redis.exists(key) > 0
+            except Exception:
+                pass
+        import time
+        entry = self._memory.get(key)
+        if entry:
+            expires, _ = entry
+            if expires == 0 or time.time() < expires:
+                return True
+            del self._memory[key]
+        return False
+
     @property
     def available(self) -> bool:
         return self._redis is not None or True  # memory always available

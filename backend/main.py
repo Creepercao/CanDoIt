@@ -14,6 +14,7 @@ from backend.api.chat import router as chat_router
 from backend.api.skills import router as skills_router
 from backend.api.packages import router as packages_router
 from backend.api.sessions import router as sessions_router
+from backend.api.research_cache import router as knowledge_router
 from backend.api.pptx import router as pptx_router
 
 # Allow up to 200 MB file uploads (skill packages)
@@ -43,6 +44,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(packages_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
+app.include_router(knowledge_router, prefix="/api")
 app.include_router(pptx_router, prefix="/api")
 
 
@@ -65,6 +67,13 @@ async def startup():
         logger.warning(f"Dependency warning: {w}")
 
     get_multi_agent_graph()  # build graph after skill discovery
+
+    # ── Initialize research cache + knowledge base ──
+    from backend.research_cache import get_knowledge_base, get_research_cache
+    get_research_cache()  # lazy init
+    kb = get_knowledge_base()  # lazy init — triggers ChromaDB load
+    if kb:
+        await kb._ensure_init()
 
     redis_status = "enabled" if os.environ.get("REDIS_URL") else "disabled"
     logger = logging.getLogger("api")
