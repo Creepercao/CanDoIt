@@ -76,7 +76,11 @@ async def research_worker(state: dict) -> dict:
             # ── A: Check semantic cache before searching ──
             from backend.research_cache import get_research_cache, get_knowledge_base
             rc = get_research_cache()
+            # Try task prompt first, then user request (more stable across runs)
+            user_req = state.get("user_request", "")
             cached = await rc.get_similar(prompt_text)
+            if not cached and user_req and user_req != prompt_text:
+                cached = await rc.get_similar(user_req)
             if cached:
                 logger.info(f"Research cache HIT, skipping web search: {prompt_text[:60]}...")
                 results.append({
@@ -87,6 +91,8 @@ async def research_worker(state: dict) -> dict:
                     "structured_data": cached.get("structured_data"),
                     "_from_cache": True,
                 })
+                # Also store under the alternate key for future hits
+                await rc.store(prompt_text, cached)
                 continue
             # ── End cache check ──
 

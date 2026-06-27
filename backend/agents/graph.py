@@ -440,7 +440,12 @@ def build_graph() -> StateGraph:
         workflow.add_conditional_edges(node_name, router, next_options)
 
     # ── Terminal workers → synthesizer ──
+    # Only add direct edge for agents NOT in the chain — chain agents
+    # already have a conditional edge (chain router) that handles routing.
+    chain_set = set(chain)
     for agent in _get_independent_agents():
+        if agent in chain_set:
+            continue  # handled by chain router conditional edge
         node = agent_map.get(agent)
         if node and node in workflow.channels:
             workflow.add_edge(node, "synthesizer")
