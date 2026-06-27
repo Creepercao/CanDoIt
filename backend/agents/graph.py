@@ -200,18 +200,18 @@ def _make_chain_router(
             )
             return "synthesizer"
 
-        logger.debug(
+        logger.info(
             f"Chain router after '{my_agent_type}': tasks={agent_types_in_tasks}, "
-            f"next={remaining_chain[my_idx + 1:my_idx + 4]}"
+            f"next_agents={remaining_chain[my_idx + 1:my_idx + 4]}"
         )
 
         for next_agent in remaining_chain[my_idx + 1:]:
             if next_agent in agent_types_in_tasks:
                 next_node = agent_map.get(next_agent)
                 if not next_node:
-                    logger.warning(
-                        f"Chain router: '{next_agent}' has no node mapping "
-                        f"(available: {list(agent_map.keys())[:8]})"
+                    logger.error(
+                        f"Chain router: '{next_agent}' has NO NODE MAPPING! "
+                        f"agent_map keys: {list(agent_map.keys())}"
                     )
                     continue
                 # For skill agents, verify dependencies are met
@@ -220,19 +220,19 @@ def _make_chain_router(
                     unmet = [d for d in skill.depends_on
                              if d not in agent_types_in_tasks]
                     if unmet:
-                        logger.info(
-                            f"Chain router: skipping '{next_agent}' — "
+                        logger.warning(
+                            f"Chain router: SKIP '{next_agent}' — "
                             f"unmet deps: {unmet}"
                         )
-                        continue  # skip — deps not satisfied
+                        continue
                 logger.info(
-                    f"Chain router: '{my_agent_type}' → '{next_agent}' "
+                    f"Chain router: DISPATCH '{my_agent_type}' → '{next_agent}' "
                     f"(node='{next_node}')"
                 )
                 return [Send(next_node, base)]
 
-        logger.debug(
-            f"Chain router after '{my_agent_type}': no more tasks in chain → synthesizer"
+        logger.info(
+            f"Chain router after '{my_agent_type}': no more tasks → synthesizer"
         )
         return "synthesizer"
 
@@ -340,30 +340,38 @@ def route_after_supervisor(state: AgentState):
     base["tasks"] = tasks
     agent_map = _get_agent_map()
     sends = []
+    chain_entry = None
 
-    # Independent workers — dispatch directly (parallel with chain)
-    for agent in _get_independent_agents():
-        if agent in agent_types:
-            node = agent_map.get(agent)
-            if node:
-                sends.append(Send(node, base))
-
-    # Chain entry: only Send to the earliest chain agent that has tasks
+    # Chain entry: identify the earliest chain agent that has tasks
     for agent in chain:
         if agent in agent_types:
+            chain_entry = agent
+            break
+
+    # Independent workers — dispatch directly (parallel with chain),
+    # BUT skip the chain entry agent to avoid double-dispatch.
+    for agent in _get_independent_agents():
+        if agent in agent_types:
+            if agent == chain_entry:
+                continue  # dispatched via chain below, avoid double-run
             node = agent_map.get(agent)
             if node:
-                logger.info(
-                    f"Dispatching chain entry: '{agent}' → node '{node}' "
-                    f"(chain={chain[:5]}, agent_types={agent_types})"
-                )
                 sends.append(Send(node, base))
-            else:
-                logger.warning(
-                    f"Agent '{agent}' has no node mapping in agent_map "
-                    f"(available: {list(agent_map.keys())})"
-                )
-            break  # Only the first in the chain gets dispatched
+
+    # Dispatch the chain entry (ensures correct chain routing)
+    if chain_entry:
+        node = agent_map.get(chain_entry)
+        if node:
+            logger.info(
+                f"Dispatching chain entry: '{chain_entry}' → node '{node}' "
+                f"(chain={chain[:5]}, agent_types={agent_types})"
+            )
+            sends.append(Send(node, base))
+        else:
+            logger.warning(
+                f"Agent '{chain_entry}' has no node mapping in agent_map "
+                f"(available: {list(agent_map.keys())})"
+            )
 
     if not sends:
         logger.warning(
