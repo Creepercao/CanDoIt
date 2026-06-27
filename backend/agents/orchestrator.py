@@ -471,7 +471,7 @@ async def run_agent_loop_stream(
                     "task_count": len(node_tasks),
                 }}
 
-        # Execute wave in parallel
+        # Execute wave in parallel, with heartbeat to prevent timeout
         async def _run_one(agent: str, fn: Callable, st: dict) -> tuple[str, dict]:
             try:
                 result = await fn(st)
@@ -480,9 +480,22 @@ async def run_agent_loop_stream(
                 logger.error(f"Agent Loop: '{agent}' error: {e}")
                 return agent, {f"{agent}_results": [{"error": str(e)}]}
 
-        results = await asyncio.gather(*[
+        wave_tasks = [
             _run_one(agent, fn, state) for agent, fn in wave
-        ])
+        ]
+        # Wrap in a task so we can heartbeat while waiting
+        wave_future = asyncio.gather(*wave_tasks)
+
+        # Heartbeat loop: yield a comment every 30s to keep SSE alive
+        while True:
+            done, _ = await asyncio.wait(
+                [wave_future], timeout=30.0
+            )
+            if done:
+                break
+            yield {"event": "heartbeat", "data": {}}
+
+        results = await wave_future
 
         # Merge and emit agent_done
         for agent, output in results:

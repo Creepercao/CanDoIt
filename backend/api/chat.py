@@ -265,7 +265,11 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
             ev_type = event.get("event", "")
             data = event.get("data", {})
 
-            if ev_type == "phase":
+            if ev_type == "heartbeat":
+                yield ": heartbeat\n\n"  # SSE comment, keeps connection alive
+                continue
+
+            elif ev_type == "phase":
                 yield _sse("phase", data)
 
             elif ev_type == "plan":
