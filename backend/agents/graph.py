@@ -335,51 +335,38 @@ def route_after_supervisor(state: AgentState):
     agent_types = set(t.get("agent", "") for t in tasks)
 
     base = _base_from_state(state)
-    # Include the (possibly augmented) tasks in the Send payload so
-    # worker nodes see the full list
+    # Include tasks in the Send payload so workers can see them
     base["tasks"] = tasks
     agent_map = _get_agent_map()
     sends = []
-    chain_entry = None
 
-    # Chain entry: identify the earliest chain agent that has tasks
-    for agent in chain:
-        if agent in agent_types:
-            chain_entry = agent
-            break
-
-    # Independent workers — dispatch directly (parallel with chain),
-    # BUT skip the chain entry agent to avoid double-dispatch.
-    for agent in _get_independent_agents():
-        if agent in agent_types:
-            if agent == chain_entry:
-                continue  # dispatched via chain below, avoid double-run
-            node = agent_map.get(agent)
-            if node:
-                sends.append(Send(node, base))
-
-    # Dispatch the chain entry (ensures correct chain routing)
-    if chain_entry:
-        node = agent_map.get(chain_entry)
+    # ── Dispatch ALL agents that have tasks ──
+    # Instead of relying on LangGraph conditional edges for chain routing
+    # (which are fragile), we dispatch every agent upfront.  Chain agents
+    # check their deps in the worker and handle missing upstream data
+    # gracefully (e.g. generate from task prompt alone).
+    dispatched = set()
+    for agent in agent_types:
+        if agent in dispatched:
+            continue
+        node = agent_map.get(agent)
         if node:
-            logger.info(
-                f"Dispatching chain entry: '{chain_entry}' → node '{node}' "
-                f"(chain={chain[:5]}, agent_types={agent_types})"
-            )
             sends.append(Send(node, base))
+            dispatched.add(agent)
         else:
             logger.warning(
-                f"Agent '{chain_entry}' has no node mapping in agent_map "
-                f"(available: {list(agent_map.keys())})"
+                f"Agent '{agent}' has no node mapping "
+                f"(available: {list(agent_map.keys())[:10]})"
             )
 
     if not sends:
         logger.warning(
-            f"No sends generated! agent_types={agent_types}, chain={chain[:5]}, "
-            f"sends_count={len(sends)}, indep={_get_independent_agents()}"
+            f"No sends generated! agent_types={agent_types}"
         )
         return END
-    logger.info(f"Sending {len(sends)} worker(s) to start")
+    logger.info(
+        f"Sending {len(sends)} worker(s): {sorted(dispatched)}"
+    )
     return sends
 
 
