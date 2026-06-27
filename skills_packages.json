@@ -5,35 +5,35 @@
       "version": "2.6",
       "installed_at": "2026-06-24T09:50:03.983011+00:00",
       "enabled": true,
-      "skill_dir": "D:\\23333\\CanDoIt\\backend\\skills\\packages\\dynamic-archify"
+      "skill_dir": "/app/backend/skills/packages/dynamic-archify"
     },
     "flowchart": {
       "name": "flowchart",
       "version": "0.2.0",
       "installed_at": "2026-06-24T09:50:03.983052+00:00",
       "enabled": true,
-      "skill_dir": "D:\\23333\\CanDoIt\\backend\\skills\\packages\\flowchart"
+      "skill_dir": "/app/backend/skills/packages/flowchart"
     },
     "network-protocol-viz": {
       "name": "network-protocol-viz",
       "version": "0.1.0",
       "installed_at": "2026-06-24T09:50:03.983067+00:00",
       "enabled": true,
-      "skill_dir": "D:\\23333\\CanDoIt\\backend\\skills\\packages\\network-protocol-viz"
+      "skill_dir": "/app/backend/skills/packages/network-protocol-viz"
     },
     "ppt-animation": {
       "name": "ppt-animation",
       "version": "0.1.0",
       "installed_at": "2026-06-24T09:50:03.983078+00:00",
       "enabled": true,
-      "skill_dir": "D:\\23333\\CanDoIt\\backend\\skills\\packages\\ppt-animation"
+      "skill_dir": "/app/backend/skills/packages/ppt-animation"
     },
     "学霸笔记": {
       "name": "学霸笔记",
       "version": "1.0.0",
       "installed_at": "2026-06-24T09:50:03.983090+00:00",
       "enabled": true,
-      "skill_dir": "D:\\23333\\CanDoIt\\backend\\skills\\packages\\学霸笔记"
+      "skill_dir": "/app/backend/skills/packages/学霸笔记"
     }
   }
 }
