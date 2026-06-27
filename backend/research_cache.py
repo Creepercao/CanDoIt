@@ -226,6 +226,7 @@ class KnowledgeBase:
             self._collection = self._client.get_or_create_collection(
                 name="research_knowledge",
                 metadata={"description": "Research results knowledge base"},
+                embedding_function=None,  # we provide embeddings manually
             )
             self._initialized = True
             logger.info(
@@ -316,12 +317,8 @@ class KnowledgeBase:
                     include=["documents", "metadatas", "distances"],
                 )
             else:
-                # Fallback: use ChromaDB's built-in (if any) or skip
-                results = self._collection.query(
-                    query_texts=[query[:500]],
-                    n_results=n_results,
-                    include=["documents", "metadatas", "distances"],
-                )
+                # No embedding available — skip (don't trigger ONNX download)
+                return []
         except Exception as e:
             logger.warning(f"KnowledgeBase search error: {e}")
             return []
