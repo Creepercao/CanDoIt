@@ -305,11 +305,38 @@ def make_standard_skill_worker(
             try:
                 resp = await llm.ainvoke([HumanMessage(content=system_prompt)])
                 content = resp.content if hasattr(resp, "content") else str(resp)
-                results.append({
+
+                # ── Save HTML output to disk ──
+                html_info = None
+                if isinstance(content, str) and len(content) > 200:
+                    if re.search(
+                        r"<!DOCTYPE\s+html|<html[\s>]", content[:500], re.IGNORECASE
+                    ):
+                        try:
+                            from backend.api import save_skill_html
+
+                            saved = save_skill_html(
+                                skill_name, content, title=task_prompt
+                            )
+                            html_info = saved
+                            logger.info(
+                                f"Saved HTML for skill '{skill_name}': {saved['html_url']}"
+                            )
+                        except Exception as html_err:
+                            logger.warning(
+                                f"Failed to save HTML for skill '{skill_name}': {html_err}"
+                            )
+
+                result_entry = {
                     "task": task_prompt,
                     "result": content,
                     "model": state.get("chat_model_id", ""),
-                })
+                }
+                if html_info:
+                    result_entry["html_url"] = html_info["html_url"]
+                    result_entry["html_title"] = html_info["title"]
+                    result_entry["html_path"] = html_info["file_path"]
+                results.append(result_entry)
                 logger.info(f"Standard skill '{skill_name}' completed task: {task_prompt[:80]}...")
             except Exception as e:
                 logger.error(f"Standard skill '{skill_name}' error: {e}")

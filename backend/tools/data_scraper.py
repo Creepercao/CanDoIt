@@ -85,6 +85,22 @@ async def search_and_scrape(query: str, llm, max_pages: int = 3) -> dict:
 
     Returns ``{synthesis, structured_data, sources}``.
     """
+    # ── Belt-and-suspenders cache check ──
+    try:
+        from backend.research_cache import get_research_cache
+        rc = get_research_cache()
+        cached = await rc.get_similar(query)
+        if cached:
+            logger.info(f"data_scraper cache HIT: {query[:60]}...")
+            return {
+                "synthesis": cached.get("synthesis", ""),
+                "structured_data": cached.get("structured_data"),
+                "sources": cached.get("sources", []),
+            }
+    except Exception:
+        pass  # Cache check must never block the actual search
+    # ── End cache check ──
+
     has_tavily = _has_search_provider()
 
     # ── Generate search queries ──

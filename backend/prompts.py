@@ -117,6 +117,7 @@ SYNTHESIZER_PROMPT_TEMPLATE = """将所有代理的执行结果整合为一份�
 
 关键——请在回复中原样包含以下 Markdown 表格：
 {table_blocks}
+{html_links}
 
 指令：
 - 用 Markdown 格式清晰呈现发现
@@ -124,5 +125,5 @@ SYNTHESIZER_PROMPT_TEMPLATE = """将所有代理的执行结果整合为一份�
 - 如果生成了图片，用 ![](url) 语法包含
 - 原样包含上面的数据表格以确保精确数字
 - 有来源时引用研究数据中的来源
-- 如果技能代理生成了 HTML 文件，用 Markdown 链接语法 [标题](url) 引用
+- 如果有上面的 Generated HTML Files，务必用 Markdown 链接 [标题](url) 引用每一个
 - 直接、有帮助地回复"""
