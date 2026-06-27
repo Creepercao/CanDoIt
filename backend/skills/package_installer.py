@@ -456,15 +456,43 @@ def restore_from_disk(registry) -> list[Skill]:
 
     Called at startup after ``skill_registry.discover()``.
     Returns the list of re-registered ``Skill`` instances.
+
+    Paths stored in the JSON may be absolute (e.g. Docker ``/app/...``) or
+    relative.  If the stored path does not exist on the current system, we
+    resolve it against ``PACKAGES_DIR`` — this makes the JSON portable
+    across Docker, Windows, and macOS.
     """
     packages = _load_packages_json()
     restored: list[Skill] = []
+    paths_updated = False
 
     for name, info in packages.items():
         skill_dir = Path(info.get("skill_dir", ""))
         if not skill_dir.exists():
-            logger.warning(f"Package skill '{name}' directory missing: {skill_dir} — skipping")
+            # Resolve relative to PACKAGES_DIR (portable across OS / Docker)
+            fallback = PACKAGES_DIR / name
+            if fallback.exists():
+                logger.info(
+                    f"Package skill '{name}': stored path '{skill_dir}' not found, "
+                    f"using fallback '{fallback}'"
+                )
+                skill_dir = fallback
+                info["skill_dir"] = str(fallback)
+                paths_updated = True
+        if not skill_dir.exists():
+            logger.warning(
+                f"Package skill '{name}' directory missing: {skill_dir} — skipping"
+            )
             continue
+
+    if paths_updated:
+        _save_packages_json(packages)
+
+    for name, info in packages.items():
+        # Re-read skill_dir (may have been updated by the path-resolution loop above)
+        skill_dir = Path(info.get("skill_dir", ""))
+        if not skill_dir.exists():
+            continue  # Already warned in the first loop
 
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
