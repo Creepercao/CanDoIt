@@ -189,25 +189,51 @@ def _make_chain_router(
         tasks = state.get("tasks", [])
         agent_types_in_tasks = set(t.get("agent", "") for t in tasks)
         base = _base_from_state(state)
+        # Include tasks in the Send payload so workers can see them
+        base["tasks"] = tasks
 
         try:
             my_idx = remaining_chain.index(my_agent_type)
         except ValueError:
+            logger.warning(
+                f"Chain router '{my_agent_type}': not in chain {remaining_chain[:5]}"
+            )
             return "synthesizer"
+
+        logger.debug(
+            f"Chain router after '{my_agent_type}': tasks={agent_types_in_tasks}, "
+            f"next={remaining_chain[my_idx + 1:my_idx + 4]}"
+        )
 
         for next_agent in remaining_chain[my_idx + 1:]:
             if next_agent in agent_types_in_tasks:
                 next_node = agent_map.get(next_agent)
-                if next_node:
-                    # For skill agents, verify dependencies are met
-                    skill = skill_registry.get(next_agent)
-                    if skill and not skill.is_independent:
-                        unmet = [d for d in skill.depends_on
-                                 if d not in agent_types_in_tasks]
-                        if unmet:
-                            continue  # skip — deps not satisfied
-                    return [Send(next_node, base)]
+                if not next_node:
+                    logger.warning(
+                        f"Chain router: '{next_agent}' has no node mapping "
+                        f"(available: {list(agent_map.keys())[:8]})"
+                    )
+                    continue
+                # For skill agents, verify dependencies are met
+                skill = skill_registry.get(next_agent)
+                if skill and not skill.is_independent:
+                    unmet = [d for d in skill.depends_on
+                             if d not in agent_types_in_tasks]
+                    if unmet:
+                        logger.info(
+                            f"Chain router: skipping '{next_agent}' — "
+                            f"unmet deps: {unmet}"
+                        )
+                        continue  # skip — deps not satisfied
+                logger.info(
+                    f"Chain router: '{my_agent_type}' → '{next_agent}' "
+                    f"(node='{next_node}')"
+                )
+                return [Send(next_node, base)]
 
+        logger.debug(
+            f"Chain router after '{my_agent_type}': no more tasks in chain → synthesizer"
+        )
         return "synthesizer"
 
     return router
