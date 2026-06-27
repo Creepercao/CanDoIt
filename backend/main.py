@@ -54,8 +54,6 @@ async def startup():
     from backend.skills.registry import skill_registry
     from backend.skills.package_installer import restore_from_disk
     from backend.agents.agent_loader import load_builtin_agents
-    from backend.agents.graph import get_multi_agent_graph
-
     await registry.refresh()
     skill_registry.discover()
     skill_registry.register_builtins(load_builtin_agents())
@@ -66,7 +64,7 @@ async def startup():
     for w in warnings:
         logger.warning(f"Dependency warning: {w}")
 
-    get_multi_agent_graph()  # build graph after skill discovery
+    # Agent Loop mode — no graph build needed; workers are registered in skill_registry
 
     # ── Initialize research cache + knowledge base ──
     from backend.research_cache import get_knowledge_base, get_research_cache
