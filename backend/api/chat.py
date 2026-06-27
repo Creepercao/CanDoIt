@@ -13,7 +13,13 @@ from langchain_core.messages import HumanMessage
 from backend.config import PROVIDERS
 from backend.models.registry import registry
 from backend.models.provider import create_chat_model, get_default_chat_model
-from backend.agents.graph import get_multi_agent_graph
+from backend.agents.orchestrator import (
+    run_agent_loop,
+    run_agent_loop_stream,
+    make_initial_state,
+    merge_worker_results,
+    supervisor_node,
+)
 from backend.tools.image_gen import generate_image
 from backend.tools.video_gen import generate_video
 from backend.skills.registry import skill_registry
@@ -138,20 +144,16 @@ def _summarize_worker_output(output: dict) -> dict:
 # ---- State helpers ----
 
 def _make_state(req: ChatRequest, skip_synthesizer: bool = False) -> dict:
-    return {
-        "messages": req.history or [],
-        "user_request": req.message,
-        "tasks": [],
-        "image_results": [], "video_results": [], "research_results": [],
-        "analyst_results": [], "code_results": [], "chart_results": [],
-        "skill_outputs": {},
-        "final_response": "",
-        "chat_model_id": req.chat_model_id,
-        "image_model_id": req.image_model_id,
-        "video_model_id": req.video_model_id,
-        "router_model_id": req.router_model_id,
-        "_skip_synthesizer": skip_synthesizer,
-    }
+    state = make_initial_state(
+        user_request=req.message,
+        chat_model_id=req.chat_model_id,
+        image_model_id=req.image_model_id,
+        video_model_id=req.video_model_id,
+        router_model_id=req.router_model_id,
+        history=req.history,
+    )
+    state["_skip_synthesizer"] = skip_synthesizer
+    return state
 
 
 def _extract_output(data: dict) -> dict:
@@ -225,9 +227,9 @@ def _build_synth_prompt(user_request: str, state: dict, history: list = None) ->
 # ---- Sync run ----
 
 async def _run_agents(req: ChatRequest) -> dict:
-    initial_state = _make_state(req)
+    state = _make_state(req)
     try:
-        result = await get_multi_agent_graph().ainvoke(initial_state)
+        result = await run_agent_loop(state)
         return {
             "success": True,
             "response": result.get("final_response", ""),
@@ -241,124 +243,64 @@ async def _run_agents(req: ChatRequest) -> dict:
             "skill_outputs": result.get("skill_outputs", {}),
         }
     except Exception as e:
+        logger.error(f"Agent loop error: {e}")
         return {"success": False, "response": f"Error: {str(e)}", "error": str(e)}
 
 
 # ---- Streaming orchestrator ----
 
 async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
-    initial_state = _make_state(req, skip_synthesizer=True)
+    state = _make_state(req, skip_synthesizer=True)
     chat_id = req.chat_model_id or ""
 
     yield _sse("phase", {"phase": "supervisor", "message": "analyzing request..."})
 
-    accumulated: dict[str, list] = {}
-    emitted_agents: set = set()
     agent_labels = _get_agent_labels()
-    worker_nodes = _get_worker_nodes()
+    agent_map = _get_agent_map()
     collected_html: list[dict] = []
-    planned_tasks: list[dict] = []
+    accumulated: dict[str, list] = {}
 
     try:
-        async for event in get_multi_agent_graph().astream_events(initial_state):
-            kind = event.get("event", "")
-            name = event.get("name", "")
+        async for event in run_agent_loop_stream(state, agent_labels, agent_map):
+            ev_type = event.get("event", "")
             data = event.get("data", {})
 
-            if kind == "on_chain_end" and name == "supervisor":
-                output = _extract_output(data)
-                tasks = output.get("tasks", [])
+            if ev_type == "phase":
+                yield _sse("phase", data)
 
-                if output.get("final_response") and not tasks:
-                    yield _sse("phase", {"phase": "done", "message": "direct reply"})
-                    yield _sse("final", {"response": output["final_response"]})
-                    yield _sse("done", {})
-                    return
+            elif ev_type == "plan":
+                yield _sse("plan", data)
 
-                if not tasks:
-                    yield _sse("final", {"response": "unable to understand request"})
-                    yield _sse("done", {})
-                    return
+            elif ev_type == "agent_start":
+                yield _sse("agent_start", data)
 
-                planned_tasks = tasks
-                plan_steps = output.get("plan_steps", [])
+            elif ev_type == "agent_done":
+                yield _sse("agent_done", data)
 
-                # 🆕 Plan Mode — send full execution plan with deps & reasons
-                yield _sse("plan", {
-                    "tasks": [
-                        {
-                            "agent": t.get("agent", ""),
-                            "label": agent_labels.get(_get_agent_map().get(t.get("agent", ""), ""), t.get("agent", "")),
-                            "prompt": t.get("prompt", "")[:120],
-                        }
-                        for t in tasks
-                    ],
-                    "count": len(tasks),
-                    "steps": [
-                        {
-                            "step": s.get("step", i + 1),
-                            "agent": s.get("agent", ""),
-                            "label": agent_labels.get(_get_agent_map().get(s.get("agent", ""), ""), s.get("agent", "")),
-                            "prompt": s.get("prompt", "")[:120],
-                            "depends_on": s.get("depends_on", []),
-                            "reason": s.get("reason", ""),
-                        }
-                        for i, s in enumerate(plan_steps)
-                    ] if plan_steps else [],
-                })
+            elif ev_type == "final":
+                yield _sse("final", data)
+                yield _sse("done", {})
+                return
 
-            elif kind == "on_chain_start" and name in worker_nodes:
-                if name not in emitted_agents:
-                    emitted_agents.add(name)
-                    node_tasks = _tasks_for_node(planned_tasks, name)
-                    yield _sse("agent_start", {
-                        "agent": name,
-                        "agent_type": _agent_type_from_node(name),
-                        "label": agent_labels.get(name, name),
-                        "task": ",".join(t.get("prompt", "") for t in node_tasks)[:180],
-                        "task_count": len(node_tasks),
-                    })
+            elif ev_type == "done":
+                yield _sse("done", {})
+                return
 
-            elif kind == "on_chain_end" and name in worker_nodes:
-                output = _extract_output(data)
-                summary = _summarize_worker_output(output)
-                for key in _get_result_keys():
-                    if key in output and output[key]:
-                        accumulated.setdefault(key, []).extend(
-                            output[key] if isinstance(output[key], list) else [output[key]]
-                        )
-                        results_list = output[key]
-                        if key == "skill_outputs" and isinstance(results_list, dict):
-                            for skill_name, skill_items in results_list.items():
-                                for item in (skill_items or []):
-                                    if isinstance(item, dict):
-                                        result_text = item.get("result", "")
-                                        if isinstance(result_text, str) and _HTML_DETECT_RE.search(result_text[:500]):
-                                            saved = _save_skill_html(skill_name, result_text, title=item.get("task", ""))
-                                            item["html_url"] = saved["html_url"]
-                                            item["html_title"] = saved["title"]
-                                            collected_html.append({
-                                                "skill_name": skill_name,
-                                                "html_url": item["html_url"],
-                                                "title": item.get("html_title", ""),
-                                                "task": item.get("task", ""),
-                                            })
-                yield _sse("agent_done", {
-                    "agent": name,
-                    "agent_type": _agent_type_from_node(name),
-                    "label": agent_labels.get(name, name),
-                    **summary,
-                })
+            elif ev_type == "_agent_loop_done":
+                # Agent loop finished — extract accumulated state for synthesizer
+                state = data.get("state", state)
+                accumulated = data.get("accumulated", {})
+                collected_html = data.get("collected_html", [])
 
     except Exception as e:
-        logger.error(f"Graph streaming error: {e}")
+        logger.error(f"Agent loop streaming error: {e}")
         yield _sse("error", {"error": str(e)})
         yield _sse("done", {})
         return
 
     yield _sse("phase", {"phase": "synthesize", "message": "synthesizing..."})
 
-    synth_prompt = _build_synth_prompt(req.message, accumulated, req.history)
+    synth_prompt = _build_synth_prompt(req.message, state, req.history)
     full_response = ""
 
     try:
@@ -379,8 +321,8 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
 
     yield _sse("final", {
         "response": full_response,
-        "chart_results": accumulated.get("chart_results", []),
-        "image_results": accumulated.get("image_results", []),
+        "chart_results": state.get("chart_results", []),
+        "image_results": state.get("image_results", []),
         "html_results": collected_html,
     })
     yield _sse("done", {})
