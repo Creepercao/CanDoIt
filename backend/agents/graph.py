@@ -215,6 +215,58 @@ def route_after_supervisor(state: AgentState):
     # Rebuild agent_types after injection
     agent_types = set(t.get("agent", "") for t in tasks)
 
+    # ── Auto-suggest downstream skills ──
+    # When the supervisor created a dependency task (e.g. research) but
+    # omitted a downstream chain skill (e.g. ppt-animation), check if the
+    # user request hints at wanting that skill's output.  This is a hard
+    # guarantee — the supervisor LLM is not always reliable at following
+    # routing rules.
+    user_req = state.get("user_request", "")
+    user_req_lower = user_req.lower()
+    for skill in skill_registry.get_enabled().values():
+        if not skill.depends_on:
+            continue  # not a chain skill
+        if skill.name in agent_types:
+            continue  # already in the plan
+        if not skill.worker:
+            continue  # no worker available
+
+        # Check if all upstream deps exist in the plan
+        deps_satisfied = all(d in agent_types for d in skill.depends_on)
+        if not deps_satisfied:
+            continue
+
+        # Check if user request matches this skill's triggers
+        should_inject = False
+        if skill._package_meta:
+            triggers = skill._package_meta.get("triggers", [])
+            if isinstance(triggers, list):
+                for trigger in triggers:
+                    if trigger.lower() in user_req_lower:
+                        should_inject = True
+                        break
+
+        if not should_inject:
+            continue
+
+        # Build a meaningful prompt from upstream results context
+        tasks.append({
+            "agent": skill.name,
+            "prompt": (
+                f"基于 {', '.join(skill.depends_on)} 的搜集结果，"
+                f"生成 {skill.display_name} 的完整输出。"
+                f"用户原始请求: {user_req[:300]}"
+            ),
+        })
+        agent_types.add(skill.name)
+        logger.info(
+            f"Auto-injected '{skill.name}' task (depends on "
+            f"{skill.depends_on}, user request matched trigger)"
+        )
+
+    # Rebuild agent_types after downstream injection
+    agent_types = set(t.get("agent", "") for t in tasks)
+
     base = _base_from_state(state)
     # Include the (possibly augmented) tasks in the Send payload so
     # worker nodes see the full list
