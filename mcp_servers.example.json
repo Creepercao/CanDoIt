@@ -1,0 +1,23 @@
+{
+  "servers": {
+    "search": {
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "replace-with-your-key"
+      },
+      "description": "External MCP search provider. When enabled, research uses it before native search.",
+      "tags": ["search", "web", "research"]
+    },
+    "filesystem": {
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/23333/CanDoIt"],
+      "description": "Read and inspect local workspace files through MCP.",
+      "tags": ["filesystem", "files", "documents"]
+    }
+  }
+}

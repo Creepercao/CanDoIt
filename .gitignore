@@ -1,6 +1,7 @@
 # Credentials (contains API keys — DO NOT COMMIT)
 providers.yaml
 API.json
+mcp_servers.json
 
 # Python
 __pycache__/

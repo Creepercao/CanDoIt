@@ -16,6 +16,7 @@ from backend.api.packages import router as packages_router
 from backend.api.sessions import router as sessions_router
 from backend.api.research_cache import router as knowledge_router
 from backend.api.pptx import router as pptx_router
+from backend.api.mcp import router as mcp_router
 
 # Allow up to 200 MB file uploads (skill packages)
 MultiPartParser.max_file_size = 200 * 1024 * 1024
@@ -46,6 +47,7 @@ app.include_router(packages_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(pptx_router, prefix="/api")
+app.include_router(mcp_router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -54,10 +56,12 @@ async def startup():
     from backend.skills.registry import skill_registry
     from backend.skills.package_installer import restore_from_disk
     from backend.agents.agent_loader import load_builtin_agents
+    from backend.mcp_adapter import register_mcp_skills
     await registry.refresh()
     skill_registry.discover()
     skill_registry.register_builtins(load_builtin_agents())
     restore_from_disk(skill_registry)
+    await register_mcp_skills(skill_registry)
 
     # Validate agent dependency chains
     warnings = skill_registry.validate_dependencies()
