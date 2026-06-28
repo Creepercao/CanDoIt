@@ -8,7 +8,7 @@ import {
   createSession, fetchSessions, fetchSession,
   saveSession, deleteSessionApi,
   fetchProviders, createProvider, updateProvider, deleteProvider,
-  streamPPT,
+  streamPPT, streamNote,
 } from '../api/index.js'
 
 // localStorage helpers
@@ -74,6 +74,13 @@ export const useChatStore = defineStore('chat', () => {
   const pptStreamText = ref('')     // live token-by-token text
   const pptSteps = ref([])          // live agent progress timeline
   let pptAbortController = null
+
+  // Scholar Notes
+  const noteResults = ref([])
+  const noteGenerating = ref(false)
+  const noteStreamText = ref('')
+  const noteSteps = ref([])
+  let noteAbortController = null
 
   // Dynamic agent emoji map (built-in + skills) for ThinkingPanel
   const agentEmojiMap = computed(() => {
@@ -293,6 +300,93 @@ export const useChatStore = defineStore('chat', () => {
 
   function stopPPTGeneration() {
     if (pptAbortController) pptAbortController.abort()
+  }
+
+  // ── Scholar Note actions ───────────────────────────────────────
+
+  async function doGenerateNote(topic, options = {}) {
+    if (!topic.trim() || noteGenerating.value) return
+
+    const {
+      style = 'a',
+      chatModelId = selectedChatModel.value,
+    } = options
+
+    noteGenerating.value = true
+    noteStreamText.value = ''
+    noteSteps.value = []
+    noteAbortController = new AbortController()
+
+    let finalHtmlResults = []
+    let currentResponse = ''
+
+    try {
+      await streamNote({
+        topic,
+        style,
+        chatModelId,
+        abortSignal: noteAbortController.signal,
+        onEvent: (eventType, data) => {
+          switch (eventType) {
+            case 'phase':
+              noteSteps.value.push({ type: 'phase', phase: data.phase, message: data.message })
+              break
+            case 'plan':
+              noteSteps.value.push({ type: 'plan', tasks: data.tasks, count: data.count })
+              break
+            case 'agent_start':
+              noteSteps.value.push({
+                type: 'agent_start', agent: data.agent, agentType: data.agent_type,
+                label: data.label, task: data.task, done: false,
+              })
+              break
+            case 'agent_done':
+              for (let i = noteSteps.value.length - 1; i >= 0; i--) {
+                const s = noteSteps.value[i]
+                if (s.type === 'agent_start' && s.agent === data.agent && !s.done) {
+                  noteSteps.value[i] = { ...s, done: true, summary: data.summary }
+                  break
+                }
+              }
+              break
+            case 'token':
+              currentResponse += data.text || ''
+              noteStreamText.value = currentResponse
+              break
+            case 'final':
+              if (!currentResponse || currentResponse.trim().length === 0) {
+                currentResponse = data.response || ''
+                noteStreamText.value = currentResponse
+              }
+              finalHtmlResults = data.html_results || []
+              break
+            case 'error':
+              currentResponse = `Error: ${data.error}`
+              noteStreamText.value = currentResponse
+              break
+          }
+        },
+      })
+
+      noteResults.value.push({
+        topic, style,
+        htmlResults: finalHtmlResults,
+        response: currentResponse,
+        steps: [...noteSteps.value],
+        timestamp: Date.now(),
+      })
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        noteResults.value.push({ topic, error: e.message, timestamp: Date.now() })
+      }
+    } finally {
+      noteGenerating.value = false
+      noteAbortController = null
+    }
+  }
+
+  function stopNoteGeneration() {
+    if (noteAbortController) noteAbortController.abort()
   }
 
   function addThinkStep(step) {
@@ -576,12 +670,15 @@ export const useChatStore = defineStore('chat', () => {
     activeTab, imageResults, videoResults, allModels,
     skills, enabledSkills, agentEmojiMap,
     sessions, currentSessionId,
-    providers, pptResults, pptGenerating, pptStreamText, pptSteps, modelsLoading,
+    providers, pptResults, pptGenerating, pptStreamText, pptSteps,
+    noteResults, noteGenerating, noteStreamText, noteSteps,
+    modelsLoading,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
     loadSessions, newSession, switchSession, deleteSession, deleteCurrentSession,
     loadProviders, doSaveProvider, doDeleteProvider,
     doGeneratePPT, stopPPTGeneration,
+    doGenerateNote, stopNoteGeneration,
   }
 })
