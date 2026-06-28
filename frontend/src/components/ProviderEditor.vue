@@ -6,6 +6,7 @@ const store = useChatStore()
 
 const loading = ref(false)
 const error = ref('')
+const success = ref('')
 const editing = ref(null)              // provider name being edited, or null
 const form = reactive({                // add/edit form
   name: '',
@@ -41,6 +42,7 @@ async function save() {
   if (!form.name.trim() || !form.baseUrl.trim()) return
   loading.value = true
   error.value = ''
+  success.value = ''
   try {
     await store.doSaveProvider({
       name: form.name.trim(),
@@ -48,9 +50,11 @@ async function save() {
       baseUrl: form.baseUrl.trim(),
       apiKey: form.apiKey.trim(),
     }, !editing.value)
+    success.value = editing.value ? `Provider "${form.name}" updated` : `Provider "${form.name}" added`
     resetForm()
+    setTimeout(() => { success.value = '' }, 4000)
   } catch (e) {
-    error.value = e.message || 'Save failed'
+    error.value = e.response?.data?.error || e.message || 'Save failed'
   } finally {
     loading.value = false
   }
@@ -85,11 +89,16 @@ async function remove(name) {
 
     <!-- Content -->
     <div class="flex-1 overflow-y-auto p-4 space-y-4">
-      <!-- Error banner -->
+      <!-- Feedback banners -->
       <div v-if="error"
         class="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-2.5 text-sm text-red-300">
         {{ error }}
         <button @click="error = ''" class="float-right opacity-60 hover:opacity-100">&times;</button>
+      </div>
+      <div v-if="success"
+        class="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-2.5 text-sm text-emerald-300 flex items-center justify-between">
+        <span>✅ {{ success }}</span>
+        <span v-if="store.modelsLoading" class="text-xs text-emerald-400 animate-pulse ml-2">🔄 刷新模型中...</span>
       </div>
 
       <!-- Add / Edit form -->
