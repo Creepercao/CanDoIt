@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+import html as html_lib
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -58,6 +59,77 @@ def _build_table_md(spec: dict) -> str:
             row.append(str(vals[i]) if i < len(vals) else "-")
         rows.append("| " + " | ".join(row) + " |")
     return header_line + "\n" + align_line + "\n" + "\n".join(rows)
+
+
+def _json_from_text(text: str) -> dict | list | None:
+    match = re.search(r"\{.*\}|\[.*\]", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group())
+    except json.JSONDecodeError:
+        return None
+
+
+def _first_html_fragment(text: str) -> str:
+    fence = re.search(r"```(?:html)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        return fence.group(1).strip()
+    return text.strip()
+
+
+def _extract_ppt_plan(state: dict) -> dict:
+    for item in state.get("skill_outputs", {}).get("ppt_planner", []):
+        if isinstance(item, dict) and item.get("slides"):
+            return item
+    return {}
+
+
+def _deck_theme_css(theme: str) -> str:
+    if theme == "warm-paper":
+        return """
+        body { background:#efe6d3; color:#262018; font-family: Georgia, 'Microsoft YaHei', serif; }
+        .slide { background: radial-gradient(circle at 20% 10%, #fff7e6, #ead8b8 70%); color:#272017; }
+        .kicker,.page-no { color:#8f5d2a; }
+        .visual { border-color:#9c6b31; background:rgba(255,255,255,.38); }
+        """
+    if theme == "clean-white":
+        return """
+        body { background:#f5f7fb; color:#172033; font-family: Inter, 'Microsoft YaHei', sans-serif; }
+        .slide { background: linear-gradient(135deg,#ffffff,#edf4ff); color:#172033; }
+        .kicker,.page-no { color:#2563eb; }
+        .visual { border-color:#93c5fd; background:rgba(37,99,235,.08); }
+        """
+    return """
+    body { background:#070a12; color:#edf3ff; font-family: Inter, 'Microsoft YaHei', sans-serif; }
+    .slide { background:
+      radial-gradient(circle at 18% 12%, rgba(72,116,255,.38), transparent 28%),
+      radial-gradient(circle at 85% 80%, rgba(255,122,48,.24), transparent 28%),
+      linear-gradient(135deg,#090d1a,#111827 58%,#190d2f); color:#edf3ff; }
+    .kicker,.page-no { color:#7dd3fc; }
+    .visual { border-color:rgba(125,211,252,.55); background:rgba(15,23,42,.72); }
+    """
+
+
+def _fallback_slide_html(slide: dict, total: int) -> str:
+    idx = int(slide.get("index", 1))
+    title = html_lib.escape(str(slide.get("title", f"Slide {idx}")))
+    goal = html_lib.escape(str(slide.get("goal", "")))
+    bullets = slide.get("bullets") or []
+    bullet_html = "\n".join(f"<li>{html_lib.escape(str(b))}</li>" for b in bullets[:5])
+    visual = html_lib.escape(str(slide.get("visual", "核心关系图")))
+    return f"""
+    <section class="slide" data-slide="{idx}">
+      <div class="kicker">PART {idx:02d}</div>
+      <h1>{title}</h1>
+      <p class="lead">{goal}</p>
+      <div class="grid">
+        <ul>{bullet_html}</ul>
+        <div class="visual">{visual}</div>
+      </div>
+      <div class="page-no">{idx}/{total}</div>
+    </section>
+    """.strip()
 
 
 # ── Research Worker ──
@@ -335,6 +407,243 @@ async def code_worker(state: dict) -> dict:
     return {"code_results": results}
 
 
+# ── Parallel PPT Workers ──
+
+async def ppt_planner_worker(state: dict) -> dict:
+    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "ppt_planner"]
+    if not my_tasks:
+        return {"skill_outputs": {}}
+
+    task = my_tasks[0]
+    prompt_text = task.get("prompt") or state.get("user_request", "")
+    research_data = state.get("research_results", [])
+    research_text = "\n\n".join(
+        (r.get("synthesis", "") + "\n" + r.get("raw_text", "")[:1200]).strip()
+        for r in research_data if isinstance(r, dict)
+    )[:9000]
+
+    llm = _get_chat_llm(state)
+    planner_prompt = f"""你是演示文稿策划专家。基于用户请求和研究资料，规划一套 PPT/HTML 演示。
+
+用户请求:
+{state.get("user_request", prompt_text)}
+
+研究资料:
+{research_text or "(无研究资料，按用户请求规划)"}
+
+只输出 JSON，不要 Markdown。格式:
+{{
+  "title": "演示标题",
+  "theme": "dark-tech | warm-paper | clean-white",
+  "slides": [
+    {{
+      "index": 1,
+      "title": "页标题",
+      "goal": "这一页要完成的表达目标",
+      "bullets": ["要点1", "要点2", "要点3"],
+      "visual": "建议的图形/布局/图示",
+      "speaker_note": "这一页讲述提示"
+    }}
+  ]
+}}
+
+要求:
+- 页数 5-8 页，除非用户明确指定
+- 每页只负责一个明确观点
+- 尽量把研究资料中的事实、数字、来源名称分配到具体页面
+- visual 要具体，方便后续页面并行生成
+"""
+    try:
+        resp = await llm.ainvoke([HumanMessage(content=planner_prompt)])
+        content = resp.content if hasattr(resp, "content") else str(resp)
+        data = _json_from_text(content)
+        if not isinstance(data, dict):
+            raise ValueError("planner returned non-JSON")
+    except Exception as e:
+        logger.warning(f"PPT planner fallback: {e}")
+        data = {
+            "title": state.get("user_request", "演示文稿")[:60],
+            "theme": "dark-tech",
+            "slides": [
+                {"index": 1, "title": "主题概览", "goal": "说明演示主题和背景", "bullets": [prompt_text], "visual": "标题页与核心关键词"},
+                {"index": 2, "title": "关键信息", "goal": "总结研究得到的核心事实", "bullets": [research_text[:300] or prompt_text], "visual": "信息卡片组"},
+                {"index": 3, "title": "结构拆解", "goal": "拆解主要逻辑", "bullets": ["背景", "机制", "影响"], "visual": "流程图"},
+                {"index": 4, "title": "重点洞察", "goal": "提炼可行动结论", "bullets": ["洞察一", "洞察二", "洞察三"], "visual": "对比图"},
+                {"index": 5, "title": "总结", "goal": "收束观点并给出下一步", "bullets": ["总结", "建议", "行动"], "visual": "结论页"},
+            ],
+        }
+
+    slides = data.get("slides") if isinstance(data.get("slides"), list) else []
+    normalized = []
+    for i, slide in enumerate(slides[:12], start=1):
+        if not isinstance(slide, dict):
+            continue
+        slide["index"] = int(slide.get("index") or i)
+        slide.setdefault("title", f"Slide {slide['index']}")
+        slide.setdefault("goal", "")
+        slide.setdefault("bullets", [])
+        slide.setdefault("visual", "")
+        normalized.append(slide)
+    data["slides"] = normalized or data.get("slides", [])
+    data["theme"] = data.get("theme") or "dark-tech"
+
+    slide_tasks = [
+        {
+            "agent": "ppt_slide",
+            "prompt": f"生成第 {slide['index']} 页: {slide.get('title', '')}",
+            "slide_index": slide["index"],
+            "slide_spec": slide,
+            "task_group": "ppt_slides",
+        }
+        for slide in data["slides"]
+    ]
+    slide_tasks.append({
+        "agent": "ppt_assembler",
+        "prompt": "合并所有并行生成的 PPT 页面 HTML，输出完整翻页演示。",
+        "task_group": "ppt_assemble",
+    })
+
+    return {
+        "skill_outputs": {"ppt_planner": [data]},
+        "_add_tasks": slide_tasks,
+    }
+
+
+async def ppt_slide_worker(state: dict) -> dict:
+    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "ppt_slide"]
+    if not my_tasks:
+        return {"skill_outputs": {}}
+
+    plan = _extract_ppt_plan(state)
+    all_slides = plan.get("slides", [])
+    total = len(all_slides) or len(my_tasks)
+    theme = plan.get("theme", "dark-tech")
+    llm = _get_chat_llm(state)
+    results = []
+
+    for task in my_tasks:
+        slide = task.get("slide_spec") or {}
+        if not slide:
+            idx = int(task.get("slide_index") or 1)
+            slide = next((s for s in all_slides if int(s.get("index", 0)) == idx), {})
+        idx = int(slide.get("index") or task.get("slide_index") or 1)
+
+        prompt = f"""你是单页 PPT HTML 设计师。只生成一个 <section class="slide">...</section> 片段，不要完整 html/head/body。
+
+整套演示标题: {plan.get("title", state.get("user_request", ""))}
+主题风格: {theme}
+总页数: {total}
+当前页 JSON:
+{json.dumps(slide, ensure_ascii=False, indent=2)}
+
+硬性要求:
+- 根元素必须是 <section class="slide" data-slide="{idx}">
+- 必须包含 h1 标题、核心要点、一个视觉化区域
+- 可以使用内联 SVG/CSS class，但不要输出 <script>
+- 不要引入外部资源
+- 控制在 80-180 行以内
+"""
+        try:
+            resp = await llm.ainvoke([HumanMessage(content=prompt)])
+            html = _first_html_fragment(resp.content if hasattr(resp, "content") else str(resp))
+            if "<section" not in html:
+                raise ValueError("missing section")
+        except Exception as e:
+            logger.warning(f"PPT slide {idx} fallback: {e}")
+            html = _fallback_slide_html(slide, total)
+
+        results.append({
+            "task": task.get("prompt", ""),
+            "slide_index": idx,
+            "html": html,
+            "title": slide.get("title", f"Slide {idx}"),
+        })
+
+    return {"skill_outputs": {"ppt_slide": results}}
+
+
+async def ppt_assembler_worker(state: dict) -> dict:
+    my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "ppt_assembler"]
+    if not my_tasks:
+        return {"skill_outputs": {}}
+
+    plan = _extract_ppt_plan(state)
+    title = plan.get("title") or state.get("user_request", "PPT 演示")
+    theme = plan.get("theme", "dark-tech")
+    slide_items = state.get("skill_outputs", {}).get("ppt_slide", [])
+    slide_items = sorted(
+        [s for s in slide_items if isinstance(s, dict) and s.get("html")],
+        key=lambda s: int(s.get("slide_index", 0)),
+    )
+    total = len(slide_items)
+
+    sections = "\n\n".join(item["html"] for item in slide_items)
+    css = _deck_theme_css(theme)
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{html_lib.escape(str(title))}</title>
+<style>
+* {{ box-sizing: border-box; }}
+html, body {{ margin:0; width:100%; height:100%; overflow:hidden; }}
+{css}
+.deck {{ width:100vw; height:100vh; position:relative; overflow:hidden; }}
+.slide {{
+  display:none; width:100vw; height:100vh; padding:5.8vh 6.5vw; position:absolute; inset:0;
+}}
+.slide.active {{ display:block; animation: slideIn .5s ease both; }}
+.kicker {{ font-size:1.1vw; letter-spacing:.12em; text-transform:uppercase; margin-bottom:1.2vh; }}
+h1 {{ font-size:4vw; line-height:1.05; margin:0 0 2vh; max-width:78vw; }}
+.lead {{ font-size:1.55vw; line-height:1.55; max-width:72vw; opacity:.88; }}
+.grid {{ display:grid; grid-template-columns:1.05fr .95fr; gap:4vw; align-items:center; margin-top:4vh; }}
+ul {{ margin:0; padding-left:1.3em; font-size:1.35vw; line-height:1.8; }}
+.visual {{ min-height:34vh; border:1px solid; border-radius:22px; display:flex; align-items:center; justify-content:center; padding:2vw; font-size:1.55vw; text-align:center; box-shadow:0 24px 80px rgba(0,0,0,.28); }}
+.page-no {{ position:absolute; right:4vw; bottom:3vh; font-size:1vw; opacity:.75; }}
+.progress {{ position:fixed; left:0; top:0; height:4px; width:100%; background:rgba(255,255,255,.12); z-index:10; }}
+.progress > span {{ display:block; height:100%; width:0; background:linear-gradient(90deg,#38bdf8,#f97316); transition:width .25s ease; }}
+@keyframes slideIn {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:none; }} }}
+</style>
+</head>
+<body>
+<div class="progress"><span id="bar"></span></div>
+<main class="deck">
+{sections}
+</main>
+<script>
+const slides = Array.from(document.querySelectorAll('.slide'));
+let current = 0;
+function show(i) {{
+  current = Math.max(0, Math.min(i, slides.length - 1));
+  slides.forEach((s, idx) => s.classList.toggle('active', idx === current));
+  const bar = document.getElementById('bar');
+  if (bar) bar.style.width = (((current + 1) / Math.max(slides.length, 1)) * 100) + '%';
+}}
+document.addEventListener('keydown', (e) => {{
+  if (e.key === 'ArrowRight' || e.key === ' ') show(current + 1);
+  if (e.key === 'ArrowLeft') show(current - 1);
+}});
+document.addEventListener('click', (e) => show(current + (e.clientX > innerWidth / 2 ? 1 : -1)));
+show(0);
+</script>
+</body>
+</html>"""
+
+    from backend.api import save_skill_html
+    saved = save_skill_html("ppt-animation", html, title=str(title))
+
+    return {"skill_outputs": {"ppt-animation": [{
+        "task": my_tasks[0].get("prompt", ""),
+        "result": html,
+        "html_url": saved["html_url"],
+        "html_title": saved["title"],
+        "html_path": saved["file_path"],
+        "slides": total,
+        "source": "parallel-ppt",
+    }]}}
+
+
 # ── Synthesizer ──
 
 async def synthesizer_node(state: dict) -> dict:
@@ -420,5 +729,8 @@ WORKER_MAP: dict[str, callable] = {
     "image_gen": image_worker,
     "video_gen": video_worker,
     "code": code_worker,
+    "ppt_planner": ppt_planner_worker,
+    "ppt_slide": ppt_slide_worker,
+    "ppt_assembler": ppt_assembler_worker,
 }
 """Maps built-in agent type names to their worker functions."""

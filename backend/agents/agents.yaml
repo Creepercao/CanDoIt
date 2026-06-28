@@ -58,3 +58,30 @@ agents:
     depends_on: []
     prompt_contribution: "- code: programming, scripts, app code"
     result_key: code_results
+
+  - name: ppt_planner
+    display_name: PPT Planner
+    description: "Plan a slide deck outline from research results"
+    emoji: "🧭"
+    worker: ppt_planner
+    depends_on: [research]
+    prompt_contribution: "- ppt_planner: create a slide-by-slide outline for PPT/presentation requests after research"
+    result_key: skill_outputs
+
+  - name: ppt_slide
+    display_name: PPT Slide Builder
+    description: "Render one planned slide as an HTML slide section"
+    emoji: "🧩"
+    worker: ppt_slide
+    depends_on: [ppt_planner]
+    prompt_contribution: "- ppt_slide: generate individual HTML slide sections in parallel from ppt_planner output"
+    result_key: skill_outputs
+
+  - name: ppt_assembler
+    display_name: PPT Assembler
+    description: "Assemble generated slide sections into a complete animated HTML deck"
+    emoji: "🎞️"
+    worker: ppt_assembler
+    depends_on: [ppt_slide]
+    prompt_contribution: "- ppt_assembler: assemble ppt_slide outputs into one complete HTML presentation"
+    result_key: skill_outputs

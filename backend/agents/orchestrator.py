@@ -87,6 +87,12 @@ def merge_worker_results(state: dict, outputs: list[dict]) -> dict:
         if not isinstance(output, dict):
             continue
         for key, value in output.items():
+            if key == "_add_tasks":
+                if not isinstance(value, list):
+                    continue
+                existing = state.get("tasks", [])
+                state["tasks"] = _normalize_tasks(existing + value)
+                continue
             if key in _LIST_RESULT_KEYS:
                 existing = state.get(key, [])
                 if isinstance(existing, list) and isinstance(value, list):
@@ -105,6 +111,78 @@ def merge_worker_results(state: dict, outputs: list[dict]) -> dict:
             else:
                 state[key] = value
     return state
+
+
+def _normalize_tasks(tasks: list[dict]) -> list[dict]:
+    """Assign stable ids and remove exact duplicate dynamic tasks."""
+    result: list[dict] = []
+    seen: set[str] = set()
+    counters: dict[str, int] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        agent = task.get("agent", "")
+        if not agent:
+            continue
+        counters[agent] = counters.get(agent, 0) + 1
+        if not task.get("id"):
+            suffix = task.get("slide_index") or counters[agent]
+            task = {**task, "id": f"{agent}:{suffix}"}
+        dedupe_key = f"{task.get('id')}|{agent}|{task.get('prompt', '')}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        result.append(task)
+    return result
+
+
+def _task_deps(task: dict, tasks: list[dict]) -> set[str]:
+    """Return task ids that must complete before *task* can run."""
+    deps: set[str] = set()
+    explicit = task.get("depends_on") or []
+    for dep in explicit:
+        if isinstance(dep, int):
+            idx = dep - 1
+            if 0 <= idx < len(tasks):
+                deps.add(tasks[idx].get("id", ""))
+        elif isinstance(dep, str):
+            deps.add(dep)
+
+    agent_deps = _agent_deps(task.get("agent", ""))
+    for dep_agent in agent_deps:
+        dep_tasks = [t for t in tasks if t.get("agent") == dep_agent]
+        deps.update(t.get("id", "") for t in dep_tasks)
+    return {d for d in deps if d}
+
+
+def _state_for_task(state: dict, task: dict) -> dict:
+    """Worker-compatible state copy containing only the current task."""
+    task_state = dict(state)
+    task_state["tasks"] = [task]
+    task_state["_current_task"] = task
+    return task_state
+
+
+def _summarize_output(agent: str, output: dict) -> dict:
+    for key in RESULT_KEYS:
+        value = output.get(key)
+        if not value:
+            continue
+        if key == "skill_outputs" and isinstance(value, dict):
+            total = sum(len(items or []) for items in value.values())
+            names = ", ".join(value.keys())
+            return {
+                "result_key": key,
+                "summary": f"completed {agent}: {total} skill output(s) ({names})",
+                "count": total,
+            }
+        items = value if isinstance(value, list) else [value]
+        return {
+            "result_key": key,
+            "summary": f"completed {agent}: {len(items)} result(s)",
+            "count": len(items),
+        }
+    return {"result_key": "", "summary": f"completed {agent}", "count": 1}
 
 
 # ── Supervisor ─────────────────────────────────────────────────────────
@@ -194,7 +272,34 @@ def validate_and_complete_plan(tasks: list[dict], user_request: str) -> list[dic
     if not tasks:
         return tasks
 
+    ppt_keywords = (
+        "ppt", "powerpoint", "presentation", "slide", "slides",
+        "演示", "演示文稿", "幻灯片", "汇报", "做ppt", "生成ppt",
+    )
+    wants_ppt = any(k in user_request.lower() for k in ppt_keywords)
+
+    # Prefer the parallel built-in PPT pipeline over the legacy monolithic
+    # ppt-animation package skill.
+    if wants_ppt:
+        converted: list[dict] = []
+        for task in tasks:
+            if task.get("agent") == "ppt-animation":
+                converted.append({
+                    "agent": "ppt_planner",
+                    "prompt": task.get("prompt") or f"Plan a slide deck for: {user_request}",
+                })
+            else:
+                converted.append(task)
+        tasks = converted
+
     agent_types = set(t.get("agent", "") for t in tasks)
+
+    if wants_ppt and "ppt_planner" not in agent_types:
+        tasks.append({
+            "agent": "ppt_planner",
+            "prompt": f"Plan a slide deck for: {user_request}",
+        })
+        agent_types.add("ppt_planner")
 
     # ── 1. Auto-inject missing upstream dependencies ──
     for agent_type in list(agent_types):
@@ -221,6 +326,8 @@ def validate_and_complete_plan(tasks: list[dict], user_request: str) -> list[dic
     agent_types = set(t.get("agent", "") for t in tasks)
     user_req_lower = user_request.lower()
     for skill in skill_registry.get_enabled().values():
+        if wants_ppt and skill.name == "ppt-animation":
+            continue
         if not skill.depends_on:
             continue
         if skill.name in agent_types:
@@ -299,63 +406,71 @@ async def run_agent_loop(initial_state: dict) -> dict:
     if state.get("final_response"):
         return state
 
-    tasks = state.get("tasks", [])
+    tasks = _normalize_tasks(state.get("tasks", []))
     if not tasks:
         state["final_response"] = "I didn't understand that request."
         return state
 
     # 2. Validate
-    tasks = validate_and_complete_plan(tasks, state.get("user_request", ""))
+    tasks = _normalize_tasks(validate_and_complete_plan(tasks, state.get("user_request", "")))
     state["tasks"] = tasks
 
     # 3. Wave execution
     workers = _get_worker_registry()
-    completed = set()
-    all_agents = set(t.get("agent", "") for t in tasks)
+    completed: set[str] = set()
 
-    while completed != all_agents:
-        # Find agents whose deps are all completed
-        wave: list[tuple[str, dict]] = []
+    while True:
+        tasks = _normalize_tasks(state.get("tasks", []))
+        state["tasks"] = tasks
+        all_task_ids = {t.get("id", "") for t in tasks}
+        if completed >= all_task_ids:
+            break
+
+        # Find tasks whose deps are all completed
+        wave: list[tuple[dict, Callable]] = []
         for task in tasks:
             agent = task.get("agent", "")
-            if agent in completed:
+            task_id = task.get("id", "")
+            if task_id in completed:
                 continue
-            deps = _agent_deps(agent)
+            deps = _task_deps(task, tasks)
             if all(d in completed for d in deps):
                 worker_fn = workers.get(agent)
                 if worker_fn:
-                    wave.append((agent, worker_fn))
+                    wave.append((task, worker_fn))
 
         if not wave:
             logger.warning(
-                f"Agent Loop: deadlock detected — "
-                f"completed={completed}, pending={all_agents - completed}"
+                "Agent Loop: deadlock detected — "
+                f"completed={completed}, pending={all_task_ids - completed}"
             )
             break
 
         logger.info(
-            f"Agent Loop: wave {sorted(a for a, _ in wave)} "
-            f"({len(wave)} agents)"
+            f"Agent Loop: wave {[t.get('id') for t, _ in wave]} "
+            f"({len(wave)} task(s))"
         )
 
         # Execute wave in parallel
-        async def _run_one(agent: str, fn: Callable, st: dict) -> dict:
+        async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[str, dict]:
+            agent = task.get("agent", "")
             try:
-                result = await fn(st)
-                logger.info(f"Agent Loop: '{agent}' completed")
-                return result
+                result = await fn(_state_for_task(st, task))
+                logger.info(f"Agent Loop: '{task.get('id')}' completed")
+                return task.get("id", ""), result
             except Exception as e:
-                logger.error(f"Agent Loop: '{agent}' error: {e}")
-                return {f"{agent}_results": [{"error": str(e)}]}
+                logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
+                return task.get("id", ""), {f"{agent}_results": [{"error": str(e)}]}
 
         results = await asyncio.gather(*[
-            _run_one(agent, fn, state) for agent, fn in wave
+            _run_one(task, fn, state) for task, fn in wave
         ])
 
         # Merge results
-        merge_worker_results(state, results)
-        for agent, _ in wave:
-            completed.add(agent)
+        merge_worker_results(state, [output for _task_id, output in results])
+        for task_id, _output in results:
+            if task_id:
+                completed.add(task_id)
 
     # 4. Synthesizer
     logger.info("Agent Loop: running synthesizer...")
@@ -391,7 +506,7 @@ async def run_agent_loop_stream(
         yield {"event": "done", "data": {}}
         return
 
-    tasks = state.get("tasks", [])
+    tasks = _normalize_tasks(state.get("tasks", []))
     plan_steps = state.get("plan_steps", [])
 
     if not tasks:
@@ -400,7 +515,7 @@ async def run_agent_loop_stream(
         return
 
     # 2. Validate & emit plan
-    tasks = validate_and_complete_plan(tasks, state.get("user_request", ""))
+    tasks = _normalize_tasks(validate_and_complete_plan(tasks, state.get("user_request", "")))
     state["tasks"] = tasks
 
     yield {"event": "plan", "data": {
@@ -429,59 +544,65 @@ async def run_agent_loop_stream(
     # 3. Wave execution
     workers = _get_worker_registry()
     completed: set[str] = set()
-    all_agents = set(t.get("agent", "") for t in tasks)
-    emitted: set[str] = set()
     collected_html: list[dict] = []
     accumulated: dict[str, list] = {}
 
-    while completed != all_agents:
-        wave: list[tuple[str, Callable]] = []
+    while True:
+        tasks = _normalize_tasks(state.get("tasks", []))
+        state["tasks"] = tasks
+        all_task_ids = {t.get("id", "") for t in tasks}
+        if completed >= all_task_ids:
+            break
+
+        wave: list[tuple[dict, Callable]] = []
         for task in tasks:
             agent = task.get("agent", "")
-            if agent in completed:
+            task_id = task.get("id", "")
+            if task_id in completed:
                 continue
-            deps = _agent_deps(agent)
+            deps = _task_deps(task, tasks)
             if all(d in completed for d in deps):
                 worker_fn = workers.get(agent)
                 if worker_fn:
-                    wave.append((agent, worker_fn))
+                    wave.append((task, worker_fn))
 
         if not wave:
             logger.warning(
                 f"Agent Loop: deadlock — completed={completed}, "
-                f"pending={all_agents - completed}"
+                f"pending={all_task_ids - completed}"
             )
             break
 
         logger.info(
-            f"Agent Loop stream: wave {sorted(a for a, _ in wave)}"
+            f"Agent Loop stream: wave {[t.get('id') for t, _ in wave]}"
         )
 
-        # Emit agent_start for each worker in this wave
-        for agent, _ in wave:
+        # Emit agent_start for each task in this wave
+        for task, _ in wave:
+            agent = task.get("agent", "")
             node_name = agent_map.get(agent, f"{agent}_worker")
-            if node_name not in emitted:
-                emitted.add(node_name)
-                node_tasks = [t for t in tasks if t.get("agent") == agent]
-                yield {"event": "agent_start", "data": {
-                    "agent": node_name,
-                    "agent_type": agent,
-                    "label": agent_labels.get(node_name, agent),
-                    "task": ",".join(t.get("prompt", "") for t in node_tasks)[:180],
-                    "task_count": len(node_tasks),
-                }}
+            yield {"event": "agent_start", "data": {
+                "agent": task.get("id") or node_name,
+                "agent_type": agent,
+                "label": agent_labels.get(node_name, agent),
+                "task": task.get("prompt", "")[:180],
+                "task_count": 1,
+                "task_id": task.get("id", ""),
+                "slide_index": task.get("slide_index"),
+            }}
 
         # Execute wave in parallel, with heartbeat to prevent timeout
-        async def _run_one(agent: str, fn: Callable, st: dict) -> tuple[str, dict]:
+        async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict]:
+            agent = task.get("agent", "")
             try:
-                result = await fn(st)
-                return agent, result
+                result = await fn(_state_for_task(st, task))
+                return task, result
             except Exception as e:
-                logger.error(f"Agent Loop: '{agent}' error: {e}")
-                return agent, {f"{agent}_results": [{"error": str(e)}]}
+                logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
+                return task, {f"{agent}_results": [{"error": str(e)}]}
 
         wave_tasks = [
-            _run_one(agent, fn, state) for agent, fn in wave
+            _run_one(task, fn, state) for task, fn in wave
         ]
         # Wrap in a task so we can heartbeat while waiting
         wave_future = asyncio.gather(*wave_tasks)
@@ -498,9 +619,10 @@ async def run_agent_loop_stream(
         results = await wave_future
 
         # Merge and emit agent_done
-        for agent, output in results:
+        for task, output in results:
+            agent = task.get("agent", "")
             merge_worker_results(state, [output])
-            completed.add(agent)
+            completed.add(task.get("id", ""))
 
             # Accumulate for final event
             for key in RESULT_KEYS:
@@ -513,6 +635,14 @@ async def run_agent_loop_stream(
                         for sk_name, sk_items in output[key].items():
                             for item in (sk_items or []):
                                 if isinstance(item, dict):
+                                    if item.get("html_url"):
+                                        collected_html.append({
+                                            "skill_name": sk_name,
+                                            "html_url": item["html_url"],
+                                            "title": item.get("html_title", ""),
+                                            "task": item.get("task", ""),
+                                        })
+                                        continue
                                     result_text = item.get("result", "")
                                     if isinstance(result_text, str) and _HTML_DETECT_RE.search(result_text[:500]):
                                         saved = _save_html(sk_name, result_text, title=item.get("task", ""))
@@ -527,13 +657,14 @@ async def run_agent_loop_stream(
 
             # Summary
             node_name = agent_map.get(agent, f"{agent}_worker")
+            summary = _summarize_output(agent, output)
             yield {"event": "agent_done", "data": {
-                "agent": node_name,
+                "agent": task.get("id") or node_name,
                 "agent_type": agent,
                 "label": agent_labels.get(node_name, agent),
-                "summary": f"completed {agent}",
-                "count": 1,
-                "result_key": f"{agent}_results" if agent != "skill" else "skill_outputs",
+                "task_id": task.get("id", ""),
+                "slide_index": task.get("slide_index"),
+                **summary,
             }}
 
     yield {"event": "phase", "data": {"phase": "synthesize", "message": "synthesizing..."}}
