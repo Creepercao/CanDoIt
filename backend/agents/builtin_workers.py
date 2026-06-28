@@ -145,6 +145,46 @@ async def research_worker(state: dict) -> dict:
     for task in my_tasks:
         prompt_text = task.get("prompt", "")
         try:
+            # Prefer configured MCP search/browser tools. If none are available,
+            # or they fail, keep the native web-search path as fallback.
+            mcp_hits = []
+            try:
+                from backend.mcp_adapter import mcp_manager, _build_tool_arguments, _result_text
+                for spec in mcp_manager.preferred_research_tools()[:2]:
+                    arguments = await _build_tool_arguments(state, spec, prompt_text)
+                    raw = await mcp_manager.call_tool(spec.skill_name, arguments)
+                    text = _result_text(raw)
+                    if text:
+                        mcp_hits.append({
+                            "server": spec.server.name,
+                            "tool": spec.name,
+                            "text": text[:5000],
+                            "raw": raw,
+                        })
+            except Exception as mcp_err:
+                logger.debug(f"MCP research tools skipped: {mcp_err}")
+
+            if mcp_hits:
+                combined = "\n\n---\n\n".join(
+                    f"[MCP:{hit['server']}/{hit['tool']}]\n{hit['text']}"
+                    for hit in mcp_hits
+                )
+                synth = await llm.ainvoke([HumanMessage(
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined[:8000]))])
+                synthesis = synth.content if hasattr(synth, "content") else str(synth)
+                results.append({
+                    "task": prompt_text,
+                    "sources": [
+                        {"title": f"MCP {hit['server']}/{hit['tool']}", "url": "", "snippet": hit["text"][:300]}
+                        for hit in mcp_hits
+                    ],
+                    "synthesis": synthesis,
+                    "raw_text": combined[:4000],
+                    "structured_data": None,
+                    "_from_mcp": True,
+                })
+                continue
+
             # ── A: Check semantic cache before searching ──
             from backend.research_cache import get_research_cache, get_knowledge_base
             rc = get_research_cache()
