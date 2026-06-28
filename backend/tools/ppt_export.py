@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -102,9 +104,18 @@ async def _capture_html_slides(
 
     image_paths: list[Path] = []
     logical_count = 0
+    chromium_path = (
+        os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome")
+    )
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(args=["--no-sandbox"])
+        launch_kwargs = {"args": ["--no-sandbox"]}
+        if chromium_path:
+            launch_kwargs["executable_path"] = chromium_path
+        browser = await p.chromium.launch(**launch_kwargs)
         page = await browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=1)
         try:
             await page.goto(html_path.resolve().as_uri(), wait_until="load", timeout=30000)
