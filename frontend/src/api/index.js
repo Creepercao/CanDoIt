@@ -148,6 +148,24 @@ export async function streamPPT({ topic, theme, slideCount, chatModelId, onEvent
   return await readSSEStream(response, onEvent)
 }
 
+
+// ── Scholar Notes ─────────────────────────────────────────────────────
+
+export async function streamNote({ topic, style, chatModelId, onEvent, abortSignal }) {
+  const response = await fetch('/api/generate-note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic,
+      style,
+      chat_model_id: chatModelId,
+      stream: true,
+    }),
+    signal: abortSignal,
+  })
+  return await readSSEStream(response, onEvent)
+}
+
 export async function generateImage({ prompt, modelId = '', negativePrompt = '', width = 1024, height = 1024, steps = 20 }) {
   const { data } = await api.post('/generate-image', {
     prompt, model_id: modelId, negative_prompt: negativePrompt,

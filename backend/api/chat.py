@@ -72,6 +72,13 @@ class PPTGenRequest(BaseModel):
     stream: bool = True
 
 
+class NoteGenRequest(BaseModel):
+    topic: str
+    style: str = "a"  # "a" = 学霸笔记本, "b" = 手账皮革本
+    chat_model_id: str = ""
+    stream: bool = True
+
+
 # ---- Agent helpers (dynamic, depends on skill_registry) ----
 
 def _get_agent_labels() -> dict[str, str]:
@@ -395,6 +402,38 @@ async def api_generate_ppt(req: PPTGenRequest):
         f"生成一个关于「{req.topic}」的PPT演示文稿。"
         f"使用{theme_desc}主题风格。"
         f"总共需要{req.slide_count}页幻灯片。"
+    )
+    chat_req = ChatRequest(
+        message=message,
+        chat_model_id=req.chat_model_id or "",
+        stream=req.stream,
+    )
+    if req.stream:
+        return StreamingResponse(
+            _stream_chat(chat_req),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    return await _run_agents(chat_req)
+
+
+@router.post("/generate-note")
+async def api_generate_note(req: NoteGenRequest):
+    """Dedicated scholar-note endpoint — reuses the agent-loop pipeline.
+
+    Constructs a Chinese message with «学霸笔记» trigger keywords so
+    the supervisor's ``validate_and_complete_plan`` auto-injects
+    ``research → 学霸笔记``, then streams progress via SSE.
+    """
+    style_labels = {
+        "a": "Style A 学霸笔记本风格（米黄横线纸+螺旋装订，单页滚动）",
+        "b": "Style B 手账皮革本风格（皮革封面+金属环装订，翻页交互）",
+    }
+    style_desc = style_labels.get(req.style, style_labels["a"])
+    message = (
+        f"用学霸笔记的{style_desc}，"
+        f"生成一篇关于「{req.topic}」的HTML学习笔记。"
+        f"请确保包含完整的技术细节和视觉元素。"
     )
     chat_req = ChatRequest(
         message=message,

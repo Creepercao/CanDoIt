@@ -6,6 +6,7 @@ import ImageGenerator from './components/ImageGenerator.vue'
 import VideoGenerator from './components/VideoGenerator.vue'
 import SkillManager from './components/SkillManager.vue'
 import PPTGenerator from './components/PPTGenerator.vue'
+import ScholarNotes from './components/ScholarNotes.vue'
 import ProviderEditor from './components/ProviderEditor.vue'
 import ModelSelector from './components/ModelSelector.vue'
 
@@ -25,6 +26,7 @@ const tabs = [
   { key: 'image', label: '🎨 文生图', component: ImageGenerator },
   { key: 'video', label: '🎬 文生视频', component: VideoGenerator },
   { key: 'ppt', label: '📊 PPT', component: PPTGenerator },
+  { key: 'notes', label: '📓 笔记', component: ScholarNotes },
   { key: 'skills', label: '🔧 技能', component: SkillManager },
   { key: 'providers', label: '⚙️ Providers', component: ProviderEditor },
 ]
@@ -166,6 +168,7 @@ async function deleteSession(session) {
           <ImageGenerator v-else-if="store.activeTab === 'image'" key="image" />
           <VideoGenerator v-else-if="store.activeTab === 'video'" key="video" />
           <PPTGenerator v-else-if="store.activeTab === 'ppt'" key="ppt" />
+          <ScholarNotes v-else-if="store.activeTab === 'notes'" key="notes" />
           <SkillManager v-else-if="store.activeTab === 'skills'" key="skills" />
           <ProviderEditor v-else-if="store.activeTab === 'providers'" key="providers" />
         </KeepAlive>
