@@ -71,6 +71,8 @@ export const useChatStore = defineStore('chat', () => {
   // PPT
   const pptResults = ref([])
   const pptGenerating = ref(false)
+  const pptStreamText = ref('')     // live token-by-token text
+  const pptSteps = ref([])          // live agent progress timeline
   let pptAbortController = null
 
   // Dynamic agent emoji map (built-in + skills) for ThinkingPanel
@@ -186,6 +188,8 @@ export const useChatStore = defineStore('chat', () => {
     } = options
 
     pptGenerating.value = true
+    pptStreamText.value = ''
+    pptSteps.value = []
     pptAbortController = new AbortController()
 
     let finalHtmlResults = []
@@ -200,17 +204,55 @@ export const useChatStore = defineStore('chat', () => {
         abortSignal: pptAbortController.signal,
         onEvent: (eventType, data) => {
           switch (eventType) {
+            case 'phase':
+              pptSteps.value.push({
+                type: 'phase',
+                phase: data.phase,
+                message: data.message,
+              })
+              break
+            case 'plan':
+              pptSteps.value.push({
+                type: 'plan',
+                tasks: data.tasks,
+                count: data.count,
+              })
+              break
+            case 'agent_start':
+              pptSteps.value.push({
+                type: 'agent_start',
+                agent: data.agent,
+                agentType: data.agent_type,
+                label: data.label,
+                task: data.task,
+                slideIndex: data.slide_index,
+                done: false,
+              })
+              break
+            case 'agent_done':
+              // Mark matching agent_start as done
+              for (let i = pptSteps.value.length - 1; i >= 0; i--) {
+                const s = pptSteps.value[i]
+                if (s.type === 'agent_start' && s.agent === data.agent && !s.done) {
+                  pptSteps.value[i] = { ...s, done: true, summary: data.summary }
+                  break
+                }
+              }
+              break
             case 'token':
               currentResponse += data.text || ''
+              pptStreamText.value = currentResponse
               break
             case 'final':
               if (!currentResponse || currentResponse.trim().length === 0) {
                 currentResponse = data.response || ''
+                pptStreamText.value = currentResponse
               }
               finalHtmlResults = data.html_results || []
               break
             case 'error':
               currentResponse = `Error: ${data.error}`
+              pptStreamText.value = currentResponse
               break
           }
         },
@@ -222,6 +264,7 @@ export const useChatStore = defineStore('chat', () => {
         slideCount,
         htmlResults: finalHtmlResults,
         response: currentResponse,
+        steps: [...pptSteps.value],
         timestamp: Date.now(),
       })
     } catch (e) {
@@ -235,6 +278,8 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       pptGenerating.value = false
       pptAbortController = null
+      // Keep pptStreamText + pptSteps visible for a moment after completion,
+      // then clear when next generation starts
     }
   }
 
@@ -523,7 +568,7 @@ export const useChatStore = defineStore('chat', () => {
     activeTab, imageResults, videoResults, allModels,
     skills, enabledSkills, agentEmojiMap,
     sessions, currentSessionId,
-    providers, pptResults, pptGenerating,
+    providers, pptResults, pptGenerating, pptStreamText, pptSteps,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
