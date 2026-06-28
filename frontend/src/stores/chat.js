@@ -216,8 +216,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function deleteCurrentSession() {
-    const id = currentSessionId.value
+  async function deleteSession(id) {
     if (!id) return
     try {
       await deleteSessionApi(id)
@@ -225,7 +224,13 @@ export const useChatStore = defineStore('chat', () => {
       console.error('Failed to delete session:', e)
     }
     sessions.value = sessions.value.filter(s => s.id !== id)
-    newSession()
+    if (currentSessionId.value === id) {
+      await newSession()
+    }
+  }
+
+  async function deleteCurrentSession() {
+    await deleteSession(currentSessionId.value)
   }
 
   async function _ensureSession() {
@@ -417,6 +422,6 @@ export const useChatStore = defineStore('chat', () => {
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
-    loadSessions, newSession, switchSession, deleteCurrentSession,
+    loadSessions, newSession, switchSession, deleteSession, deleteCurrentSession,
   }
 })

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any, AsyncGenerator, Callable, Optional
 
@@ -385,6 +386,26 @@ def _agent_deps(agent_type: str) -> list[str]:
     return list(skill.depends_on) if skill else []
 
 
+def _task_timeout_seconds(agent_type: str) -> float:
+    """Hard timeout for one scheduled task.
+
+    Individual workers may use shorter internal timeouts to produce graceful
+    fallbacks. This limit prevents a whole wave from waiting forever when a
+    provider request never resolves.
+    """
+    specific = {
+        "ppt_planner": os.environ.get("PPT_PLANNER_TIMEOUT_SECONDS", "240"),
+        "ppt_slide": os.environ.get("PPT_SLIDE_TIMEOUT_SECONDS", "210"),
+        "ppt_assembler": os.environ.get("PPT_ASSEMBLER_TIMEOUT_SECONDS", "120"),
+        "research": os.environ.get("RESEARCH_TASK_TIMEOUT_SECONDS", "600"),
+    }.get(agent_type)
+    raw = specific or os.environ.get("AGENT_TASK_TIMEOUT_SECONDS", "600")
+    try:
+        return max(30.0, float(raw))
+    except (TypeError, ValueError):
+        return 600.0
+
+
 # ── Agent Loop (non-streaming) ─────────────────────────────────────────
 
 async def run_agent_loop(initial_state: dict) -> dict:
@@ -455,9 +476,17 @@ async def run_agent_loop(initial_state: dict) -> dict:
         async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[str, dict]:
             agent = task.get("agent", "")
             try:
-                result = await fn(_state_for_task(st, task))
+                timeout = _task_timeout_seconds(agent)
+                result = await asyncio.wait_for(fn(_state_for_task(st, task)), timeout=timeout)
                 logger.info(f"Agent Loop: '{task.get('id')}' completed")
                 return task.get("id", ""), result
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Agent Loop: '%s' timed out after %.0fs",
+                    task.get("id"),
+                    _task_timeout_seconds(agent),
+                )
+                return task.get("id", ""), {f"{agent}_results": [{"error": "task timed out"}]}
             except Exception as e:
                 logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
                 return task.get("id", ""), {f"{agent}_results": [{"error": str(e)}]}
@@ -595,8 +624,16 @@ async def run_agent_loop_stream(
         async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict]:
             agent = task.get("agent", "")
             try:
-                result = await fn(_state_for_task(st, task))
+                timeout = _task_timeout_seconds(agent)
+                result = await asyncio.wait_for(fn(_state_for_task(st, task)), timeout=timeout)
                 return task, result
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Agent Loop: '%s' timed out after %.0fs",
+                    task.get("id"),
+                    _task_timeout_seconds(agent),
+                )
+                return task, {f"{agent}_results": [{"error": "task timed out"}]}
             except Exception as e:
                 logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
                 return task, {f"{agent}_results": [{"error": str(e)}]}

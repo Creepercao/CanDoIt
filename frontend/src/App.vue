@@ -19,6 +19,11 @@ const tabs = [
   { key: 'video', label: '🎬 文生视频', component: VideoGenerator },
   { key: 'skills', label: '🔧 技能', component: SkillManager },
 ]
+async function deleteSession(session) {
+  const title = session.meta?.title || 'New Chat'
+  if (!window.confirm(`删除会话「${title}」？`)) return
+  await store.deleteSession(session.id)
+}
 </script>
 
 <template>
@@ -63,28 +68,35 @@ const tabs = [
           >+</button>
         </div>
         <div class="space-y-0.5 max-h-48 overflow-y-auto">
-          <button
+          <div
             v-for="s in store.sessions"
             :key="s.id"
-            @click="store.switchSession(s.id)"
             :class="[
-              'w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors truncate block',
+              'group flex items-center gap-1 rounded-lg text-xs transition-colors',
               store.currentSessionId === s.id
                 ? 'bg-primary-600/20 text-primary-400'
                 : 'text-gray-400 hover:text-white hover:bg-surface-800',
             ]"
           >
-            {{ s.meta?.title || 'New Chat' }}
-          </button>
+            <button
+              @click="store.switchSession(s.id)"
+              class="min-w-0 flex-1 text-left px-2 py-1.5 truncate"
+              :title="s.meta?.title || 'New Chat'"
+            >
+              {{ s.meta?.title || 'New Chat' }}
+            </button>
+            <button
+              @click.stop="deleteSession(s)"
+              class="shrink-0 w-6 h-6 rounded-md text-gray-600 hover:text-red-300 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition"
+              title="Delete session"
+              aria-label="Delete session"
+            >
+              ×
+            </button>
+          </div>
           <div v-if="store.sessions.length === 0" class="text-[10px] text-gray-600 px-2">
             No sessions yet
           </div>
-        </div>
-        <div v-if="store.currentSessionId" class="px-2 mt-1">
-          <button
-            @click="store.deleteCurrentSession()"
-            class="text-[10px] text-gray-600 hover:text-red-400 transition-colors"
-          >Delete session</button>
         </div>
       </div>
 
