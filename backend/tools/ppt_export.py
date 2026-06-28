@@ -123,11 +123,19 @@ async def _capture_html_slides(
 
             logical_count = await page.evaluate(
                 """() => {
-                    const nodes = Array.from(document.querySelectorAll('.slide, .page, section, article'));
-                    return nodes.filter((el) => {
-                        const r = el.getBoundingClientRect();
-                        return r.width > 80 && r.height > 80;
-                    }).length || nodes.length || 1;
+                    // Count slides by DOM presence, NOT by bounding-rect
+                    // dimensions.  Most decks keep inactive slides at
+                    // display:none, which makes getBoundingClientRect()
+                    // return {width:0, height:0} and the old filter
+                    // silently dropped them.
+                    const slides = document.querySelectorAll('.slide, .page');
+                    if (slides.length > 0) return slides.length;
+                    // Fallback: count <section>/<article> inside the deck
+                    const deck = document.querySelector('.deck, main, body');
+                    const sections = deck
+                        ? deck.querySelectorAll('section, article')
+                        : document.querySelectorAll('section, article');
+                    return sections.length || 1;
                 }"""
             )
 
