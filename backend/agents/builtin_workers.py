@@ -211,17 +211,112 @@ def _fallback_slide_html(slide: dict, total: int) -> str:
     title = html_lib.escape(str(slide.get("title", f"Slide {idx}")))
     goal = html_lib.escape(str(slide.get("goal", "")))
     bullets = slide.get("bullets") or []
-    bullet_html = "\n".join(f"<li>{html_lib.escape(str(b))}</li>" for b in bullets[:5])
     visual = html_lib.escape(str(slide.get("visual", "核心关系图")))
+    # Slide-specific accent hue to give each page its own colour identity
+    accent_hue = (idx * 47 + 200) % 360
+    accent = f"hsl({accent_hue}, 70%, 62%)"
+    accent_dim = f"hsla({accent_hue}, 55%, 48%, 0.28)"
+
+    # Pick a layout variant so not every fallback slide looks identical.
+    # The LLM prompt mirrors these same patterns for non-fallback slides.
+    variant = idx % 5
+
+    if variant == 0:
+        # ── Two-column: bullets | visual ──
+        bullet_html = "\n".join(
+            f"<li>{html_lib.escape(str(b))}</li>" for b in bullets[:5])
+        return f"""
+        <section class="slide layout-split" data-slide="{idx}">
+          <div class="kicker">PART {idx:02d}</div>
+          <h1>{title}</h1>
+          <p class="lead">{goal}</p>
+          <div class="grid">
+            <ul>{bullet_html}</ul>
+            <div class="visual" style="border-color:{accent}; background:{accent_dim}">
+              <svg width="120" height="90" viewBox="0 0 120 90"><rect x="5" y="5" width="110" height="80" rx="12" fill="none" stroke="{accent}" stroke-width="1.5" stroke-dasharray="6 4"/><circle cx="40" cy="35" r="14" fill="{accent}" opacity=".35"/><rect x="60" y="22" width="50" height="26" rx="6" fill="{accent}" opacity=".22"/></svg>
+              <span>{visual}</span>
+            </div>
+          </div>
+          <div class="page-no">{idx}/{total}</div>
+        </section>
+        """.strip()
+
+    if variant == 1:
+        # ── Hero / title slide ──
+        return f"""
+        <section class="slide layout-hero" data-slide="{idx}">
+          <div class="hero-badge" style="border-color:{accent}">★ {html_lib.escape(str(slide.get('speaker_note', '核心'))[:40])}</div>
+          <h1 style="font-size:5.2vw; text-align:center; max-width:85vw; margin-left:auto; margin-right:auto;">{title}</h1>
+          <p class="lead" style="text-align:center; max-width:60vw; margin:3vh auto;">{goal}</p>
+          <div class="hero-icons" style="color:{accent}">
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <div class="page-no">{idx}/{total}</div>
+        </section>
+        """.strip()
+
+    if variant == 2:
+        # ── Card grid: 3 cards side by side ──
+        cards = bullets[:3] if bullets else ["要点一", "要点二", "要点三"]
+        while len(cards) < 3:
+            cards.append("补充说明")
+        card_html = "\n".join(
+            f"""<div class="card" style="border-color:{accent}; background:{accent_dim}">
+              <div class="card-num" style="color:{accent}">0{i + 1}</div>
+              <p>{html_lib.escape(str(c))}</p>
+            </div>"""
+            for i, c in enumerate(cards)
+        )
+        return f"""
+        <section class="slide layout-cards" data-slide="{idx}">
+          <div class="kicker">PART {idx:02d}</div>
+          <h1>{title}</h1>
+          <p class="lead">{goal}</p>
+          <div class="card-row">{card_html}</div>
+          <div class="page-no">{idx}/{total}</div>
+        </section>
+        """.strip()
+
+    if variant == 3:
+        # ── Timeline / steps ──
+        items = bullets[:4] if bullets else ["步骤一", "步骤二", "步骤三", "步骤四"]
+        while len(items) < 4:
+            items.append("后续步骤")
+        steps_html = "\n".join(
+            f"""<div class="step">
+              <span class="step-dot" style="background:{accent}"></span>
+              <span class="step-label">{html_lib.escape(str(it))}</span>
+            </div>"""
+            for it in items
+        )
+        return f"""
+        <section class="slide layout-timeline" data-slide="{idx}">
+          <div class="kicker">PART {idx:02d}</div>
+          <h1>{title}</h1>
+          <p class="lead">{goal}</p>
+          <div class="timeline">{steps_html}</div>
+          <div class="page-no">{idx}/{total}</div>
+        </section>
+        """.strip()
+
+    # variant == 4: Big-number stats
+    stats = bullets[:3] if bullets else ["数据一", "数据二", "数据三"]
+    while len(stats) < 3:
+        stats.append("关键数据")
+    stat_html = "\n".join(
+        f"""<div class="stat" style="border-color:{accent}">
+          <div class="stat-num" style="color:{accent}">{html_lib.escape(str(s)[:12])}</div>
+        </div>"""
+        for s in stats
+    )
     return f"""
-    <section class="slide" data-slide="{idx}">
+    <section class="slide layout-stats" data-slide="{idx}">
       <div class="kicker">PART {idx:02d}</div>
       <h1>{title}</h1>
       <p class="lead">{goal}</p>
-      <div class="grid">
-        <ul>{bullet_html}</ul>
-        <div class="visual">{visual}</div>
-      </div>
+      <div class="stat-row">{stat_html}</div>
       <div class="page-no">{idx}/{total}</div>
     </section>
     """.strip()
@@ -663,21 +758,36 @@ async def ppt_slide_worker(state: dict) -> dict:
             slide = next((s for s in all_slides if int(s.get("index", 0)) == idx), {})
         idx = int(slide.get("index") or task.get("slide_index") or 1)
 
+        # Pick a layout hint so neighbouring slides don't all look the same.
+        # The same rotation is used by _fallback_slide_html so fallback slides
+        # also vary.
+        layout_hint = [
+            "双栏布局：左侧列表，右侧是一个带 SVG 图标/图形的视觉卡片",
+            "Hero 大标题布局：居中排版，大字标题，icon 点缀，适合封面/总结页",
+            "三卡片布局：三个信息卡片并排，每张卡片包含编号 + 要点",
+            "时间线/步骤布局：左侧竖线，右侧按步骤排列要点，适合流程/演进类内容",
+            "大数字/统计布局：放大关键数据，给每个数据一个独立卡片",
+        ][idx % 5]
+
         prompt = f"""你是单页 PPT HTML 设计师。只生成一个 <section class="slide">...</section> 片段，不要完整 html/head/body。
 
 整套演示标题: {plan.get("title", state.get("user_request", ""))}
 主题风格: {theme}
 总页数: {total}
+
 当前页 JSON:
 {json.dumps(slide, ensure_ascii=False, indent=2)}
 
+建议布局: {layout_hint}
+
 硬性要求:
-- 根元素必须是 <section class="slide" data-slide="{idx}">
-- <section> 上不要设置 display/position/width/height 等布局属性（这些由演示框架统一管理）
-- 必须包含 h1 标题、核心要点、一个视觉化区域
+- 根元素必须是 <section class="slide" data-slide="{idx}">，不要额外加 layout class（框架自动处理）
+- <section> 上不要设置 display/position/width/height 等布局属性（由演示框架统一管理）
+- 必须包含 h1 标题、核心要点、至少一个**具体的内联 SVG 图形**（不要只用文字描述 visual 区域，要真的画出来 — 柱状图/流程图/卡片组/时间线/图标组等）
 - 可以使用内联 SVG/CSS class 装饰（内部元素），但不要输出 <script>
 - 不要引入外部资源
-- 控制在 80-180 行以内
+- 控制在 80-220 行以内
+- 用 page-no div 标注页码 {idx}/{total}
 """
         status = "ok"
         error = ""
@@ -830,7 +940,22 @@ h1 {{ font-size:4vw; line-height:1.05; margin:0 0 2vh; max-width:78vw; }}
 .lead {{ font-size:1.55vw; line-height:1.55; max-width:72vw; opacity:.88; }}
 .grid {{ display:grid; grid-template-columns:1.05fr .95fr; gap:4vw; align-items:center; margin-top:4vh; }}
 ul {{ margin:0; padding-left:1.3em; font-size:1.35vw; line-height:1.8; }}
-.visual {{ min-height:34vh; border:1px solid; border-radius:22px; display:flex; align-items:center; justify-content:center; padding:2vw; font-size:1.55vw; text-align:center; box-shadow:0 24px 80px rgba(0,0,0,.28); }}
+.visual {{ min-height:34vh; border:1px solid; border-radius:22px; display:flex; flex-direction:column; gap:1.2vh; align-items:center; justify-content:center; padding:2vw; font-size:1.55vw; text-align:center; box-shadow:0 24px 80px rgba(0,0,0,.28); }}
+.visual svg {{ flex-shrink:0; opacity:.85; }}
+/* ── Layout variants (used by fallback & encouraged in LLM prompt) ── */
+.layout-hero {{ display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }}
+.hero-badge {{ display:inline-block; border:1px solid; border-radius:30px; padding:0.5vh 1.8vw; font-size:1vw; letter-spacing:.08em; margin-bottom:2.5vh; opacity:.85; }}
+.hero-icons {{ display:flex; gap:2.5vw; margin-top:4vh; opacity:.72; }}
+.layout-cards .card-row {{ display:flex; gap:2vw; margin-top:4vh; justify-content:center; }}
+.card {{ flex:1; max-width:22vw; border:1px solid; border-radius:20px; padding:2.5vh 1.8vw; text-align:center; backdrop-filter:blur(6px); }}
+.card-num {{ font-size:2.2vw; font-weight:800; margin-bottom:1vh; }}
+.card p {{ font-size:1.2vw; line-height:1.5; opacity:.88; margin:0; }}
+.layout-timeline .timeline {{ margin-top:5vh; padding-left:3vw; border-left:3px solid rgba(255,255,255,.18); }}
+.step {{ display:flex; align-items:center; gap:1.5vw; padding:1.2vh 0; font-size:1.35vw; position:relative; }}
+.step-dot {{ width:14px; height:14px; border-radius:50%; flex-shrink:0; margin-left:-8.5px; box-shadow:0 0 12px currentColor; }}
+.layout-stats .stat-row {{ display:flex; gap:2.5vw; margin-top:5vh; justify-content:center; }}
+.stat {{ flex:1; max-width:24vw; border:1px solid; border-radius:24px; padding:3vh 2vw; text-align:center; backdrop-filter:blur(6px); }}
+.stat-num {{ font-size:1.6vw; font-weight:700; line-height:1.4; }}
 .page-no {{ position:absolute; right:4vw; bottom:3vh; font-size:1vw; opacity:.75; }}
 .progress {{ position:fixed; left:0; top:0; height:4px; width:100%; background:rgba(255,255,255,.12); z-index:10; }}
 .progress > span {{ display:block; height:100%; width:0; background:linear-gradient(90deg,#38bdf8,#f97316); transition:width .25s ease; }}
