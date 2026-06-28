@@ -13,6 +13,11 @@ from pydantic import BaseModel
 logger = logging.getLogger("config")
 
 _PROJECT_ROOT = Path(__file__).parent.parent
+_OUTPUTS_DIR = _PROJECT_ROOT / "outputs"
+
+# Runtime-mutable provider config lives in outputs/ so it survives
+# Docker restarts (project root is read-only when containerised).
+_RUNTIME_YAML = _OUTPUTS_DIR / "providers.yaml"
 
 # Serialize writes to providers.yaml so concurrent CRUD requests don't
 # corrupt the file.
@@ -111,14 +116,24 @@ def _load_from_legacy_api_json(json_path: Path) -> list[ProviderConfig]:
 
 
 def load_providers() -> list[ProviderConfig]:
-    """Load all providers from ``providers.yaml``, falling back to
-    ``API.json`` for backward compatibility."""
-    yaml_path = _PROJECT_ROOT / "providers.yaml"
+    """Load all providers, preferring runtime config over static config.
+
+    Priority: ``outputs/providers.yaml`` > project-root ``providers.yaml``
+    > legacy ``API.json``.  The runtime path (``outputs/``) is the only
+    writable location inside Docker containers.
+    """
+    static_yaml = _PROJECT_ROOT / "providers.yaml"
     legacy_path = _PROJECT_ROOT / "API.json"
 
-    if yaml_path.exists():
-        return _load_from_providers_yaml(yaml_path)
+    # 1. Runtime overrides (created by frontend Provider editor)
+    if _RUNTIME_YAML.exists():
+        return _load_from_providers_yaml(_RUNTIME_YAML)
 
+    # 2. Static config shipped with the repo / mounted in Docker
+    if static_yaml.exists():
+        return _load_from_providers_yaml(static_yaml)
+
+    # 3. Legacy API.json
     if legacy_path.exists():
         return _load_from_legacy_api_json(legacy_path)
 
@@ -141,8 +156,13 @@ def get_provider_by_type(provider_type: str) -> ProviderConfig | None:
 
 
 def save_providers(providers: list[ProviderConfig]) -> None:
-    """Write the providers list to ``providers.yaml``."""
-    yaml_path = _PROJECT_ROOT / "providers.yaml"
+    """Write the providers list to the runtime YAML (``outputs/``).
+
+    We always write to the outputs directory because the project root
+    may be read-only (Docker).  ``load_providers`` checks this path
+    first on the next reload.
+    """
+    _OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     data: dict = {
         "providers": [
             {
@@ -154,7 +174,7 @@ def save_providers(providers: list[ProviderConfig]) -> None:
             for p in providers
         ]
     }
-    with open(yaml_path, "w", encoding="utf-8") as f:
+    with open(_RUNTIME_YAML, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
