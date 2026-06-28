@@ -4,6 +4,8 @@ FROM ${MIRROR}python:3.12-slim
 
 WORKDIR /app
 
+RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
+
 # System deps (curl for healthcheck, CJK fonts for matplotlib charts,
 # chromium for Playwright-based HTML -> PPTX visual export)
 RUN apt-get -o Acquire::Retries=5 update \
