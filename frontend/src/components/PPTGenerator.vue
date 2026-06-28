@@ -1,6 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat.js'
+import { renderMarkdown } from '../utils/markdown.js'
 import { exportPptx } from '../api/index.js'
 
 const store = useChatStore()
@@ -9,12 +10,22 @@ const topic = ref('')
 const theme = ref('dark-tech')
 const slideCount = ref(6)
 const exporting = ref({})
+const streamContainer = ref(null)
 
 const themes = [
   { value: 'dark-tech', label: 'Dark Tech — 暗色炫酷科技风' },
   { value: 'warm-paper', label: 'Warm Paper — 暖色报纸风' },
   { value: 'clean-white', label: 'Clean White — 简约白色风' },
 ]
+
+function scrollToBottom() {
+  if (streamContainer.value) {
+    streamContainer.value.scrollTop = streamContainer.value.scrollHeight
+  }
+}
+
+watch(() => store.pptStreamText, () => nextTick(() => scrollToBottom()))
+watch(() => store.pptSteps.length, () => nextTick(() => scrollToBottom()))
 
 async function generate() {
   if (!topic.value.trim() || store.pptGenerating) return
@@ -47,6 +58,19 @@ async function downloadPPTX(htmlUrl, title) {
   } finally {
     exporting.value[htmlUrl] = false
   }
+}
+
+function agentEmoji(agentType) {
+  const map = {
+    research: '🔍', analyst: '🔢', chart: '📊',
+    image_gen: '🎨', video_gen: '🎬', code: '💻',
+    ppt_planner: '🧭', ppt_slide: '🧩', ppt_assembler: '🎞️',
+  }
+  return map[agentType] || '🔧'
+}
+
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 </script>
 
@@ -116,18 +140,58 @@ async function downloadPPTX(htmlUrl, title) {
         </button>
       </div>
 
-      <!-- Generating state -->
-      <div v-if="store.pptGenerating"
-        class="bg-surface-800 rounded-xl border border-primary-700/50 p-4 text-center">
-        <div class="animate-pulse text-primary-400 text-sm">
-          Generating PPT slides — this may take 1-3 minutes...
+      <!-- ── Live streaming area (visible during generation) ── -->
+      <div v-if="store.pptGenerating || (store.pptStreamText && !store.pptResults.length)"
+        class="bg-surface-800 rounded-xl border border-gray-700/50 overflow-hidden">
+        <!-- Agent progress steps (mini timeline) -->
+        <div v-if="store.pptSteps.length" class="px-4 py-2 border-b border-gray-700/30 bg-gray-900/30">
+          <div class="flex items-center gap-2 flex-wrap">
+            <template v-for="(step, i) in store.pptSteps" :key="i">
+              <span v-if="step.type === 'phase'" class="text-[10px] text-gray-500">
+                {{ step.message }}
+              </span>
+              <span
+                v-else-if="step.type === 'agent_start'"
+                :class="[
+                  'text-[10px] px-1.5 py-0.5 rounded-full border transition-colors',
+                  step.done
+                    ? 'bg-emerald-900/30 text-emerald-400 border-emerald-700/50'
+                    : 'bg-blue-900/30 text-blue-400 border-blue-700/50 animate-pulse',
+                ]"
+              >
+                {{ agentEmoji(step.agentType) }}
+                {{ step.label || step.agentType }}
+                <template v-if="step.slideIndex"> #{{ step.slideIndex }}</template>
+                {{ step.done ? ' ✓' : ' …' }}
+              </span>
+            </template>
+          </div>
         </div>
-        <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
-          <div class="bg-gradient-to-r from-primary-500 to-orange-500 h-full rounded-full animate-pulse" style="width:60%" />
+
+        <!-- Streaming text (token-by-token, markdown rendered) -->
+        <div
+          ref="streamContainer"
+          class="p-4 max-h-[40vh] overflow-y-auto"
+        >
+          <div v-if="store.pptStreamText"
+            class="prose prose-invert prose-sm max-w-none text-sm leading-relaxed"
+            v-html="renderMarkdown(store.pptStreamText)"
+          />
+          <div v-else class="text-sm text-gray-500 animate-pulse">
+            Planning slides...
+          </div>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="w-full bg-gray-700 h-1">
+          <div
+            class="bg-gradient-to-r from-primary-500 to-orange-500 h-full transition-all duration-500"
+            :style="{ width: store.pptStreamText ? '85%' : '20%' }"
+          />
         </div>
       </div>
 
-      <!-- Results -->
+      <!-- ── Results (after generation completes) ── -->
       <div v-if="store.pptResults.length" class="space-y-3">
         <h3 class="text-sm font-medium text-gray-300 border-t border-gray-700/50 pt-3">
           Generation Results
@@ -170,10 +234,31 @@ async function downloadPPTX(htmlUrl, title) {
               </button>
             </div>
 
-            <!-- Response text if any -->
+            <!-- Response text (collapsed) -->
             <details v-if="item.response" class="text-xs">
               <summary class="text-gray-500 cursor-pointer">Response text</summary>
-              <div class="mt-1 text-gray-400 whitespace-pre-wrap max-h-32 overflow-y-auto">{{ item.response }}</div>
+              <div
+                class="mt-1 text-gray-400 max-h-48 overflow-y-auto prose prose-invert prose-xs max-w-none"
+                v-html="renderMarkdown(item.response)"
+              />
+            </details>
+
+            <!-- Agent steps summary (collapsed) -->
+            <details v-if="item.steps?.length" class="text-xs">
+              <summary class="text-gray-500 cursor-pointer">
+                Agent timeline ({{ item.steps.length }} events)
+              </summary>
+              <div class="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                <div v-for="(step, si) in item.steps" :key="si" class="flex items-center gap-2 text-[10px]">
+                  <span class="text-gray-600 w-12 shrink-0">{{ formatTime(item.timestamp) }}</span>
+                  <span v-if="step.type === 'phase'" class="text-gray-500">{{ step.message }}</span>
+                  <span v-else-if="step.type === 'agent_start'" class="text-gray-400">
+                    {{ agentEmoji(step.agentType) }} {{ step.label }}
+                    <template v-if="step.slideIndex"> #{{ step.slideIndex }}</template>
+                    — {{ step.task?.slice(0, 60) || '' }}
+                  </span>
+                </div>
+              </div>
             </details>
           </div>
 
