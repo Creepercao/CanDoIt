@@ -14,11 +14,13 @@ class PPTXExportRequest(BaseModel):
     html_content: str = ""
     html_url: str = ""
     title: str = ""
+    mode: str = "final"
+    frames_per_slide: int = 3
 
 
 @router.post("/skills/ppt-animation/export-pptx")
 async def export_pptx(req: PPTXExportRequest):
-    from backend.tools.ppt_export import export_skill_to_pptx
+    from backend.tools.ppt_export import export_skill_to_pptx_async
 
     html = req.html_content
     if not html and req.html_url:
@@ -32,13 +34,22 @@ async def export_pptx(req: PPTXExportRequest):
         return {"error": "Content does not appear to be HTML"}
 
     try:
-        result = export_skill_to_pptx(html, title=req.title or "")
+        result = await export_skill_to_pptx_async(
+            html,
+            title=req.title or "",
+            mode=req.mode,
+            frames_per_slide=req.frames_per_slide,
+        )
         return {
             "success": True,
             "file_url": result["file_url"],
             "download_url": result["download_url"],
             "slides": result["slides"],
+            "pages": result.get("pages", result["slides"]),
             "title": result["title"],
+            "mode": result.get("mode", req.mode),
+            "rendered": result.get("rendered", ""),
+            "warning": result.get("warning", ""),
         }
     except Exception as e:
         logger.error(f"PPTX export error: {e}")

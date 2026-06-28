@@ -18,3 +18,4 @@ python-pptx==1.0.2
 pyyaml==6.0.2
 tavily-python==0.7.26
 chromadb>=1.5.0
+playwright==1.49.1

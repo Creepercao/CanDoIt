@@ -151,11 +151,19 @@ export async function fetchSkillReadme(name) {
   return data
 }
 
-export async function exportPptx({ htmlContent = '', htmlUrl = '', title = '' }) {
+export async function exportPptx({
+  htmlContent = '',
+  htmlUrl = '',
+  title = '',
+  mode = 'final',
+  framesPerSlide = 3,
+}) {
   const { data } = await api.post('/skills/ppt-animation/export-pptx', {
     html_content: htmlContent,
     html_url: htmlUrl,
     title,
+    mode,
+    frames_per_slide: framesPerSlide,
   })
   return data
 }

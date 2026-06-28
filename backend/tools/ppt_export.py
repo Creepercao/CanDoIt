@@ -1,73 +1,64 @@
-"""PPTX export — convert HTML slide presentations to PowerPoint (.pptx) files.
+"""PPTX export for HTML slide presentations.
 
-Handles the output of the ppt-animation skill (and similar HTML-based slide
-generators). Extracts slide content from HTML, creates a PPTX with one slide
-per HTML section.
+Primary path:
+  HTML -> Playwright-rendered slide screenshots -> PPTX full-slide images.
+
+This preserves CSS backgrounds, SVG/CSS graphics, layout, and visual styling
+far better than trying to reconstruct a deck from extracted text. JavaScript
+and CSS animations cannot be transferred into editable PowerPoint animation
+objects, so ``mode="final"`` captures each slide after animations settle and
+``mode="keyframes"`` captures several moments per slide as separate PPT pages.
+
+Fallback path:
+  HTML text extraction -> python-pptx text boxes.
+Used when Playwright/Chromium is unavailable.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import uuid
-import logging
 from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
+from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 
 logger = logging.getLogger("ppt_export")
 
-# Common slide container selectors / patterns in skill-generated HTML
-_SLIDE_RE = re.compile(
-    r'<div[^>]*class="[^"]*slide[^"]*"[^>]*>.*?</div>\s*(?=<div[^>]*class="[^"]*slide[^"]*"|</body>|$)',
-    re.DOTALL | re.IGNORECASE,
-)
-_SLIDE_TAG_RE = re.compile(
-    r'<(?:section|article)[^>]*class="[^"]*(?:slide|page)[^"]*"[^>]*>.*?</(?:section|article)>',
-    re.DOTALL | re.IGNORECASE,
-)
-_TITLE_RE = re.compile(r'<h([12])[^>]*>(.*?)</h\1>', re.DOTALL | re.IGNORECASE)
-_TAG_STRIP_RE = re.compile(r'<[^>]+>')
-_ENTITY_RE = re.compile(r'&[a-z]+;|&#\d+;')
-_WHITESPACE_RE = re.compile(r'\s+')
+OUTPUTS_DIR = Path(__file__).parent.parent.parent / "outputs"
+SCREENSHOT_DIR = OUTPUTS_DIR / "pptx_frames"
 
-# HTML entities
-_ENTITIES = {
-    "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
-    "&apos;": "'", "&nbsp;": " ", "&#39;": "'",
-}
+_TITLE_RE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_HTML_RE = re.compile(r"<!DOCTYPE\s+html|<html[\s>]", re.IGNORECASE)
 
 
-def _decode_entities(text: str) -> str:
-    """Decode common HTML entities."""
-    for entity, char in _ENTITIES.items():
-        text = text.replace(entity, char)
-    return _ENTITY_RE.sub(" ", text)
-
-
-def _strip_tags(text: str) -> str:
-    """Strip HTML tags and decode entities, returning clean text."""
-    text = _decode_entities(text)
-    text = _TAG_STRIP_RE.sub(" ", text)
-    return _WHITESPACE_RE.sub(" ", text).strip()
+def _extract_title(html: str, fallback: str = "") -> str:
+    if fallback:
+        return fallback
+    match = _TITLE_RE.search(html)
+    if match:
+        return BeautifulSoup(match.group(1), "html.parser").get_text(" ", strip=True)
+    return "ppt-animation 演示文稿"
 
 
 def _extract_slides_from_html(html: str) -> list[dict]:
-    """Parse HTML and extract slide sections.
-
-    Returns a list of ``{title, content, index}`` dicts.
-    Handles ``<div class="slide">`` and ``<section class="slide">`` patterns.
-    """
+    """Extract slide text for fallback export and slide count reporting."""
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "head"]):
         tag.decompose()
 
-    slide_nodes = soup.select(".slide, .page, section, article")
+    nodes = soup.select(".slide, .page, section, article")
+    if not nodes:
+        body_text = soup.get_text("\n", strip=True)
+        return [{"title": "Slide 1", "content": body_text[:3000], "index": 0}] if body_text else []
+
     slides: list[dict] = []
-    for i, node in enumerate(slide_nodes):
+    for node in nodes:
         text = node.get_text("\n", strip=True)
         if not text:
             continue
@@ -75,185 +66,268 @@ def _extract_slides_from_html(html: str) -> list[dict]:
         title = title_node.get_text(" ", strip=True) if title_node else f"Slide {len(slides) + 1}"
         if title and text.startswith(title):
             text = text[len(title):].strip()
-        slides.append({
-            "title": title,
-            "content": text[:2000],
-            "index": len(slides),
-        })
-
-    if slides:
-        return slides
-
-    # Try div.slide first as a fallback for malformed HTML
-    slides_raw = _SLIDE_RE.findall(html)
-    if not slides_raw:
-        slides_raw = _SLIDE_TAG_RE.findall(html)
-
-    # If no class-based slides found, try splitting by h1 tags
-    if not slides_raw:
-        parts = re.split(r'(<h1[^>]*>.*?</h1>)', html, flags=re.DOTALL | re.IGNORECASE)
-        slides_raw = []
-        current = ""
-        for part in parts:
-            if re.match(r'<h1[^>]*>', part, re.IGNORECASE):
-                if current.strip():
-                    slides_raw.append(current)
-                current = part
-            else:
-                current += part
-        if current.strip():
-            slides_raw.append(current)
-
-    slides = []
-    for i, raw in enumerate(slides_raw):
-        # Extract title
-        title = ""
-        title_match = _TITLE_RE.search(raw)
-        if title_match:
-            title = _strip_tags(title_match.group(0))
-
-        # Extract text content (remove script/style blocks first)
-        clean = re.sub(r'<(?:script|style)[^>]*>.*?</(?:script|style)>', '', raw, flags=re.DOTALL | re.IGNORECASE)
-        body_text = _strip_tags(clean)
-
-        # Trim body text (remove title from beginning)
-        if title and body_text.startswith(title):
-            body_text = body_text[len(title):].strip()
-
-        slides.append({
-            "title": title or f"Slide {i + 1}",
-            "content": body_text[:2000],  # Limit content length per slide
-            "index": i,
-        })
-
+        slides.append({"title": title, "content": text[:3000], "index": len(slides)})
     return slides
 
 
-def html_to_pptx(
+def _sanitize_capture_mode(mode: str) -> str:
+    return "keyframes" if mode == "keyframes" else "final"
+
+
+async def _capture_html_slides(
     html_content: str,
-    output_path: Optional[str] = None,
-    title: str = "Presentation",
-) -> str:
-    """Convert an HTML slide presentation to a PPTX file.
+    *,
+    mode: str = "final",
+    frames_per_slide: int = 3,
+    width: int = 1920,
+    height: int = 1080,
+) -> tuple[list[Path], int]:
+    """Render HTML in Chromium and capture slide screenshots.
 
-    Parameters
-    ----------
-    html_content : str
-        The complete HTML content (as generated by ppt-animation skill).
-    output_path : str, optional
-        Where to write the PPTX. Defaults to a temp path under outputs/.
-    title : str
-        Presentation title (used for the first slide if no title found).
-
-    Returns
-    -------
-    str
-        Absolute path to the generated PPTX file.
+    Returns ``(image_paths, logical_slide_count)``. In keyframe mode,
+    ``len(image_paths)`` may be ``logical_slide_count * frames_per_slide``.
     """
-    if output_path is None:
-        file_id = uuid.uuid4().hex[:12]
-        output_path = str(Path(__file__).parent.parent.parent / "outputs" / f"export_{file_id}.pptx")
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:  # pragma: no cover - environment dependent
+        raise RuntimeError("Playwright is not installed") from e
 
+    mode = _sanitize_capture_mode(mode)
+    frames_per_slide = max(2, min(int(frames_per_slide or 3), 6))
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+    run_id = uuid.uuid4().hex[:12]
+    html_path = SCREENSHOT_DIR / f"source_{run_id}.html"
+    html_path.write_text(html_content, encoding="utf-8")
+
+    image_paths: list[Path] = []
+    logical_count = 0
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(args=["--no-sandbox"])
+        page = await browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=1)
+        try:
+            await page.goto(html_path.resolve().as_uri(), wait_until="load", timeout=30000)
+            await page.wait_for_timeout(300)
+
+            logical_count = await page.evaluate(
+                """() => {
+                    const nodes = Array.from(document.querySelectorAll('.slide, .page, section, article'));
+                    return nodes.filter((el) => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 80 && r.height > 80;
+                    }).length || nodes.length || 1;
+                }"""
+            )
+
+            # Force one logical slide visible at a time. This works for most
+            # skill-generated decks and avoids needing to understand each deck's
+            # custom navigation JavaScript.
+            for slide_idx in range(logical_count):
+                await page.evaluate(
+                    """({idx}) => {
+                        const slides = Array.from(document.querySelectorAll('.slide, .page, section, article'));
+                        document.documentElement.style.width = '100%';
+                        document.documentElement.style.height = '100%';
+                        document.body.style.margin = '0';
+                        document.body.style.width = '100vw';
+                        document.body.style.height = '100vh';
+                        document.body.style.overflow = 'hidden';
+
+                        if (!slides.length) return;
+
+                        slides.forEach((el, i) => {
+                            el.classList.toggle('active', i === idx);
+                            el.classList.toggle('current', i === idx);
+                            el.style.display = i === idx ? 'block' : 'none';
+                            el.style.visibility = i === idx ? 'visible' : 'hidden';
+                            el.style.opacity = i === idx ? '1' : '0';
+                            el.style.pointerEvents = i === idx ? 'auto' : 'none';
+                            if (i === idx) {
+                                el.style.position = 'fixed';
+                                el.style.left = '0';
+                                el.style.top = '0';
+                                el.style.width = '100vw';
+                                el.style.height = '100vh';
+                                el.style.margin = '0';
+                                el.style.transform = 'none';
+                            }
+                        });
+                    }""",
+                    {"idx": slide_idx},
+                )
+
+                waits = [2300] if mode == "final" else [
+                    int(350 + (2200 * i / max(frames_per_slide - 1, 1)))
+                    for i in range(frames_per_slide)
+                ]
+
+                for frame_idx, wait_ms in enumerate(waits):
+                    await page.wait_for_timeout(wait_ms if frame_idx == 0 else max(wait_ms - waits[frame_idx - 1], 200))
+                    suffix = f"s{slide_idx + 1:02d}"
+                    if mode == "keyframes":
+                        suffix += f"_f{frame_idx + 1:02d}"
+                    img_path = SCREENSHOT_DIR / f"{run_id}_{suffix}.png"
+                    await page.screenshot(path=str(img_path), full_page=False)
+                    image_paths.append(img_path)
+        finally:
+            await browser.close()
+
+    return image_paths, logical_count
+
+
+def _images_to_pptx(image_paths: list[Path], output_path: str) -> None:
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
+
+    for image_path in image_paths:
+        slide = prs.slides.add_slide(blank_layout)
+        slide.shapes.add_picture(
+            str(image_path),
+            0,
+            0,
+            width=prs.slide_width,
+            height=prs.slide_height,
+        )
+
+    prs.save(output_path)
+
+
+def _fallback_text_to_pptx(html_content: str, output_path: str, title: str) -> int:
+    """Old text extraction fallback, retained for environments without Chromium."""
     slides = _extract_slides_from_html(html_content)
-
     if not slides:
-        # Fallback: create a single slide from the HTML body text
-        body = re.sub(r'<(?:script|style|head)[^>]*>.*?</(?:script|style|head)>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
-        body_text = _strip_tags(body)
-        slides = [{"title": title, "content": body_text[:3000], "index": 0}]
+        slides = [{"title": title, "content": "No slide content found.", "index": 0}]
 
     prs = Presentation()
-    prs.slide_width = Inches(13.333)  # 16:9 widescreen
+    prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
 
-    # ── Title slide ──
-    if len(slides) > 1:
-        title_slide_layout = prs.slide_layouts[0]  # Title Slide layout
-        slide_obj = prs.slides.add_slide(title_slide_layout)
-        if slide_obj.shapes.title:
-            slide_obj.shapes.title.text = title
-        if slide_obj.placeholders and len(slide_obj.placeholders) > 1:
-            slide_obj.placeholders[1].text = f"共 {len(slides)} 页"
-
-    # ── Content slides ──
     for s in slides:
-        # Use blank layout for custom formatting
-        blank_layout = prs.slide_layouts[6]  # Blank
         slide_obj = prs.slides.add_slide(blank_layout)
+        left, top = Inches(0.8), Inches(0.4)
+        width, title_h = Inches(11.7), Inches(1.0)
 
-        # Title box
-        left = Inches(0.8)
-        top = Inches(0.4)
-        width = Inches(11.7)
-        height = Inches(1.0)
-        title_box = slide_obj.shapes.add_textbox(left, top, width, height)
-        title_frame = title_box.text_frame
-        title_frame.word_wrap = True
-        p = title_frame.paragraphs[0]
+        title_box = slide_obj.shapes.add_textbox(left, top, width, title_h)
+        p = title_box.text_frame.paragraphs[0]
         p.text = s["title"]
         p.font.size = Pt(32)
         p.font.bold = True
         p.font.color.rgb = RGBColor(0x1A, 0x1A, 0x2E)
         p.alignment = PP_ALIGN.LEFT
 
-        # Content box
-        content_top = Inches(1.6)
-        content_height = Inches(5.5)
-        content_box = slide_obj.shapes.add_textbox(left, content_top, width, content_height)
-        content_frame = content_box.text_frame
-        content_frame.word_wrap = True
-
-        # Split content into paragraphs
-        paragraphs = [p for p in s["content"].split("\n") if p.strip()]
-        if not paragraphs:
-            paragraphs = [s["content"]]
-
-        for j, para_text in enumerate(paragraphs[:15]):  # Max 15 paragraphs per slide
-            if j == 0:
-                p = content_frame.paragraphs[0]
-            else:
-                p = content_frame.add_paragraph()
-            p.text = para_text[:500]
-            p.font.size = Pt(18)
-            p.font.color.rgb = RGBColor(0x33, 0x33, 0x44)
-            p.space_after = Pt(8)
-            p.alignment = PP_ALIGN.LEFT
+        content_box = slide_obj.shapes.add_textbox(left, Inches(1.6), width, Inches(5.5))
+        frame = content_box.text_frame
+        frame.word_wrap = True
+        paragraphs = [p for p in s["content"].split("\n") if p.strip()] or [s["content"]]
+        for j, para_text in enumerate(paragraphs[:15]):
+            para = frame.paragraphs[0] if j == 0 else frame.add_paragraph()
+            para.text = para_text[:500]
+            para.font.size = Pt(18)
+            para.font.color.rgb = RGBColor(0x33, 0x33, 0x44)
+            para.space_after = Pt(8)
+            para.alignment = PP_ALIGN.LEFT
 
     prs.save(output_path)
-    logger.info(f"PPTX exported: {output_path} ({len(slides)} slides)")
-    return output_path
+    return len(slides)
+
+
+async def html_to_pptx_async(
+    html_content: str,
+    output_path: Optional[str] = None,
+    title: str = "Presentation",
+    mode: str = "final",
+    frames_per_slide: int = 3,
+) -> dict:
+    if output_path is None:
+        output_path = str(OUTPUTS_DIR / f"export_{uuid.uuid4().hex[:12]}.pptx")
+
+    if not _HTML_RE.search(html_content[:1000]):
+        raise ValueError("Content does not appear to be HTML")
+
+    try:
+        image_paths, logical_slides = await _capture_html_slides(
+            html_content,
+            mode=mode,
+            frames_per_slide=frames_per_slide,
+        )
+        if not image_paths:
+            raise RuntimeError("No screenshots captured")
+        _images_to_pptx(image_paths, output_path)
+        logger.info(
+            "PPTX exported via screenshots: %s (%s slide(s), %s image page(s), mode=%s)",
+            output_path,
+            logical_slides,
+            len(image_paths),
+            mode,
+        )
+        return {
+            "file_path": output_path,
+            "slides": logical_slides,
+            "pages": len(image_paths),
+            "mode": _sanitize_capture_mode(mode),
+            "rendered": "screenshot",
+        }
+    except Exception as e:
+        logger.warning("Screenshot PPTX export failed, falling back to text export: %s", e)
+        slide_count = _fallback_text_to_pptx(html_content, output_path, title)
+        return {
+            "file_path": output_path,
+            "slides": slide_count,
+            "pages": slide_count,
+            "mode": "fallback-text",
+            "rendered": "text",
+            "warning": str(e),
+        }
+
+
+async def export_skill_to_pptx_async(
+    html_content: str,
+    skill_name: str = "ppt-animation",
+    title: str = "",
+    mode: str = "final",
+    frames_per_slide: int = 3,
+) -> dict:
+    title = _extract_title(html_content, title)
+    file_id = uuid.uuid4().hex[:12]
+    output_path = str(OUTPUTS_DIR / f"{skill_name}_{file_id}.pptx")
+
+    result = await html_to_pptx_async(
+        html_content,
+        output_path=output_path,
+        title=title,
+        mode=mode,
+        frames_per_slide=frames_per_slide,
+    )
+    file_path = Path(result["file_path"])
+    return {
+        "file_url": f"/outputs/{file_path.name}",
+        "download_url": f"/api/skills/ppt-animation/export-pptx/{file_path.name}",
+        "file_path": str(file_path),
+        "slides": result["slides"],
+        "pages": result["pages"],
+        "title": title,
+        "mode": result["mode"],
+        "rendered": result["rendered"],
+        "warning": result.get("warning", ""),
+    }
 
 
 def export_skill_to_pptx(
     html_content: str,
     skill_name: str = "ppt-animation",
     title: str = "",
+    mode: str = "final",
+    frames_per_slide: int = 3,
 ) -> dict:
-    """Export skill HTML output as PPTX and return file info for API response.
-
-    Returns ``{"file_url": str, "file_path": str, "slides": int, "title": str}``.
-    """
-    file_id = uuid.uuid4().hex[:12]
-    output_path = str(
-        Path(__file__).parent.parent.parent / "outputs" / f"{skill_name}_{file_id}.pptx"
-    )
-
-    # Extract title from HTML if not provided
-    if not title:
-        title_match = re.search(r'<title>(.*?)</title>', html_content, re.IGNORECASE)
-        if title_match:
-            title = title_match.group(1).strip()
-    if not title:
-        title = f"{skill_name} 演示文稿"
-
-    file_path = html_to_pptx(html_content, output_path=output_path, title=title)
-
-    slides = _extract_slides_from_html(html_content)
-
-    return {
-        "file_url": f"/outputs/{Path(file_path).name}",
-        "download_url": f"/api/skills/ppt-animation/export-pptx/{Path(file_path).name}",
-        "file_path": file_path,
-        "slides": len(slides),
-        "title": title,
-    }
+    """Synchronous wrapper for scripts/tests outside FastAPI."""
+    return asyncio.run(export_skill_to_pptx_async(
+        html_content,
+        skill_name=skill_name,
+        title=title,
+        mode=mode,
+        frames_per_slide=frames_per_slide,
+    ))
