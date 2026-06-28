@@ -8,6 +8,7 @@ Exports ``WORKER_MAP`` mapping agent-type names to their async worker functions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import logging
@@ -83,6 +84,52 @@ def _extract_ppt_plan(state: dict) -> dict:
         if isinstance(item, dict) and item.get("slides"):
             return item
     return {}
+
+
+def _infer_requested_slide_count(text: str) -> int | None:
+    """Infer explicit requested slide count from Chinese/English prompts."""
+    patterns = [
+        r"(\d{1,2})\s*(?:页|頁|张|張|slides?|pages?)",
+        r"(?:页数|頁數|做成|制作成|生成|make|create)\D{0,12}(\d{1,2})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            value = int(match.group(1))
+            if 1 <= value <= 20:
+                return value
+    return None
+
+
+def _normalize_ppt_slides(data: dict, requested_count: int | None, fallback_prompt: str) -> list[dict]:
+    slides = data.get("slides") if isinstance(data.get("slides"), list) else []
+    normalized = []
+    max_count = requested_count or min(max(len(slides), 5), 8)
+
+    for i, slide in enumerate(slides[:max_count], start=1):
+        if not isinstance(slide, dict):
+            continue
+        slide["index"] = int(slide.get("index") or i)
+        slide.setdefault("title", f"Slide {slide['index']}")
+        slide.setdefault("goal", "")
+        slide.setdefault("bullets", [])
+        slide.setdefault("visual", "")
+        normalized.append(slide)
+
+    while len(normalized) < max_count:
+        idx = len(normalized) + 1
+        normalized.append({
+            "index": idx,
+            "title": f"补充页 {idx}",
+            "goal": "补足用户要求的页数，并承接前后页面逻辑",
+            "bullets": [fallback_prompt[:180] or "围绕主题展开关键内容"],
+            "visual": "信息卡片与流程/关系图",
+            "speaker_note": "",
+        })
+
+    for i, slide in enumerate(normalized, start=1):
+        slide["index"] = i
+    return normalized
 
 
 def _deck_theme_css(theme: str) -> str:
@@ -456,6 +503,7 @@ async def ppt_planner_worker(state: dict) -> dict:
 
     task = my_tasks[0]
     prompt_text = task.get("prompt") or state.get("user_request", "")
+    requested_count = _infer_requested_slide_count(state.get("user_request", "") + "\n" + prompt_text)
     research_data = state.get("research_results", [])
     research_text = "\n\n".join(
         (r.get("synthesis", "") + "\n" + r.get("raw_text", "")[:1200]).strip()
@@ -494,7 +542,10 @@ async def ppt_planner_worker(state: dict) -> dict:
 - visual 要具体，方便后续页面并行生成
 """
     try:
-        resp = await llm.ainvoke([HumanMessage(content=planner_prompt)])
+        resp = await asyncio.wait_for(
+            llm.ainvoke([HumanMessage(content=planner_prompt)]),
+            timeout=180,
+        )
         content = resp.content if hasattr(resp, "content") else str(resp)
         data = _json_from_text(content)
         if not isinstance(data, dict):
@@ -513,19 +564,13 @@ async def ppt_planner_worker(state: dict) -> dict:
             ],
         }
 
-    slides = data.get("slides") if isinstance(data.get("slides"), list) else []
-    normalized = []
-    for i, slide in enumerate(slides[:12], start=1):
-        if not isinstance(slide, dict):
-            continue
-        slide["index"] = int(slide.get("index") or i)
-        slide.setdefault("title", f"Slide {slide['index']}")
-        slide.setdefault("goal", "")
-        slide.setdefault("bullets", [])
-        slide.setdefault("visual", "")
-        normalized.append(slide)
-    data["slides"] = normalized or data.get("slides", [])
+    from backend.tools.ppt_run_store import new_deck_id, save_plan
+
+    data["slides"] = _normalize_ppt_slides(data, requested_count, prompt_text)
     data["theme"] = data.get("theme") or "dark-tech"
+    data["deck_id"] = task.get("deck_id") or data.get("deck_id") or new_deck_id()
+    data["requested_slide_count"] = requested_count
+    save_plan(data["deck_id"], data)
 
     slide_tasks = [
         {
@@ -533,6 +578,7 @@ async def ppt_planner_worker(state: dict) -> dict:
             "prompt": f"生成第 {slide['index']} 页: {slide.get('title', '')}",
             "slide_index": slide["index"],
             "slide_spec": slide,
+            "deck_id": data["deck_id"],
             "task_group": "ppt_slides",
         }
         for slide in data["slides"]
@@ -540,6 +586,7 @@ async def ppt_planner_worker(state: dict) -> dict:
     slide_tasks.append({
         "agent": "ppt_assembler",
         "prompt": "合并所有并行生成的 PPT 页面 HTML，输出完整翻页演示。",
+        "deck_id": data["deck_id"],
         "task_group": "ppt_assemble",
     })
 
@@ -562,6 +609,7 @@ async def ppt_slide_worker(state: dict) -> dict:
     results = []
 
     for task in my_tasks:
+        deck_id = task.get("deck_id") or plan.get("deck_id") or ""
         slide = task.get("slide_spec") or {}
         if not slide:
             idx = int(task.get("slide_index") or 1)
@@ -583,20 +631,41 @@ async def ppt_slide_worker(state: dict) -> dict:
 - 不要引入外部资源
 - 控制在 80-180 行以内
 """
+        status = "ok"
+        error = ""
         try:
-            resp = await llm.ainvoke([HumanMessage(content=prompt)])
+            resp = await asyncio.wait_for(
+                llm.ainvoke([HumanMessage(content=prompt)]),
+                timeout=150,
+            )
             html = _first_html_fragment(resp.content if hasattr(resp, "content") else str(resp))
             if "<section" not in html:
                 raise ValueError("missing section")
         except Exception as e:
             logger.warning(f"PPT slide {idx} fallback: {e}")
+            status = "fallback"
+            error = str(e)
             html = _fallback_slide_html(slide, total)
+
+        if deck_id:
+            from backend.tools.ppt_run_store import save_slide
+            save_slide(
+                deck_id,
+                idx,
+                html=html,
+                title=slide.get("title", f"Slide {idx}"),
+                status=status,
+                error=error,
+            )
 
         results.append({
             "task": task.get("prompt", ""),
+            "deck_id": deck_id,
             "slide_index": idx,
             "html": html,
             "title": slide.get("title", f"Slide {idx}"),
+            "status": status,
+            "error": error,
         })
 
     return {"skill_outputs": {"ppt_slide": results}}
@@ -608,16 +677,82 @@ async def ppt_assembler_worker(state: dict) -> dict:
         return {"skill_outputs": {}}
 
     plan = _extract_ppt_plan(state)
+    deck_id = my_tasks[0].get("deck_id") or plan.get("deck_id") or ""
     title = plan.get("title") or state.get("user_request", "PPT 演示")
     theme = plan.get("theme", "dark-tech")
     slide_items = state.get("skill_outputs", {}).get("ppt_slide", [])
-    slide_items = sorted(
-        [s for s in slide_items if isinstance(s, dict) and s.get("html")],
-        key=lambda s: int(s.get("slide_index", 0)),
-    )
-    total = len(slide_items)
+    by_index: dict[int, dict] = {
+        int(s.get("slide_index", 0)): s
+        for s in slide_items
+        if isinstance(s, dict) and s.get("html") and int(s.get("slide_index", 0) or 0) > 0
+    }
 
-    sections = "\n\n".join(item["html"] for item in slide_items)
+    if deck_id:
+        from backend.tools.ppt_run_store import load_slide_html, read_manifest
+        manifest = read_manifest(deck_id)
+        for key, meta in (manifest.get("slides") or {}).items():
+            try:
+                idx = int(key)
+            except (TypeError, ValueError):
+                continue
+            if idx in by_index:
+                continue
+            stored_html = load_slide_html(deck_id, idx)
+            if stored_html:
+                by_index[idx] = {
+                    "deck_id": deck_id,
+                    "slide_index": idx,
+                    "html": stored_html,
+                    "title": meta.get("title", f"Slide {idx}"),
+                    "status": meta.get("status", "stored"),
+                    "error": meta.get("error", ""),
+                }
+
+    expected_slides = [
+        int(slide.get("index") or idx + 1)
+        for idx, slide in enumerate(plan.get("slides", []))
+        if isinstance(slide, dict)
+    ] or sorted(by_index.keys())
+    total = len(expected_slides)
+    failed_slides: list[dict] = []
+    complete_items: list[dict] = []
+
+    for slide_idx in expected_slides:
+        item = by_index.get(slide_idx)
+        slide_spec = next(
+            (s for s in plan.get("slides", []) if int(s.get("index", 0) or 0) == slide_idx),
+            {"index": slide_idx, "title": f"Slide {slide_idx}", "bullets": [], "visual": ""},
+        )
+        if not item:
+            placeholder = _fallback_slide_html(slide_spec, total)
+            item = {
+                "deck_id": deck_id,
+                "slide_index": slide_idx,
+                "html": placeholder,
+                "title": slide_spec.get("title", f"Slide {slide_idx}"),
+                "status": "missing-placeholder",
+                "error": "slide was not generated in this run",
+            }
+            if deck_id:
+                from backend.tools.ppt_run_store import save_slide
+                save_slide(
+                    deck_id,
+                    slide_idx,
+                    html=placeholder,
+                    title=item["title"],
+                    status=item["status"],
+                    error=item["error"],
+                )
+        if item.get("status") not in ("ok", "stored"):
+            failed_slides.append({
+                "slide_index": slide_idx,
+                "status": item.get("status", ""),
+                "error": item.get("error", ""),
+                "title": item.get("title", f"Slide {slide_idx}"),
+            })
+        complete_items.append(item)
+
+    sections = "\n\n".join(item["html"] for item in complete_items)
     css = _deck_theme_css(theme)
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -672,14 +807,25 @@ show(0);
 
     from backend.api import save_skill_html
     saved = save_skill_html("ppt-animation", html, title=str(title))
+    if deck_id:
+        from backend.tools.ppt_run_store import save_artifact
+        save_artifact(deck_id, "assembled_html", {
+            "html_url": saved["html_url"],
+            "html_path": saved["file_path"],
+            "title": saved["title"],
+            "slides": total,
+            "failed_slides": failed_slides,
+        })
 
     return {"skill_outputs": {"ppt-animation": [{
         "task": my_tasks[0].get("prompt", ""),
         "result": html,
+        "deck_id": deck_id,
         "html_url": saved["html_url"],
         "html_title": saved["title"],
         "html_path": saved["file_path"],
         "slides": total,
+        "failed_slides": failed_slides,
         "source": "parallel-ppt",
     }]}}
 
