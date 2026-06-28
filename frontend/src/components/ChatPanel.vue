@@ -45,12 +45,19 @@ function openLightbox(src, alt) {
 }
 
 const exporting = ref({})  // Track export state per html_url
+const pptxExportMode = ref('final')
+const pptxFramesPerSlide = ref(3)
 
 async function doExportPptx(htmlResult) {
   const key = htmlResult.html_url
   exporting.value[key] = true
   try {
-    const result = await exportPptx({ htmlUrl: htmlResult.html_url, title: htmlResult.title || '' })
+    const result = await exportPptx({
+      htmlUrl: htmlResult.html_url,
+      title: htmlResult.title || '',
+      mode: pptxExportMode.value,
+      framesPerSlide: pptxFramesPerSlide.value,
+    })
     const downloadUrl = result.download_url || result.file_url
     if (result.success && downloadUrl) {
       // Trigger browser download
@@ -212,15 +219,35 @@ watch(() => store.currentResponse, (val) => {
                 >
                   预览
                 </a>
-                <button
-                  v-if="hr.skill_name === 'ppt-animation'"
-                  @click="doExportPptx(hr)"
-                  :disabled="exporting[hr.html_url]"
-                  class="text-xs px-3 py-1.5 rounded-lg bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white transition-colors flex items-center gap-1"
-                >
-                  <span v-if="exporting[hr.html_url]" class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                  {{ exporting[hr.html_url] ? '导出中...' : '导出 PPTX' }}
-                </button>
+                <div v-if="hr.skill_name === 'ppt-animation'" class="flex items-center gap-2">
+                  <select
+                    v-model="pptxExportMode"
+                    :disabled="exporting[hr.html_url]"
+                    class="text-xs bg-surface-800 border border-gray-600 rounded-lg px-2 py-1.5 text-gray-200 focus:outline-none focus:border-primary-500"
+                    title="PPTX 导出模式"
+                  >
+                    <option value="final">最终画面</option>
+                    <option value="keyframes">关键帧</option>
+                  </select>
+                  <input
+                    v-if="pptxExportMode === 'keyframes'"
+                    v-model.number="pptxFramesPerSlide"
+                    type="number"
+                    min="2"
+                    max="6"
+                    :disabled="exporting[hr.html_url]"
+                    class="w-14 text-xs bg-surface-800 border border-gray-600 rounded-lg px-2 py-1.5 text-gray-200 focus:outline-none focus:border-primary-500"
+                    title="每页关键帧数量"
+                  />
+                  <button
+                    @click="doExportPptx(hr)"
+                    :disabled="exporting[hr.html_url]"
+                    class="text-xs px-3 py-1.5 rounded-lg bg-orange-700 hover:bg-orange-600 disabled:bg-gray-700 text-white transition-colors flex items-center gap-1"
+                  >
+                    <span v-if="exporting[hr.html_url]" class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    {{ exporting[hr.html_url] ? '导出中...' : '导出 PPTX' }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

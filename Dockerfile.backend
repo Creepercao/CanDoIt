@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r requirements.txt
 
+# Browser runtime used for HTML -> PPTX screenshot export.
+RUN python -m playwright install --with-deps chromium
+
 # App code
 COPY backend/ ./backend/
 COPY providers.yaml ./
