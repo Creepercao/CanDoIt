@@ -23,6 +23,8 @@ outputs/*.pptx
 outputs/*.html
 outputs/skills/
 outputs/chroma_db/
+outputs/ppt_runs/
+outputs/pptx_frames/
 
 # IDE
 .vscode/
