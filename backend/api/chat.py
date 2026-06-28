@@ -64,6 +64,14 @@ class VideoGenRequest(BaseModel):
     duration: int = 5
 
 
+class PPTGenRequest(BaseModel):
+    topic: str
+    theme: str = "dark-tech"
+    slide_count: int = 6
+    chat_model_id: str = ""
+    stream: bool = True
+
+
 # ---- Agent helpers (dynamic, depends on skill_registry) ----
 
 def _get_agent_labels() -> dict[str, str]:
@@ -366,3 +374,37 @@ async def api_generate_video(req: VideoGenRequest):
     return await generate_video(
         prompt=req.prompt, model_id=req.model_id, duration=req.duration,
     )
+
+
+@router.post("/generate-ppt")
+async def api_generate_ppt(req: PPTGenRequest):
+    """Dedicated PPT endpoint — reuses the agent-loop pipeline.
+
+    Constructs a Chinese message with PPT keywords so the supervisor's
+    ``validate_and_complete_plan`` auto-injects the ``research →
+    ppt_planner → ppt_slide* → ppt_assembler`` chain, then streams
+    progress via SSE (same events as /api/chat).
+    """
+    theme_labels = {
+        "dark-tech": "暗色炫酷科技风",
+        "warm-paper": "暖色报纸风",
+        "clean-white": "简约白色风",
+    }
+    theme_desc = theme_labels.get(req.theme, req.theme)
+    message = (
+        f"生成一个关于「{req.topic}」的PPT演示文稿。"
+        f"使用{theme_desc}主题风格。"
+        f"总共需要{req.slide_count}页幻灯片。"
+    )
+    chat_req = ChatRequest(
+        message=message,
+        chat_model_id=req.chat_model_id or "",
+        stream=req.stream,
+    )
+    if req.stream:
+        return StreamingResponse(
+            _stream_chat(chat_req),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    return await _run_agents(chat_req)

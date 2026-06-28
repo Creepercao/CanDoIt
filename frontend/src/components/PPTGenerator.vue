@@ -1,0 +1,187 @@
+<script setup>
+import { ref } from 'vue'
+import { useChatStore } from '../stores/chat.js'
+import { exportPptx } from '../api/index.js'
+
+const store = useChatStore()
+
+const topic = ref('')
+const theme = ref('dark-tech')
+const slideCount = ref(6)
+const exporting = ref({})
+
+const themes = [
+  { value: 'dark-tech', label: 'Dark Tech — 暗色炫酷科技风' },
+  { value: 'warm-paper', label: 'Warm Paper — 暖色报纸风' },
+  { value: 'clean-white', label: 'Clean White — 简约白色风' },
+]
+
+async function generate() {
+  if (!topic.value.trim() || store.pptGenerating) return
+  await store.doGeneratePPT(topic.value, {
+    theme: theme.value,
+    slideCount: slideCount.value,
+  })
+}
+
+function stop() {
+  store.stopPPTGeneration()
+}
+
+async function downloadPPTX(htmlUrl, title) {
+  exporting.value[htmlUrl] = true
+  try {
+    const result = await exportPptx({
+      htmlUrl,
+      title: title || 'PPT',
+      mode: 'final',
+    })
+    if (result.file_url) {
+      window.open(result.file_url, '_blank')
+    } else if (result.error) {
+      alert('PPTX export failed: ' + result.error)
+    }
+  } catch (e) {
+    console.error('PPTX export error:', e)
+    alert('PPTX export failed: ' + (e.message || 'unknown error'))
+  } finally {
+    exporting.value[htmlUrl] = false
+  }
+}
+</script>
+
+<template>
+  <div class="flex flex-col h-full">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0">
+      <h2 class="font-semibold text-lg text-white">📊 PPT Presentation</h2>
+    </div>
+
+    <!-- Content -->
+    <div class="flex-1 overflow-y-auto p-4 space-y-4">
+      <!-- Topic -->
+      <div>
+        <label class="text-xs text-gray-400 mb-1.5 block">What topic should the PPT cover?</label>
+        <textarea
+          v-model="topic"
+          placeholder="Describe the subject for your slide deck..."
+          rows="3"
+          :disabled="store.pptGenerating"
+          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 resize-none disabled:opacity-50 focus:border-primary-500 focus:outline-none"
+        />
+      </div>
+
+      <!-- Theme + slide count -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-gray-400 mb-1 block">Theme</label>
+          <select
+            v-model="theme"
+            :disabled="store.pptGenerating"
+            class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 focus:border-primary-500 focus:outline-none"
+          >
+            <option v-for="t in themes" :key="t.value" :value="t.value">{{ t.label }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 mb-1 block">Slides: {{ slideCount }}</label>
+          <input
+            v-model.number="slideCount"
+            type="range" min="3" max="15"
+            :disabled="store.pptGenerating"
+            class="w-full accent-primary-500 disabled:opacity-50"
+          />
+          <div class="flex justify-between text-[10px] text-gray-500 mt-0.5">
+            <span>3</span><span>15</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="flex items-center gap-2">
+        <button
+          v-if="!store.pptGenerating"
+          @click="generate"
+          :disabled="!topic.trim()"
+          class="flex-1 py-3 bg-primary-600 hover:bg-primary-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-xl transition-colors"
+        >
+          🚀 Generate PPT
+        </button>
+        <button
+          v-else
+          @click="stop"
+          class="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-xl transition-colors"
+        >
+          ⏹ Stop Generation
+        </button>
+      </div>
+
+      <!-- Generating state -->
+      <div v-if="store.pptGenerating"
+        class="bg-surface-800 rounded-xl border border-primary-700/50 p-4 text-center">
+        <div class="animate-pulse text-primary-400 text-sm">
+          Generating PPT slides — this may take 1-3 minutes...
+        </div>
+        <div class="mt-2 w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+          <div class="bg-gradient-to-r from-primary-500 to-orange-500 h-full rounded-full animate-pulse" style="width:60%" />
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div v-if="store.pptResults.length" class="space-y-3">
+        <h3 class="text-sm font-medium text-gray-300 border-t border-gray-700/50 pt-3">
+          Generation Results
+        </h3>
+        <div
+          v-for="(item, idx) in store.pptResults.slice().reverse()"
+          :key="idx"
+          class="bg-surface-800 rounded-xl border border-gray-700/50 p-4 space-y-2"
+        >
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-white font-medium truncate max-w-[70%]">{{ item.topic }}</p>
+            <span class="text-[10px] text-gray-500">
+              {{ item.theme }} · {{ item.slideCount }} slides
+            </span>
+          </div>
+
+          <!-- Error -->
+          <div v-if="item.error" class="text-sm text-red-400">{{ item.error }}</div>
+
+          <!-- HTML results -->
+          <div v-else class="space-y-2">
+            <div
+              v-for="html in (item.htmlResults || [])"
+              :key="html.html_url"
+              class="flex items-center justify-between bg-gray-900/50 rounded-lg px-3 py-2"
+            >
+              <a
+                :href="html.html_url"
+                target="_blank"
+                class="text-primary-400 hover:underline text-sm truncate mr-2"
+              >
+                📄 {{ html.title || 'HTML Preview' }}
+              </a>
+              <button
+                @click="downloadPPTX(html.html_url, html.title || 'PPT')"
+                :disabled="exporting[html.html_url]"
+                class="shrink-0 text-xs px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors"
+              >
+                {{ exporting[html.html_url] ? '⏳' : '📥 PPTX' }}
+              </button>
+            </div>
+
+            <!-- Response text if any -->
+            <details v-if="item.response" class="text-xs">
+              <summary class="text-gray-500 cursor-pointer">Response text</summary>
+              <div class="mt-1 text-gray-400 whitespace-pre-wrap max-h-32 overflow-y-auto">{{ item.response }}</div>
+            </details>
+          </div>
+
+          <div class="text-[10px] text-gray-600 text-right">
+            {{ new Date(item.timestamp).toLocaleString() }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

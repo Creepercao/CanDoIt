@@ -1,9 +1,32 @@
 """Model and provider routes."""
+from typing import Literal
+
 from fastapi import APIRouter
-from backend.config import PROVIDERS
+from pydantic import BaseModel
+
+from backend.config import PROVIDERS, ProviderConfig, save_providers_safe, reload_providers
 from backend.models.registry import registry
 
 router = APIRouter(tags=["models"])
+
+
+# ── Pydantic request models ──────────────────────────────────────────
+
+
+class ProviderCreateRequest(BaseModel):
+    name: str
+    type: Literal["llm", "image", "video", "search"] = "llm"
+    base_url: str = ""
+    api_key: str = ""
+
+
+class ProviderUpdateRequest(BaseModel):
+    type: str = ""
+    base_url: str = ""
+    api_key: str = ""  # sentinel: if contains "***", keep existing key
+
+
+# ── Health ────────────────────────────────────────────────────────────
 
 
 @router.get("/health")
@@ -31,6 +54,52 @@ async def list_providers():
         }
         for p in PROVIDERS
     ]
+
+
+@router.post("/providers")
+async def create_provider(req: ProviderCreateRequest):
+    providers = list(PROVIDERS)
+    if any(p.name == req.name for p in providers):
+        return {"error": f"Provider '{req.name}' already exists"}
+    new_provider = ProviderConfig(
+        name=req.name, type=req.type, base_url=req.base_url, api_key=req.api_key,
+    )
+    providers.append(new_provider)
+    await save_providers_safe(providers)
+    await registry.refresh()
+    return {"success": True, "name": req.name}
+
+
+@router.put("/providers/{name}")
+async def update_provider(name: str, req: ProviderUpdateRequest):
+    providers = list(PROVIDERS)
+    for i, p in enumerate(providers):
+        if p.name == name:
+            updated = p.model_dump()
+            if req.type:
+                updated["type"] = req.type
+            if req.base_url:
+                updated["base_url"] = req.base_url
+            # If the frontend sends back the masked value (contains "***"),
+            # preserve the existing full key.  Otherwise use the new key.
+            if req.api_key and "***" not in req.api_key:
+                updated["api_key"] = req.api_key
+            providers[i] = ProviderConfig(**updated)
+            await save_providers_safe(providers)
+            await registry.refresh()
+            return {"success": True, "name": name}
+    return {"error": f"Provider '{name}' not found"}
+
+
+@router.delete("/providers/{name}")
+async def delete_provider(name: str):
+    providers = list(PROVIDERS)
+    new_list = [p for p in providers if p.name != name]
+    if len(new_list) == len(providers):
+        return {"error": f"Provider '{name}' not found"}
+    await save_providers_safe(new_list)
+    await registry.refresh()
+    return {"success": True, "name": name}
 
 
 @router.get("/models")
