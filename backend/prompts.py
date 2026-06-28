@@ -33,7 +33,8 @@ SUPERVISOR_PROMPT_TEMPLATE = """你是智能任务规划器。分析用户请求
 - 独立任务（无依赖）可以并行执行
 - 有依赖的任务必须等前置步骤完成
 - research 必须在 analyst/chart 之前，analyst 必须在 chart 之前
-- 用户要 PPT/演示/幻灯片/笔记 → 必须包含 research + ppt-animation/学霸笔记
+- 用户要 PPT/演示/幻灯片 → 必须包含 research + ppt_planner；系统会自动并行生成各页并组装
+- 用户要 学习笔记/课堂笔记 → 必须包含 research + 学霸笔记
 - 简单问候/闲聊/常识问题 → 直接用 direct_response 回复，plan 留空
 - direct_response 永远不能为空字符串——如果没有 plan 就必须填写回复
 

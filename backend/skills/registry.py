@@ -337,6 +337,12 @@ class SkillRegistry:
         for skill in self.get_enabled().values():
             if not self._has_worker(skill):
                 continue
+            # PPT is handled by the built-in parallel pipeline:
+            # research -> ppt_planner -> ppt_slide* -> ppt_assembler.
+            # Keep the legacy package available for rendering/export metadata,
+            # but don't route new tasks to its monolithic worker.
+            if skill.name == "ppt-animation":
+                continue
 
             triggers = []
             if skill._package_meta:
@@ -360,11 +366,12 @@ class SkillRegistry:
                 )
 
         # Static built-in rules (always present)
-        lines.append(f"{rule_num + 1}. 用户要 数据统计图表（柱状图/折线/饼图）→ 必须用 research→analyst→chart 链路。")
-        lines.append(f'{rule_num + 2}. 用户要 图片/照片/插画 → 必须分派给 "image_gen"。')
-        lines.append(f'{rule_num + 3}. 用户要 视频/动画 → 必须分派给 "video_gen"。')
-        lines.append(f'{rule_num + 4}. 用户要 写代码/编程 → 必须分派给 "code"。')
-        lines.append(f"{rule_num + 5}. 只有纯闲聊（问候、无产出的简单问题）才用 direct_response。")
+        lines.append(f'{rule_num + 1}. 用户要 PPT/演示文稿/幻灯片/汇报 → 必须用 research→ppt_planner 链路；不要直接分派给 "ppt-animation"。')
+        lines.append(f"{rule_num + 2}. 用户要 数据统计图表（柱状图/折线/饼图）→ 必须用 research→analyst→chart 链路。")
+        lines.append(f'{rule_num + 3}. 用户要 图片/照片/插画 → 必须分派给 "image_gen"。')
+        lines.append(f'{rule_num + 4}. 用户要 视频/动画 → 必须分派给 "video_gen"。')
+        lines.append(f'{rule_num + 5}. 用户要 写代码/编程 → 必须分派给 "code"。')
+        lines.append(f"{rule_num + 6}. 只有纯闲聊（问候、无产出的简单问题）才用 direct_response。")
 
         return "\n".join(lines)
 
