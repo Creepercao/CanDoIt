@@ -82,7 +82,8 @@ function renderContent(text) {
   return renderMarkdown(text)
 }
 
-// Debounced streaming markdown – re-render at most every 80ms
+// Debounced streaming markdown – re-render at most every 30ms so the
+// character-by-character effect is visible but DOM updates stay smooth.
 const streamingHtml = ref('')
 let debounceTimer = null
 watch(() => store.currentResponse, (val) => {
@@ -94,7 +95,7 @@ watch(() => store.currentResponse, (val) => {
   clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => {
     streamingHtml.value = renderMarkdown(val || '')
-  }, 80)
+  }, 30)
 })
 </script>
 

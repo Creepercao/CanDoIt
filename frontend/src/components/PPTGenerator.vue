@@ -27,6 +27,20 @@ function scrollToBottom() {
 watch(() => store.pptStreamText, () => nextTick(() => scrollToBottom()))
 watch(() => store.pptSteps.length, () => nextTick(() => scrollToBottom()))
 
+// Debounced markdown rendering (same pattern as ChatPanel)
+const streamHtml = ref('')
+let debounceTimer = null
+watch(() => store.pptStreamText, (val) => {
+  if (!store.pptGenerating) {
+    streamHtml.value = renderMarkdown(val)
+    return
+  }
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    streamHtml.value = renderMarkdown(val || '')
+  }, 30)
+})
+
 async function generate() {
   if (!topic.value.trim() || store.pptGenerating) return
   await store.doGeneratePPT(topic.value, {
@@ -175,7 +189,7 @@ function formatTime(ts) {
         >
           <div v-if="store.pptStreamText"
             class="prose prose-invert prose-sm max-w-none text-sm leading-relaxed"
-            v-html="renderMarkdown(store.pptStreamText)"
+            v-html="streamHtml"
           />
           <div v-else class="text-sm text-gray-500 animate-pulse">
             Planning slides...
