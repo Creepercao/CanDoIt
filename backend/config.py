@@ -1,6 +1,7 @@
 """Load provider configuration from providers.yaml (or legacy API.json)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -12,6 +13,10 @@ from pydantic import BaseModel
 logger = logging.getLogger("config")
 
 _PROJECT_ROOT = Path(__file__).parent.parent
+
+# Serialize writes to providers.yaml so concurrent CRUD requests don't
+# corrupt the file.
+_provider_lock = asyncio.Lock()
 
 
 class ProviderConfig(BaseModel):
@@ -130,6 +135,45 @@ def get_provider_by_type(provider_type: str) -> ProviderConfig | None:
             return p
     # Fallback: return first provider of any type
     return PROVIDERS[0] if PROVIDERS else None
+
+
+# ── Persistence ───────────────────────────────────────────────────────
+
+
+def save_providers(providers: list[ProviderConfig]) -> None:
+    """Write the providers list to ``providers.yaml``."""
+    yaml_path = _PROJECT_ROOT / "providers.yaml"
+    data: dict = {
+        "providers": [
+            {
+                "name": p.name,
+                "type": p.type,
+                "base_url": p.base_url,
+                "api_key": p.api_key,
+            }
+            for p in providers
+        ]
+    }
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+async def save_providers_safe(providers: list[ProviderConfig]) -> None:
+    """Lock-guarded write + in-memory reload."""
+    async with _provider_lock:
+        save_providers(providers)
+        reload_providers()
+
+
+def reload_providers() -> list[ProviderConfig]:
+    """Re-read ``providers.yaml`` and refresh the module-level singleton."""
+    global PROVIDERS
+    PROVIDERS = load_providers()
+    logger.info(
+        "Providers reloaded: %d provider(s)",
+        len(PROVIDERS),
+    )
+    return PROVIDERS
 
 
 # ── Module-level singleton ───────────────────────────────────────────

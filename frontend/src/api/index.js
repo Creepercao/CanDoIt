@@ -10,6 +10,25 @@ export async function fetchProviders() {
   return data
 }
 
+export async function createProvider({ name, type, baseUrl, apiKey }) {
+  const { data } = await api.post('/providers', {
+    name, type, base_url: baseUrl, api_key: apiKey,
+  })
+  return data
+}
+
+export async function updateProvider(name, { type, baseUrl, apiKey }) {
+  const { data } = await api.put(`/providers/${encodeURIComponent(name)}`, {
+    type, base_url: baseUrl, api_key: apiKey,
+  })
+  return data
+}
+
+export async function deleteProvider(name) {
+  const { data } = await api.delete(`/providers/${encodeURIComponent(name)}`)
+  return data
+}
+
 export async function fetchModels(type = '') {
   const { data } = await api.get('/models', { params: { type } })
   return data
@@ -34,6 +53,39 @@ export async function refreshModels() {
   const { data } = await api.post('/refresh-models')
   return data
 }
+
+// ── Shared SSE stream reader ──────────────────────────────────────────
+
+async function readSSEStream(response, onEvent) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let currentEvent = 'message'
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim()
+      } else if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6))
+          onEvent(currentEvent, data)
+        } catch {}
+        currentEvent = 'message'
+      }
+    }
+  }
+}
+
+
+// ── Chat ──────────────────────────────────────────────────────────────
 
 export async function sendMessage({
   message,
@@ -74,32 +126,26 @@ async function streamChat({ message, chatModelId, imageModelId, videoModelId, se
     }),
     signal: abortSignal,
   })
+  return await readSSEStream(response, onEvent)
+}
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let currentEvent = 'message'
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+// ── PPT ───────────────────────────────────────────────────────────────
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim()
-      } else if (line.startsWith('data: ')) {
-        try {
-          const data = JSON.parse(line.slice(6))
-          onEvent(currentEvent, data)
-        } catch {}
-        currentEvent = 'message'
-      }
-    }
-  }
+export async function streamPPT({ topic, theme, slideCount, chatModelId, onEvent, abortSignal }) {
+  const response = await fetch('/api/generate-ppt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic,
+      theme,
+      slide_count: slideCount,
+      chat_model_id: chatModelId,
+      stream: true,
+    }),
+    signal: abortSignal,
+  })
+  return await readSSEStream(response, onEvent)
 }
 
 export async function generateImage({ prompt, modelId = '', negativePrompt = '', width = 1024, height = 1024, steps = 20 }) {

@@ -7,6 +7,8 @@ import {
   installSkillPackage, uninstallSkillPackage,
   createSession, fetchSessions, fetchSession,
   saveSession, deleteSessionApi,
+  fetchProviders, createProvider, updateProvider, deleteProvider,
+  streamPPT,
 } from '../api/index.js'
 
 // localStorage helpers
@@ -62,6 +64,14 @@ export const useChatStore = defineStore('chat', () => {
   // Skills
   const skills = ref([])
   const enabledSkills = ref([])
+
+  // Providers
+  const providers = ref([])
+
+  // PPT
+  const pptResults = ref([])
+  const pptGenerating = ref(false)
+  let pptAbortController = null
 
   // Dynamic agent emoji map (built-in + skills) for ThinkingPanel
   const agentEmojiMap = computed(() => {
@@ -136,6 +146,100 @@ export const useChatStore = defineStore('chat', () => {
     const result = await uninstallSkillPackage(name)
     await loadSkills()
     return result
+  }
+
+  // ── Provider actions ────────────────────────────────────────────
+
+  async function loadProviders() {
+    try {
+      providers.value = await fetchProviders()
+    } catch (e) {
+      console.error('Failed to load providers:', e)
+    }
+  }
+
+  async function doSaveProvider(providerData, isNew) {
+    if (isNew) {
+      await createProvider(providerData)
+    } else {
+      await updateProvider(providerData.name, providerData)
+    }
+    await loadProviders()
+    await doRefreshModels()
+  }
+
+  async function doDeleteProvider(name) {
+    await deleteProvider(name)
+    await loadProviders()
+    await doRefreshModels()
+  }
+
+  // ── PPT actions ─────────────────────────────────────────────────
+
+  async function doGeneratePPT(topic, options = {}) {
+    if (!topic.trim() || pptGenerating.value) return
+
+    const {
+      theme = 'dark-tech',
+      slideCount = 6,
+      chatModelId = selectedChatModel.value,
+    } = options
+
+    pptGenerating.value = true
+    pptAbortController = new AbortController()
+
+    let finalHtmlResults = []
+    let currentResponse = ''
+
+    try {
+      await streamPPT({
+        topic,
+        theme,
+        slideCount,
+        chatModelId,
+        abortSignal: pptAbortController.signal,
+        onEvent: (eventType, data) => {
+          switch (eventType) {
+            case 'token':
+              currentResponse += data.text || ''
+              break
+            case 'final':
+              if (!currentResponse || currentResponse.trim().length === 0) {
+                currentResponse = data.response || ''
+              }
+              finalHtmlResults = data.html_results || []
+              break
+            case 'error':
+              currentResponse = `Error: ${data.error}`
+              break
+          }
+        },
+      })
+
+      pptResults.value.push({
+        topic,
+        theme,
+        slideCount,
+        htmlResults: finalHtmlResults,
+        response: currentResponse,
+        timestamp: Date.now(),
+      })
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        pptResults.value.push({
+          topic,
+          error: e.message,
+          timestamp: Date.now(),
+        })
+      }
+    } finally {
+      pptGenerating.value = false
+      pptAbortController = null
+    }
+  }
+
+  function stopPPTGeneration() {
+    if (pptAbortController) pptAbortController.abort()
   }
 
   function addThinkStep(step) {
@@ -419,9 +523,12 @@ export const useChatStore = defineStore('chat', () => {
     activeTab, imageResults, videoResults, allModels,
     skills, enabledSkills, agentEmojiMap,
     sessions, currentSessionId,
+    providers, pptResults, pptGenerating,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
     loadSessions, newSession, switchSession, deleteSession, deleteCurrentSession,
+    loadProviders, doSaveProvider, doDeleteProvider,
+    doGeneratePPT, stopPPTGeneration,
   }
 })
