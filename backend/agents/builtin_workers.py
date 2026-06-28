@@ -32,6 +32,12 @@ from backend.prompts import (
 
 logger = logging.getLogger("graph.workers")
 
+# Limit concurrent LLM calls during parallel slide generation so we don't
+# trip provider rate limits.  8 slides × 1 provider → throttling → mass
+# timeouts.  With semaphore(4) the first 4 run immediately, the next 4
+# queue locally and start as soon as a slot frees.
+_SLIDE_LLM_SEM = asyncio.Semaphore(4)
+
 
 # ── Helpers ──
 
@@ -748,7 +754,15 @@ async def ppt_slide_worker(state: dict) -> dict:
     all_slides = plan.get("slides", [])
     total = len(all_slides) or len(my_tasks)
     theme = plan.get("theme", "dark-tech")
-    llm = _get_chat_llm(state)
+    # Slide generation doesn't need 4096 output tokens — a single
+    # <section> fragment is 80-220 lines of HTML.  Smaller max_tokens
+    # also reduces provider-side latency.
+    model_id = state.get("chat_model_id", "")
+    llm = create_chat_model(
+        model_id or "deepseek-ai/DeepSeek-V3",
+        temperature=0.7,
+        max_tokens=2048,
+    )
 
     async def _gen_one(task: dict) -> dict:
         deck_id = task.get("deck_id") or plan.get("deck_id") or ""
@@ -792,10 +806,11 @@ async def ppt_slide_worker(state: dict) -> dict:
         status = "ok"
         error = ""
         try:
-            resp = await asyncio.wait_for(
-                llm.ainvoke([HumanMessage(content=prompt)]),
-                timeout=150,
-            )
+            async with _SLIDE_LLM_SEM:
+                resp = await asyncio.wait_for(
+                    llm.ainvoke([HumanMessage(content=prompt)]),
+                    timeout=150,
+                )
             html = _first_html_fragment(resp.content if hasattr(resp, "content") else str(resp))
             if "<section" not in html:
                 raise ValueError("missing section")
