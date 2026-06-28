@@ -93,6 +93,8 @@ export const useChatStore = defineStore('chat', () => {
     chat: chatModels.value, image: imageModels.value, video: videoModels.value,
   }))
 
+  const modelsLoading = ref(false)
+
   async function loadModels() {
     try {
       const [chat, img, vid] = await Promise.all([
@@ -115,8 +117,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function doRefreshModels() {
-    await refreshModels()
-    await loadModels()
+    modelsLoading.value = true
+    try {
+      const result = await refreshModels()
+      await loadModels()
+      return result
+    } finally {
+      modelsLoading.value = false
+    }
   }
 
   async function loadSkills() {
@@ -568,7 +576,7 @@ export const useChatStore = defineStore('chat', () => {
     activeTab, imageResults, videoResults, allModels,
     skills, enabledSkills, agentEmojiMap,
     sessions, currentSessionId,
-    providers, pptResults, pptGenerating, pptStreamText, pptSteps,
+    providers, pptResults, pptGenerating, pptStreamText, pptSteps, modelsLoading,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
