@@ -4,20 +4,23 @@ FROM ${MIRROR}python:3.12-slim
 
 WORKDIR /app
 
-# System deps (curl for healthcheck, CJK fonts for matplotlib charts)
+# System deps (curl for healthcheck, CJK fonts for matplotlib charts,
+# chromium for Playwright-based HTML -> PPTX visual export)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
     curl \
+    fonts-unifont \
     fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium
 
 # Python deps (use Tsinghua mirror for China)
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r requirements.txt
-
-# Browser runtime used for HTML -> PPTX screenshot export.
-RUN python -m playwright install --with-deps chromium
 
 # App code
 COPY backend/ ./backend/
