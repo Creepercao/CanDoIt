@@ -90,7 +90,7 @@ def _infer_requested_slide_count(text: str) -> int | None:
     """Infer explicit requested slide count from Chinese/English prompts."""
     patterns = [
         r"(\d{1,2})\s*(?:页|頁|张|張|slides?|pages?)",
-        r"(?:页数|頁數|做成|制作成|生成|make|create)\D{0,12}(\d{1,2})",
+        r"(?:页数|頁數|做成|制作成|生成|make|create)[^\d\n]{0,12}(\d{1,2})\s*(?:页|頁|张|張|slides?|pages?)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
