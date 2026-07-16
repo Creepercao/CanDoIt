@@ -254,3 +254,21 @@ frontend/src/
   - 标准 Skill 包（`backend/skills/packages/my-skill/`）— SKILL.md + LLM-as-worker
 - **播放 PPT 动画时，前端 nginx 超时设为 10 分钟** — PPT 生成可能耗时较长，SSE 有心跳保活。
 - **Skill 包上传限制 200 MB** — 与 `starlette.formparsers.MultiPartParser.max_file_size` 一致。
+
+## Feishu/Lark Local Service Boundary
+
+The `/api/lark-agents/*` endpoints expose four Feishu-oriented local service
+agents: research, ppt, meeting, and data-report. They are HTTP service
+contracts only. This repository must not directly call Feishu/Lark APIs,
+`lark-cli`, IM send APIs, Drive upload APIs, Doc write APIs, Slides APIs, or
+Task APIs from these endpoints.
+
+Expected integration shape:
+- an external Feishu bot, gateway, or workflow reads Feishu context;
+- the adapter calls the local `/api/lark-agents/*` endpoint;
+- this project returns structured AI results and local artifact links;
+- the adapter publishes those results back to Feishu.
+
+Keep Feishu identifiers in the opaque `source` object and return them unchanged.
+Do not add Feishu credentials or direct Feishu network behavior to this project
+unless the service boundary is explicitly changed.

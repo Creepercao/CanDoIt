@@ -253,3 +253,27 @@ SKILL = Skill(
 - 视频生成在不支持的提供商上会回退到图像关键帧
 - PPT 动画预览页面 nginx 超时 10 分钟，SSE 有心跳保活
 - Skill 包上传限制 200 MB
+
+## Feishu/Lark Agent Local Service
+
+The project can act as a local AI service for Feishu/Lark bots, workflows, or
+gateway adapters. It does not call Feishu APIs directly. External adapters
+should collect Feishu context, call these endpoints, and publish the returned
+results back to Feishu.
+
+Available local service agents:
+
+| Agent | Endpoint | Purpose |
+|------|----------|---------|
+| Research Agent | `POST /api/lark-agents/research` | Research and summarize a topic or Feishu context |
+| PPT Agent | `POST /api/lark-agents/ppt` | Generate a local HTML/PPT deck from a topic and context |
+| Meeting Agent | `POST /api/lark-agents/meeting` | Summarize transcripts into minutes, decisions, and action items |
+| Data Report Agent | `POST /api/lark-agents/data-report` | Analyze Sheet/Base data and produce report-style conclusions |
+
+Catalog endpoint:
+
+```http
+GET /api/lark-agents
+```
+
+See `docs/lark-agents-service.md` for request and response contracts.
