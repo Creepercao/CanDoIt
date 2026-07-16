@@ -31,6 +31,12 @@ outputs/pptx_frames/
 .idea/
 .claude/
 
+# Local Feishu/Lark dedicated backend variant
+backend_lark/
+Dockerfile.backend.lark
+docker-compose.lark.yml
+docs/lark-agents-service.md
+
 # OS
 .DS_Store
 Thumbs.db
