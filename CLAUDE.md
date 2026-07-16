@@ -255,20 +255,25 @@ frontend/src/
 - **播放 PPT 动画时，前端 nginx 超时设为 10 分钟** — PPT 生成可能耗时较长，SSE 有心跳保活。
 - **Skill 包上传限制 200 MB** — 与 `starlette.formparsers.MultiPartParser.max_file_size` 一致。
 
-## Feishu/Lark Local Service Boundary
+## Feishu/Lark Dedicated Backend
 
-The `/api/lark-agents/*` endpoints expose four Feishu-oriented local service
-agents: research, ppt, meeting, and data-report. They are HTTP service
-contracts only. This repository must not directly call Feishu/Lark APIs,
-`lark-cli`, IM send APIs, Drive upload APIs, Doc write APIs, Slides APIs, or
-Task APIs from these endpoints.
+Feishu/Lark integration lives in the parallel `backend_lark.main:app` entry
+point, not in the normal `backend.main:app` web backend. Run it with:
 
-Expected integration shape:
-- an external Feishu bot, gateway, or workflow reads Feishu context;
-- the adapter calls the local `/api/lark-agents/*` endpoint;
-- this project returns structured AI results and local artifact links;
-- the adapter publishes those results back to Feishu.
+```bash
+python -m uvicorn backend_lark.main:app --host 0.0.0.0 --port 8001 --reload
+```
 
-Keep Feishu identifiers in the opaque `source` object and return them unchanged.
-Do not add Feishu credentials or direct Feishu network behavior to this project
-unless the service boundary is explicitly changed.
+or:
+
+```bash
+docker compose -f docker-compose.lark.yml up --build
+```
+
+The Feishu/Lark backend exposes six coarse service agents: research, document,
+ppt, meeting, data-report, and automation. It also exposes
+`/api/feishu/events` for Feishu/Lark-shaped callback payloads and returns
+`publish_actions` for the Feishu sender/gateway layer.
+
+Do not mount Feishu/Lark routes back into `backend.main:app`. Keep the normal
+web backend and the Feishu/Lark backend as parallel runtime variants.

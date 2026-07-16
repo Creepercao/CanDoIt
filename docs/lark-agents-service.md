@@ -1,113 +1,72 @@
-# Local Feishu/Lark Agent Service
+# Feishu/Lark Dedicated Backend
 
-This project can be used as a local service backend for Feishu/Lark bots,
-workflows, or gateway adapters. The endpoints below do not call Feishu/Lark APIs
-directly. They only accept normalized context and return structured local AI
-results.
+The Feishu/Lark integration now lives in a parallel backend variant:
 
-An external Feishu/Lark adapter is responsible for:
+```bash
+python -m uvicorn backend_lark.main:app --host 0.0.0.0 --port 8001 --reload
+```
 
-- listening to IM or event callbacks;
-- reading Doc, Sheet, Base, Slides, Drive, or Minutes content;
-- calling these local service endpoints;
-- publishing returned text and artifact links back to Feishu/Lark.
+Docker:
 
-## Agent Catalog
+```bash
+docker compose -f docker-compose.lark.yml up --build
+```
+
+This app reuses the core CanDoIt Agent Loop, Skills, PPT pipeline, PPTX export,
+PPT run store, Redis cache, and `/outputs` static artifacts, but exposes a
+Feishu/Lark-shaped API surface instead of the normal web app API.
+
+## Runtime Split
+
+Normal backend:
+
+```text
+backend.main:app
+```
+
+Feishu/Lark backend:
+
+```text
+backend_lark.main:app
+```
+
+They are parallel entry points. The Feishu/Lark backend is not mounted into the
+normal backend.
+
+## Endpoints
+
+Health:
 
 ```http
-GET /api/lark-agents
+GET /api/health
 ```
 
-Returns the four local service agents and their endpoint contracts.
-
-## Common Source Object
-
-All endpoints accept an optional `source` object. The backend treats it as
-opaque metadata and returns it unchanged.
-
-```json
-{
-  "source_type": "im|doc|sheet|base|minutes|manual",
-  "source_id": "opaque external id",
-  "title": "source title",
-  "url": "source url",
-  "chat_id": "chat id",
-  "message_id": "message id",
-  "sender_id": "sender id"
-}
-```
-
-Common request fields:
-
-```json
-{
-  "query": "user request",
-  "context_text": "text extracted by the external adapter",
-  "chat_model_id": "",
-  "router_model_id": "",
-  "metadata": {}
-}
-```
-
-## Research Agent
+Agent catalog:
 
 ```http
-POST /api/lark-agents/research
+GET /api/agents
 ```
 
-Use for group chat or document questions that need research and source-aware
-summaries.
-
-```json
-{
-  "query": "Research loop engineering for a product brief",
-  "context_text": "optional text extracted by the adapter",
-  "output_format": "report",
-  "source": {
-    "source_type": "im",
-    "chat_id": "oc_xxx",
-    "message_id": "om_xxx"
-  }
-}
-```
-
-Key outputs:
-
-- `response`
-- `research_results`
-- `tasks`
-
-## PPT Agent
+Dedicated agents:
 
 ```http
-POST /api/lark-agents/ppt
+POST /api/agents/research
+POST /api/agents/document
+POST /api/agents/ppt
+POST /api/agents/meeting
+POST /api/agents/data-report
+POST /api/agents/automation
+POST /api/dispatch
 ```
 
-Use for generating local HTML PPT decks from Feishu/Lark context. The caller can
-publish the returned `html_results` link or call the existing PPTX export API.
+Feishu/Lark event adapters:
 
-```json
-{
-  "query": "Generate a project status deck",
-  "context_text": "optional source document text",
-  "slide_count": 6,
-  "theme": "dark-tech",
-  "export_pptx": false,
-  "source": {
-    "source_type": "doc",
-    "url": "https://..."
-  }
-}
+```http
+POST /api/feishu/events
+POST /api/feishu/dispatch
 ```
 
-Key outputs:
-
-- `response`
-- `html_results`
-- `skill_outputs`
-- `deck_id` inside each HTML result when available
-
-Related endpoints:
+PPT support endpoints reused from the core backend:
 
 ```http
 POST /api/skills/ppt-animation/export-pptx
@@ -115,74 +74,90 @@ GET  /api/ppt-runs/{deck_id}
 POST /api/ppt-runs/{deck_id}/slides/{slide_index}/regenerate
 ```
 
-## Meeting Agent
+## Event Callback
 
-```http
-POST /api/lark-agents/meeting
-```
-
-Use for Minutes, video meeting records, or manually provided transcripts.
+`POST /api/feishu/events` supports URL verification challenge payloads:
 
 ```json
 {
-  "meeting_title": "Project weekly meeting",
-  "participants": ["Alice", "Bob"],
-  "transcript": "meeting transcript or rough notes",
-  "create_action_items": true,
-  "source": {
-    "source_type": "minutes",
-    "source_id": "minutes_xxx"
-  }
+  "challenge": "challenge-string",
+  "token": "verification-token",
+  "type": "url_verification"
 }
 ```
 
-Key outputs:
+It also accepts Feishu/Lark message event payloads and extracts:
 
-- `response` markdown
-- recommended action items inside `response`
-- `tasks`
+- text content;
+- chat id;
+- message id;
+- sender id/open id;
+- tenant key.
 
-## Data Report Agent
-
-```http
-POST /api/lark-agents/data-report
-```
-
-Use for Sheets/Base data after the external adapter has read the table.
+The generated result is returned as:
 
 ```json
 {
-  "table_title": "Weekly sales report",
-  "table_text": "Region,Revenue\nNorth,1200\nSouth,980",
-  "table_json": [
-    {"Region": "North", "Revenue": 1200},
-    {"Region": "South", "Revenue": 980}
-  ],
-  "chart_required": true,
-  "source": {
-    "source_type": "sheet",
-    "url": "https://..."
-  }
+  "code": 0,
+  "msg": "ok",
+  "result": {},
+  "publish_actions": []
 }
 ```
 
-Key outputs:
+## Publish Actions
 
-- `response`
-- `chart_results`
-- `analyst_results`
+The dedicated backend returns Feishu-oriented publish actions instead of sending
+messages by itself:
+
+```json
+{
+  "type": "send_markdown",
+  "title": "ppt result",
+  "text": "markdown content",
+  "chat_id": "oc_xxx",
+  "message_id": "om_xxx",
+  "metadata": {}
+}
+```
+
+Supported action types:
+
+- `send_markdown`
+- `send_text`
+- `send_link`
+- `upload_file`
+- `noop`
+
+For PPT generation, `publish_actions` usually include:
+
+- a markdown summary;
+- a `send_link` action for the generated HTML deck;
+- `metadata.deck_id`;
+- `metadata.status_endpoint`;
+- `metadata.pptx_export_endpoint`.
+
+The Feishu bot/gateway can then decide whether to send the HTML link directly or
+call the PPTX export endpoint and upload the generated file to Feishu Drive.
+
+## Environment
+
+Optional variables:
+
+```bash
+PUBLIC_BASE_URL=http://localhost:8001
+FEISHU_VERIFICATION_TOKEN=your-verification-token
+REDIS_URL=redis://localhost:6379/0
+```
+
+`PUBLIC_BASE_URL` is used to convert local `/outputs/...` paths into links that
+the Feishu-side sender can publish.
+
+`FEISHU_VERIFICATION_TOKEN` enables simple callback token verification.
 
 ## Boundary
 
-These APIs deliberately do not:
-
-- send IM messages;
-- write Docs;
-- upload Drive files;
-- create Slides;
-- create Tasks;
-- call `lark-cli`;
-- store Feishu/Lark credentials.
-
-That boundary keeps this repository deployable as a local HTTP AI service.
-Feishu/Lark communication remains the responsibility of a thin adapter service.
+`backend_lark` is Feishu/Lark-shaped, but it still does not store Feishu app
+credentials or directly call Feishu Open API. The publish step remains a thin
+sender/gateway responsibility. This keeps the AI runtime independent from
+Feishu app credential rotation and message-delivery permissions.
