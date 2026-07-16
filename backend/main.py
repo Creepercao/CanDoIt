@@ -18,6 +18,7 @@ from backend.api.research_cache import router as knowledge_router
 from backend.api.pptx import router as pptx_router
 from backend.api.mcp import router as mcp_router
 from backend.api.ppt_runs import router as ppt_runs_router
+from backend.api.lark_agents import router as lark_agents_router
 
 # Allow up to 200 MB file uploads (skill packages)
 MultiPartParser.max_file_size = 200 * 1024 * 1024
@@ -50,10 +51,12 @@ app.include_router(knowledge_router, prefix="/api")
 app.include_router(pptx_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(ppt_runs_router, prefix="/api")
+app.include_router(lark_agents_router, prefix="/api")
 
 
 @app.on_event("startup")
 async def startup():
+    logger = logging.getLogger("api")
     from backend.models.registry import registry
     from backend.skills.registry import skill_registry
     from backend.skills.package_installer import restore_from_disk
@@ -80,7 +83,6 @@ async def startup():
         await kb._ensure_init()
 
     redis_status = "enabled" if os.environ.get("REDIS_URL") else "disabled"
-    logger = logging.getLogger("api")
     logger.info(
         f"Loaded {len(registry.get_all())} models | "
         f"{len(skill_registry.get_enabled())} skills | "
