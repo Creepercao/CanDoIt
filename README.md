@@ -254,26 +254,37 @@ SKILL = Skill(
 - PPT 动画预览页面 nginx 超时 10 分钟，SSE 有心跳保活
 - Skill 包上传限制 200 MB
 
-## Feishu/Lark Agent Local Service
+## Feishu/Lark Dedicated Backend
 
-The project can act as a local AI service for Feishu/Lark bots, workflows, or
-gateway adapters. It does not call Feishu APIs directly. External adapters
-should collect Feishu context, call these endpoints, and publish the returned
-results back to Feishu.
+The Feishu/Lark integration is a parallel backend variant instead of a route
+mounted into the normal web backend.
 
-Available local service agents:
+```bash
+python -m uvicorn backend_lark.main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+Docker:
+
+```bash
+docker compose -f docker-compose.lark.yml up --build
+```
+
+Dedicated Feishu/Lark endpoints:
 
 | Agent | Endpoint | Purpose |
 |------|----------|---------|
-| Research Agent | `POST /api/lark-agents/research` | Research and summarize a topic or Feishu context |
-| PPT Agent | `POST /api/lark-agents/ppt` | Generate a local HTML/PPT deck from a topic and context |
-| Meeting Agent | `POST /api/lark-agents/meeting` | Summarize transcripts into minutes, decisions, and action items |
-| Data Report Agent | `POST /api/lark-agents/data-report` | Analyze Sheet/Base data and produce report-style conclusions |
+| Research Agent | `POST /api/agents/research` | Research and summarize a topic or Feishu context |
+| Document Agent | `POST /api/agents/document` | Summarize, rewrite, FAQ, and knowledge extraction |
+| PPT Agent | `POST /api/agents/ppt` | Generate local HTML/PPT decks and return publish actions |
+| Meeting Agent | `POST /api/agents/meeting` | Summarize transcripts into minutes, decisions, and action items |
+| Data Report Agent | `POST /api/agents/data-report` | Analyze Sheet/Base data and produce report-style conclusions |
+| Automation Agent | `POST /api/agents/automation` | Convert results into task/workflow-style action plans |
 
-Catalog endpoint:
+Feishu/Lark event adapter:
 
 ```http
-GET /api/lark-agents
+POST /api/feishu/events
+POST /api/feishu/dispatch
 ```
 
-See `docs/lark-agents-service.md` for request and response contracts.
+See `docs/lark-agents-service.md` for the dedicated backend contract.
