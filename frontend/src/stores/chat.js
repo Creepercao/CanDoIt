@@ -199,6 +199,7 @@ export const useChatStore = defineStore('chat', () => {
     const {
       theme = 'dark-tech',
       slideCount = 6,
+      purpose = '展示',
       chatModelId = selectedChatModel.value,
     } = options
 
@@ -215,6 +216,7 @@ export const useChatStore = defineStore('chat', () => {
         topic,
         theme,
         slideCount,
+        purpose,
         chatModelId,
         abortSignal: pptAbortController.signal,
         onEvent: (eventType, data) => {

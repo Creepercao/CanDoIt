@@ -15,6 +15,8 @@ import logging
 import html as html_lib
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 from langchain_core.messages import HumanMessage
 
 from backend.models.provider import create_chat_model
@@ -133,6 +135,70 @@ def _sanitize_slide_html(html: str) -> str:
     return _SECTION_STYLE_RE.sub(_clean, html)
 
 
+_REVEAL_SELECTORS = (
+    ".kicker, .hero-badge, h1, h2, h3, .lead, li, .visual, .card, "
+    ".step, .stat, .hero-icons, .chart, .diagram, .infographic, "
+    ".timeline, .card-row, .stat-row"
+)
+
+
+def _apply_ppt_animation_contract(fragment: str, slide_index: int) -> str:
+    """Normalize a generated slide to the ppt-animation interaction contract.
+
+    LLM slide fragments vary greatly.  Adding reveal metadata during assembly
+    gives every slide the same title-first, content-after animation sequence,
+    including fragments produced by older runs and fallback rendering.
+    """
+    soup = BeautifulSoup(_sanitize_slide_html(fragment), "html.parser")
+    section = soup.find("section")
+    if section is None:
+        return fragment
+
+    classes = list(section.get("class") or [])
+    if "slide" not in classes:
+        classes.insert(0, "slide")
+    section["class"] = classes
+    section["data-slide"] = str(slide_index)
+    section["aria-label"] = section.get("aria-label") or f"第 {slide_index} 页"
+
+    candidates = []
+    seen: set[int] = set()
+    for node in section.select(_REVEAL_SELECTORS):
+        # A container and all of its children should not animate twice.  Keep
+        # high-level visual groups intact while allowing bullets/steps to stage.
+        if any(parent in candidates for parent in node.parents if parent is not section):
+            continue
+        marker = id(node)
+        if marker not in seen:
+            candidates.append(node)
+            seen.add(marker)
+
+    # Ensure sparse custom fragments still have a staged sequence.
+    if len(candidates) < 2:
+        candidates = [
+            node for node in section.find_all(recursive=False)
+            if getattr(node, "name", None) and "page-no" not in (node.get("class") or [])
+        ]
+
+    for order, node in enumerate(candidates[:12], start=1):
+        node_classes = list(node.get("class") or [])
+        if "reveal" not in node_classes:
+            node_classes.append("reveal")
+        node["class"] = node_classes
+        existing_style = (node.get("style") or "").strip()
+        if existing_style and not existing_style.endswith(";"):
+            existing_style += ";"
+        node["style"] = f"{existing_style}--reveal-order:{order}"
+
+    page_no = section.select_one(".page-no")
+    if page_no is None:
+        page_no = soup.new_tag("div")
+        page_no["class"] = ["page-no"]
+        section.append(page_no)
+    page_no.string = f"{slide_index}"
+    return str(section)
+
+
 def _extract_ppt_plan(state: dict) -> dict:
     for item in state.get("skill_outputs", {}).get("ppt_planner", []):
         if isinstance(item, dict) and item.get("slides"):
@@ -200,6 +266,20 @@ def _deck_theme_css(theme: str) -> str:
         .slide { background: linear-gradient(135deg,#ffffff,#edf4ff); color:#172033; }
         .kicker,.page-no { color:#2563eb; }
         .visual { border-color:#93c5fd; background:rgba(37,99,235,.08); }
+        """
+    if theme == "cyber-red":
+        return """
+        body { background:#090706; color:#fff4eb; font-family: Inter, 'Microsoft YaHei', sans-serif; }
+        .slide { background:radial-gradient(circle at 80% 20%,rgba(255,83,36,.32),transparent 30%),linear-gradient(145deg,#070707,#24100b); color:#fff4eb; }
+        .kicker,.page-no { color:#ff7a38; }
+        .visual { border-color:rgba(255,107,48,.65); background:rgba(44,13,8,.72); }
+        """
+    if theme == "gradient-dark":
+        return """
+        body { background:#070814; color:#f4f1ff; font-family: Inter, 'Microsoft YaHei', sans-serif; }
+        .slide { background:radial-gradient(circle at 12% 15%,rgba(78,92,255,.42),transparent 32%),radial-gradient(circle at 88% 78%,rgba(185,71,255,.3),transparent 30%),linear-gradient(135deg,#070814,#17112d); color:#f4f1ff; }
+        .kicker,.page-no { color:#a5b4fc; }
+        .visual { border-color:rgba(167,139,250,.62); background:rgba(20,16,46,.76); }
         """
     return """
     body { background:#070a12; color:#edf3ff; font-family: Inter, 'Microsoft YaHei', sans-serif; }
@@ -671,7 +751,7 @@ async def ppt_planner_worker(state: dict) -> dict:
 只输出 JSON，不要 Markdown。格式:
 {{
   "title": "演示标题",
-  "theme": "dark-tech | warm-paper | clean-white",
+  "theme": "dark-tech | warm-paper | clean-white | cyber-red | gradient-dark",
   "slides": [
     {{
       "index": 1,
@@ -687,8 +767,10 @@ async def ppt_planner_worker(state: dict) -> dict:
 要求:
 - 页数 5-8 页，除非用户明确指定
 - 每页只负责一个明确观点
+- 标题页保持简洁；正文页控制信息密度，优先大字号与图形化表达
 - 尽量把研究资料中的事实、数字、来源名称分配到具体页面
-- visual 要具体，方便后续页面并行生成
+- 每页至少规划一个具体图形（图表、流程、关系图、时间线或图标组），visual 要写清构图与数据
+- 演示要形成连贯叙事：背景/问题 → 核心机制/证据 → 洞察/行动，不要堆砌孤立页面
 """
     try:
         resp = await asyncio.wait_for(
@@ -783,7 +865,7 @@ async def ppt_slide_worker(state: dict) -> dict:
             "大数字/统计布局：放大关键数据，给每个数据一个独立卡片",
         ][idx % 5]
 
-        prompt = f"""你是单页 PPT HTML 设计师。只生成一个 <section class="slide">...</section> 片段，不要完整 html/head/body。
+        prompt = f"""你是单页 PPT HTML 设计师，严格遵循 ppt-animation 规范。只生成一个 <section class="slide">...</section> 片段，不要完整 html/head/body。
 
 整套演示标题: {plan.get("title", state.get("user_request", ""))}
 主题风格: {theme}
@@ -797,7 +879,9 @@ async def ppt_slide_worker(state: dict) -> dict:
 硬性要求:
 - 根元素必须是 <section class="slide" data-slide="{idx}">，不要额外加 layout class（框架自动处理）
 - <section> 上不要设置 display/position/width/height 等布局属性（由演示框架统一管理）
-- 必须包含 h1 标题、核心要点、至少一个**具体的内联 SVG 图形**（不要只用文字描述 visual 区域，要真的画出来 — 柱状图/流程图/卡片组/时间线/图标组等）
+- 必须包含 h1 标题、核心要点、至少一个**具体的内联 SVG/CSS 图形**（不要只用文字描述 visual 区域，要真的画出来 — 柱状图/流程图/卡片组/时间线/图标组等）
+- 文本要适合全屏演示：大标题、简短正文、重点关键词高亮，避免密集小字
+- 重要内容元素添加 class="reveal"；顺序为标题 → 正文 → 图形/要点，框架会统一执行 1.5-2.5 秒的依次缓入
 - 可以使用内联 SVG/CSS class 装饰（内部元素），但不要输出 <script>
 - 不要引入外部资源
 - 控制在 80-220 行以内
@@ -931,7 +1015,9 @@ async def ppt_assembler_worker(state: dict) -> dict:
     # Safety net: sanitise inline styles that may have been stored before
     # the sanitizer was introduced (or generated by older LLM runs).
     for item in complete_items:
-        item["html"] = _sanitize_slide_html(item["html"])
+        item["html"] = _apply_ppt_animation_contract(
+            item["html"], int(item.get("slide_index") or 1)
+        )
 
     sections = "\n\n".join(item["html"] for item in complete_items)
     css = _deck_theme_css(theme)
@@ -947,9 +1033,10 @@ html, body {{ margin:0; width:100%; height:100%; overflow:hidden; }}
 {css}
 .deck {{ width:100vw; height:100vh; position:relative; overflow:hidden; }}
 .slide {{
-  display:none; width:100vw; height:100vh; padding:5.8vh 6.5vw; position:absolute; inset:0;
+  display:none; width:100vw; height:100vh; aspect-ratio:16/9; padding:5.8vh 6.5vw; position:absolute; inset:0; overflow:hidden;
 }}
-.slide.active {{ display:block; animation: slideIn .5s ease both; }}
+.slide.active {{ display:block; animation: slideIn .55s cubic-bezier(.2,.7,.2,1) both; }}
+.slide.active.layout-hero {{ display:flex; }}
 .kicker {{ font-size:1.1vw; letter-spacing:.12em; text-transform:uppercase; margin-bottom:1.2vh; }}
 h1 {{ font-size:4vw; line-height:1.05; margin:0 0 2vh; max-width:78vw; }}
 .lead {{ font-size:1.55vw; line-height:1.55; max-width:72vw; opacity:.88; }}
@@ -971,10 +1058,16 @@ ul {{ margin:0; padding-left:1.3em; font-size:1.35vw; line-height:1.8; }}
 .layout-stats .stat-row {{ display:flex; gap:2.5vw; margin-top:5vh; justify-content:center; }}
 .stat {{ flex:1; max-width:24vw; border:1px solid; border-radius:24px; padding:3vh 2vw; text-align:center; backdrop-filter:blur(6px); }}
 .stat-num {{ font-size:1.6vw; font-weight:700; line-height:1.4; }}
+.reveal {{ opacity:0; transform:translateY(28px); transition:opacity .58s ease, transform .58s cubic-bezier(.2,.7,.2,1); transition-delay:calc((var(--reveal-order, 1) - 1) * 140ms); }}
+.slide.active .reveal {{ opacity:1; transform:none; }}
 .page-no {{ position:absolute; right:4vw; bottom:3vh; font-size:1vw; opacity:.75; }}
+.page-no::after {{ content:' / {total}'; }}
 .progress {{ position:fixed; left:0; top:0; height:4px; width:100%; background:rgba(255,255,255,.12); z-index:10; }}
 .progress > span {{ display:block; height:100%; width:0; background:linear-gradient(90deg,#38bdf8,#f97316); transition:width .25s ease; }}
+.click-zone {{ position:fixed; top:0; bottom:0; width:14vw; z-index:20; cursor:pointer; }}
+.click-zone.prev {{ left:0; }} .click-zone.next {{ right:0; }}
 @keyframes slideIn {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:none; }} }}
+@media (prefers-reduced-motion: reduce) {{ .slide,.reveal {{ animation:none !important; transition:none !important; }} }}
 </style>
 </head>
 <body>
@@ -982,20 +1075,39 @@ ul {{ margin:0; padding-left:1.3em; font-size:1.35vw; line-height:1.8; }}
 <main class="deck">
 {sections}
 </main>
+<div class="click-zone prev" aria-label="上一页"></div>
+<div class="click-zone next" aria-label="下一页"></div>
 <script>
 const slides = Array.from(document.querySelectorAll('.slide'));
 let current = 0;
+let wheelLocked = false;
 function show(i) {{
-  current = Math.max(0, Math.min(i, slides.length - 1));
+  if (!slides.length) return;
+  current = (i + slides.length) % slides.length;
   slides.forEach((s, idx) => s.classList.toggle('active', idx === current));
   const bar = document.getElementById('bar');
   if (bar) bar.style.width = (((current + 1) / Math.max(slides.length, 1)) * 100) + '%';
 }}
 document.addEventListener('keydown', (e) => {{
-  if (e.key === 'ArrowRight' || e.key === ' ') show(current + 1);
-  if (e.key === 'ArrowLeft') show(current - 1);
+  if (['ArrowRight','PageDown',' '].includes(e.key)) {{ e.preventDefault(); show(current + 1); }}
+  if (['ArrowLeft','PageUp'].includes(e.key)) {{ e.preventDefault(); show(current - 1); }}
+  if (e.key === 'Home') show(0);
+  if (e.key === 'End') show(slides.length - 1);
 }});
-document.addEventListener('click', (e) => show(current + (e.clientX > innerWidth / 2 ? 1 : -1)));
+document.querySelector('.click-zone.prev').addEventListener('click', () => show(current - 1));
+document.querySelector('.click-zone.next').addEventListener('click', () => show(current + 1));
+document.addEventListener('wheel', (e) => {{
+  if (wheelLocked || Math.abs(e.deltaY) < 8) return;
+  wheelLocked = true;
+  show(current + (e.deltaY > 0 ? 1 : -1));
+  setTimeout(() => {{ wheelLocked = false; }}, 650);
+}}, {{ passive:true }});
+let touchStartX = 0;
+document.addEventListener('touchstart', (e) => {{ touchStartX = e.changedTouches[0].clientX; }}, {{ passive:true }});
+document.addEventListener('touchend', (e) => {{
+  const delta = e.changedTouches[0].clientX - touchStartX;
+  if (Math.abs(delta) > 48) show(current + (delta < 0 ? 1 : -1));
+}}, {{ passive:true }});
 show(0);
 </script>
 </body>

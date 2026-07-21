@@ -9,6 +9,7 @@ const store = useChatStore()
 const topic = ref('')
 const theme = ref('dark-tech')
 const slideCount = ref(6)
+const purpose = ref('展示')
 const exporting = ref({})
 const streamContainer = ref(null)
 
@@ -16,7 +17,11 @@ const themes = [
   { value: 'dark-tech', label: 'Dark Tech — 暗色炫酷科技风' },
   { value: 'warm-paper', label: 'Warm Paper — 暖色报纸风' },
   { value: 'clean-white', label: 'Clean White — 简约白色风' },
+  { value: 'cyber-red', label: 'Cyber Red — 赛博红橙风' },
+  { value: 'gradient-dark', label: 'Gradient Dark — 深蓝紫渐变风' },
 ]
+
+const purposes = ['展示', '视频录制', '教学']
 
 function scrollToBottom() {
   if (streamContainer.value) {
@@ -46,6 +51,7 @@ async function generate() {
   await store.doGeneratePPT(topic.value, {
     theme: theme.value,
     slideCount: slideCount.value,
+    purpose: purpose.value,
   })
 }
 
@@ -110,7 +116,7 @@ function formatTime(ts) {
       </div>
 
       <!-- Theme + slide count -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <label class="text-xs text-gray-400 mb-1 block">Theme</label>
           <select
@@ -119,6 +125,16 @@ function formatTime(ts) {
             class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 focus:border-primary-500 focus:outline-none"
           >
             <option v-for="t in themes" :key="t.value" :value="t.value">{{ t.label }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 mb-1 block">Purpose</label>
+          <select
+            v-model="purpose"
+            :disabled="store.pptGenerating"
+            class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50 focus:border-primary-500 focus:outline-none"
+          >
+            <option v-for="item in purposes" :key="item" :value="item">{{ item }}</option>
           </select>
         </div>
         <div>
