@@ -132,7 +132,7 @@ async function streamChat({ message, chatModelId, imageModelId, videoModelId, se
 
 // ── PPT ───────────────────────────────────────────────────────────────
 
-export async function streamPPT({ topic, theme, slideCount, chatModelId, onEvent, abortSignal }) {
+export async function streamPPT({ topic, theme, slideCount, purpose, chatModelId, onEvent, abortSignal }) {
   const response = await fetch('/api/generate-ppt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -140,6 +140,7 @@ export async function streamPPT({ topic, theme, slideCount, chatModelId, onEvent
       topic,
       theme,
       slide_count: slideCount,
+      purpose,
       chat_model_id: chatModelId,
       stream: true,
     }),

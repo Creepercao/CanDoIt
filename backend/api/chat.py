@@ -68,6 +68,7 @@ class PPTGenRequest(BaseModel):
     topic: str
     theme: str = "dark-tech"
     slide_count: int = 6
+    purpose: str = "展示"
     chat_model_id: str = ""
     stream: bool = True
 
@@ -396,12 +397,15 @@ async def api_generate_ppt(req: PPTGenRequest):
         "dark-tech": "暗色炫酷科技风",
         "warm-paper": "暖色报纸风",
         "clean-white": "简约白色风",
+        "cyber-red": "赛博朋克红橙风",
+        "gradient-dark": "深蓝紫渐变暗色风",
     }
     theme_desc = theme_labels.get(req.theme, req.theme)
     message = (
         f"生成一个关于「{req.topic}」的PPT演示文稿。"
         f"使用{theme_desc}主题风格。"
         f"总共需要{req.slide_count}页幻灯片。"
+        f"主要用途是{req.purpose}，请据此控制字号、信息密度与叙事节奏。"
     )
     chat_req = ChatRequest(
         message=message,
