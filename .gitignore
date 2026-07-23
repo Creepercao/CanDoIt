@@ -26,6 +26,9 @@ outputs/chroma_db/
 outputs/ppt_runs/
 outputs/pptx_frames/
 
+# Local demo artifacts (generated during development, not product source)
+/arknights_presentation.html
+
 # IDE
 .vscode/
 .idea/
