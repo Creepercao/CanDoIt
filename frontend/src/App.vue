@@ -42,7 +42,7 @@ async function deleteSession(session) {
 <template>
   <div class="flex h-screen bg-gray-950 overflow-hidden">
     <!-- Sidebar -->
-    <aside class="w-16 lg:w-64 bg-surface-900 border-r border-gray-700/50 flex flex-col shrink-0">
+    <aside class="w-16 lg:w-64 bg-white border-r border-gray-700/60 flex flex-col shrink-0">
       <!-- Logo -->
       <div class="px-4 py-4 border-b border-gray-700/50">
         <div class="flex items-center gap-3">
@@ -62,7 +62,7 @@ async function deleteSession(session) {
             'flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
             store.activeTab === tab.key
               ? 'bg-primary-600/20 text-primary-400 border border-primary-500/30'
-              : 'text-gray-400 hover:text-white hover:bg-surface-800',
+              : 'text-gray-400 hover:text-slate-900 hover:bg-gray-800',
           ]"
         >
           <span class="text-lg">{{ tab.label.slice(0, 2) }}</span>
@@ -76,7 +76,7 @@ async function deleteSession(session) {
           <span class="text-[10px] text-gray-500 uppercase tracking-wider">Sessions</span>
           <button
             @click="store.newSession()"
-            class="text-xs text-gray-500 hover:text-white px-2 py-0.5 rounded hover:bg-surface-700 transition-colors"
+            class="text-xs text-gray-500 hover:text-slate-900 px-2 py-0.5 rounded hover:bg-surface-700 transition-colors"
             title="New Chat"
           >+</button>
         </div>
@@ -88,7 +88,7 @@ async function deleteSession(session) {
               'group flex items-center gap-1 rounded-lg text-xs transition-colors',
               store.currentSessionId === s.id
                 ? 'bg-primary-600/20 text-primary-400'
-                : 'text-gray-400 hover:text-white hover:bg-surface-800',
+                : 'text-gray-400 hover:text-slate-900 hover:bg-gray-800',
             ]"
           >
             <button
@@ -137,7 +137,7 @@ async function deleteSession(session) {
     <!-- Main content -->
     <main class="flex-1 flex flex-col min-w-0">
       <!-- Top bar with model selectors -->
-      <header class="px-4 py-2 border-b border-gray-700/50 bg-surface-900/50 flex items-center gap-4 shrink-0 overflow-x-auto">
+      <header class="px-4 py-2 border-b border-gray-700/60 bg-white/85 backdrop-blur flex items-center gap-4 shrink-0 overflow-x-auto">
         <div class="flex items-center gap-4 flex-1 min-w-0">
           <ModelSelector model-type="chat" class="min-w-[180px] max-w-[300px]" />
           <div class="hidden md:flex items-center gap-1 text-gray-600 text-xs">
@@ -165,7 +165,7 @@ async function deleteSession(session) {
         </button>
         <button
           @click="store.doRefreshModels()"
-          class="text-xs text-gray-500 hover:text-white px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors shrink-0"
+          class="text-xs text-gray-500 hover:text-slate-900 px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors shrink-0"
           title="刷新模型"
         >
           🔄 刷新

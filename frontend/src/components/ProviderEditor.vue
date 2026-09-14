@@ -78,7 +78,7 @@ async function remove(name) {
   <div class="flex flex-col h-full">
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0">
-      <h2 class="font-semibold text-lg text-white">⚙️ Providers</h2>
+      <h2 class="font-semibold text-lg text-slate-900">⚙️ Providers</h2>
       <button
         @click="store.doRefreshModels()"
         class="text-xs px-3 py-1.5 bg-surface-800 hover:bg-surface-700 border border-gray-600 rounded-lg text-gray-300 transition-colors"
@@ -91,12 +91,12 @@ async function remove(name) {
     <div class="flex-1 overflow-y-auto p-4 space-y-4">
       <!-- Feedback banners -->
       <div v-if="error"
-        class="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-2.5 text-sm text-red-300">
+        class="bg-red-50 border border-red-200/50 rounded-lg px-4 py-2.5 text-sm text-red-300">
         {{ error }}
         <button @click="error = ''" class="float-right opacity-60 hover:opacity-100">&times;</button>
       </div>
       <div v-if="success"
-        class="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-2.5 text-sm text-emerald-300 flex items-center justify-between">
+        class="bg-emerald-50 border border-emerald-200/50 rounded-lg px-4 py-2.5 text-sm text-emerald-300 flex items-center justify-between">
         <span>✅ {{ success }}</span>
         <span v-if="store.modelsLoading" class="text-xs text-emerald-400 animate-pulse ml-2">🔄 刷新模型中...</span>
       </div>
@@ -114,14 +114,14 @@ async function remove(name) {
               v-model="form.name"
               :disabled="!!editing"
               placeholder="e.g. SiliconFlow"
-              class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 disabled:opacity-50 focus:border-primary-500 focus:outline-none"
+              class="w-full bg-surface-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900 placeholder-gray-500 disabled:opacity-50 focus:border-primary-500 focus:outline-none"
             />
           </div>
           <div>
             <label class="text-xs text-gray-400 block mb-1">Type</label>
             <select
               v-model="form.type"
-              class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+              class="w-full bg-surface-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none"
             >
               <option v-for="t in types" :key="t.value" :value="t.value">{{ t.label }}</option>
             </select>
@@ -131,7 +131,7 @@ async function remove(name) {
             <input
               v-model="form.baseUrl"
               placeholder="https://api.example.com/v1"
-              class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-primary-500 focus:outline-none"
+              class="w-full bg-surface-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900 placeholder-gray-500 focus:border-primary-500 focus:outline-none"
             />
           </div>
           <div class="sm:col-span-2">
@@ -142,7 +142,7 @@ async function remove(name) {
             <input
               v-model="form.apiKey"
               :placeholder="editing ? '•••••••• (unchanged)' : 'sk-...'"
-              class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-primary-500 focus:outline-none"
+              class="w-full bg-surface-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900 placeholder-gray-500 focus:border-primary-500 focus:outline-none"
             />
           </div>
         </div>
@@ -178,14 +178,14 @@ async function remove(name) {
           class="bg-surface-800 rounded-xl border border-gray-700/50 p-4 space-y-2"
         >
           <div class="flex items-center justify-between">
-            <span class="font-medium text-white text-sm">{{ p.name }}</span>
+            <span class="font-medium text-slate-900 text-sm">{{ p.name }}</span>
             <span
               class="text-[10px] px-2 py-0.5 rounded-full font-medium uppercase"
               :class="{
-                'bg-blue-900/50 text-blue-300 border border-blue-700/50': p.type === 'llm',
-                'bg-purple-900/50 text-purple-300 border border-purple-700/50': p.type === 'image',
-                'bg-amber-900/50 text-amber-300 border border-amber-700/50': p.type === 'video',
-                'bg-emerald-900/50 text-emerald-300 border border-emerald-700/50': p.type === 'search',
+                'bg-blue-50 text-blue-300 border border-blue-200/50': p.type === 'llm',
+                'bg-purple-50 text-purple-300 border border-purple-200/50': p.type === 'image',
+                'bg-amber-50 text-amber-300 border border-amber-200/50': p.type === 'video',
+                'bg-emerald-50 text-emerald-300 border border-emerald-200/50': p.type === 'search',
               }"
             >
               {{ p.type }}
@@ -202,7 +202,7 @@ async function remove(name) {
             </button>
             <button
               @click="remove(p.name)"
-              class="text-xs px-3 py-1 bg-red-900/20 hover:bg-red-900/40 border border-red-700/40 rounded-lg text-red-400 transition-colors"
+              class="text-xs px-3 py-1 bg-red-50 hover:bg-red-50 border border-red-200/40 rounded-lg text-red-400 transition-colors"
             >
               Delete
             </button>

@@ -95,7 +95,7 @@ function statusClass(step) {
 function planStepStatusClass(status) {
   if (status === 'done') return 'border-green-500/50 bg-green-500/10 text-green-300'
   if (status === 'running') return 'border-blue-400/50 bg-blue-500/15 text-blue-300 ring-1 ring-blue-400/30'
-  return 'border-gray-600/30 bg-surface-900/50 text-gray-400'
+  return 'border-gray-600/30 bg-surface-900 text-gray-400'
 }
 
 // ── Safety helpers ──
@@ -168,7 +168,7 @@ async function reject(item) {
       v-if="!expanded"
       @click="toggle"
       class="w-full flex items-center gap-2 text-xs text-gray-400 hover:text-gray-200
-             bg-surface-800/70 rounded-lg px-3 py-2 border border-gray-700/40 transition-colors"
+             bg-surface-800 rounded-lg px-3 py-2 border border-gray-700/40 transition-colors"
     >
       <span v-if="isStreaming" class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
       <span v-else class="w-2 h-2 rounded-full bg-green-500"></span>
@@ -176,7 +176,7 @@ async function reject(item) {
       <span class="ml-auto text-gray-500">展开</span>
     </button>
 
-    <div v-else class="bg-surface-800/85 border border-gray-700/50 rounded-xl overflow-hidden">
+    <div v-else class="bg-surface-800 border border-gray-700/50 rounded-xl overflow-hidden">
       <button
         @click="toggle"
         class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-700/40 transition-colors border-b border-gray-700/40"
@@ -207,7 +207,7 @@ async function reject(item) {
           <div
             v-for="item in pendingApprovals"
             :key="item.id"
-            class="rounded-lg border border-orange-500/30 bg-surface-900/70 p-2"
+            class="rounded-lg border border-orange-500/30 bg-surface-900 p-2"
           >
             <div class="flex items-center gap-2 mb-1">
               <span class="text-[10px] px-1.5 py-0.5 rounded border" :class="riskStyle(item.risk)">
@@ -323,7 +323,7 @@ async function reject(item) {
         <!-- ── Execution review findings ── -->
         <div
           v-if="notableReviews.length"
-          class="rounded-lg border border-gray-700/50 bg-surface-900/60 p-2.5"
+          class="rounded-lg border border-gray-700/50 bg-surface-900 p-2.5"
         >
           <div class="flex items-center justify-between text-xs mb-2">
             <span class="font-medium text-gray-200">🛡️ 执行审查</span>
@@ -361,7 +361,7 @@ async function reject(item) {
           </div>
         </div>
 
-        <div v-if="planStep" class="rounded-lg border border-gray-700/50 bg-surface-900/60 p-2.5">
+        <div v-if="planStep" class="rounded-lg border border-gray-700/50 bg-surface-900 p-2.5">
           <div class="flex items-center justify-between text-xs mb-2">
             <span class="font-medium text-gray-200">📋 执行计划</span>
             <span class="text-gray-500">{{ planStep.count }} 个任务</span>

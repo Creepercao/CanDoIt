@@ -2,22 +2,96 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 明亮主题：让原生控件、滚动条、表单按浅色渲染 */
+:root {
+  color-scheme: light;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #f1f5f9;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
+  background: #cbd5e1;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
+}
+
+html,
+body {
+  background-color: #f1f5f9;
+  color: #0f172a;
 }
 
 body {
   font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Markdown 输出（prose 插件未安装，这里给最小可读样式） */
+.prose :where(h1, h2, h3, h4) {
+  color: #0f172a;
+  font-weight: 600;
+  margin: 0.75em 0 0.4em;
+}
+.prose :where(h1) { font-size: 1.35em; }
+.prose :where(h2) { font-size: 1.2em; }
+.prose :where(h3) { font-size: 1.05em; }
+.prose :where(p) { margin: 0.5em 0; }
+.prose :where(ul, ol) { margin: 0.5em 0 0.5em 1.25em; }
+.prose :where(ul) { list-style: disc; }
+.prose :where(ol) { list-style: decimal; }
+.prose :where(li) { margin: 0.2em 0; }
+.prose :where(hr) { border-color: #e2e8f0; margin: 1em 0; }
+.prose :where(blockquote) {
+  border-left: 3px solid #c7d2fe;
+  background: #f8fafc;
+  padding: 0.4em 0.8em;
+  color: #475569;
+  margin: 0.6em 0;
+}
+.prose :where(code) {
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+.prose :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+.prose :where(table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin: 0.75em 0;
+}
+.prose :where(th) {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+}
+.prose :where(th, td) {
+  border: 1px solid #e2e8f0;
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+.prose :where(a) {
+  color: #4f46e5;
+  text-decoration: underline;
+  word-break: break-all;
+}
+.prose :where(img) {
+  border-radius: 8px;
+  max-width: 100%;
 }
 
 .fade-enter-active,

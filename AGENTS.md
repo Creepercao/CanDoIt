@@ -248,6 +248,14 @@ frontend/src/
 
 **模型选择**和**会话 ID**持久化到 `localStorage`，键名前缀为 `multiagent_`。
 
+**主题约定（重要）**：前端是**明亮主题**，但类名沿用原暗色主题的写法。`tailwind.config.js` 把 `gray-*`（中性色阶）与 `surface-*`（界面层）两套 token 整体**反转**成浅色，因此：
+
+- `text-gray-100/200` 是**最深**的主文本，`text-gray-400/500` 是次要文本，`text-gray-600` 是弱化提示
+- `border-gray-700`/`bg-surface-700` 等大数字号是**最浅**的边框/底纹，`bg-surface-800` = 白卡片，`bg-surface-900` = slate-50，`bg-gray-950` = 页面底
+- 强调色只反转了「暗色主题专用」的色阶：`<color>-200/300/400`（浅色文字）→ 800/700/600，`<color>-900`（暗色底）→ 50；实心按钮色（500/600/700）保持原值，配 `text-white`
+- 新增样式时请沿用同一套 token（`bg-surface-*` / `text-gray-*` / `border-gray-*`），不要直接写死颜色；需要浅灰底纹用 `bg-surface-900`，白卡片用 `bg-surface-800`
+- 例外：`ImageLightbox.vue` 是黑底大图预览，其白色文字与 `bg-black/90` 是有意保留的
+
 **Vite 配置**在开发模式下将 `/api` 代理到 `http://127.0.0.1:8000`。在 Docker 中，nginx 负责此代理。
 
 ### Docker Compose

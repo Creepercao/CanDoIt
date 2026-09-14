@@ -107,12 +107,12 @@ onMounted(() => {
   <div class="flex flex-col h-full">
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0">
-      <h2 class="font-semibold text-lg text-white">🔧 技能管理</h2>
+      <h2 class="font-semibold text-lg text-slate-900">🔧 技能管理</h2>
       <div class="flex items-center gap-2">
         <!-- Upload button -->
         <label
           :class="[
-            'text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-surface-700 transition-colors cursor-pointer',
+            'text-xs text-gray-400 hover:text-slate-900 px-3 py-1.5 rounded-lg hover:bg-surface-700 transition-colors cursor-pointer',
             uploading ? 'opacity-50 cursor-wait' : '',
           ]"
         >
@@ -128,7 +128,7 @@ onMounted(() => {
         <button
           @click="refresh"
           :disabled="loading"
-          class="text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-surface-700 transition-colors disabled:opacity-50"
+          class="text-xs text-gray-400 hover:text-slate-900 px-3 py-1.5 rounded-lg hover:bg-surface-700 transition-colors disabled:opacity-50"
         >
           {{ loading ? '加载中...' : '🔄 刷新' }}
         </button>
@@ -141,10 +141,10 @@ onMounted(() => {
       :class="[
         'px-4 py-2.5 border-b shrink-0 text-sm',
         uploadResult.errors && uploadResult.errors.length > 0 && uploadResult.installed?.length === 0
-          ? 'bg-red-900/30 border-red-500/20 text-red-400'
+          ? 'bg-red-50 border-red-500/20 text-red-400'
           : uploadResult.errors?.length
-            ? 'bg-amber-900/20 border-amber-500/20 text-amber-400'
-            : 'bg-green-900/20 border-green-500/20 text-green-400',
+            ? 'bg-amber-50 border-amber-500/20 text-amber-400'
+            : 'bg-green-50 border-green-500/20 text-green-400',
       ]"
     >
       <div class="flex items-center justify-between">
@@ -159,22 +159,22 @@ onMounted(() => {
             ❌ {{ uploadResult.errors?.join('; ') || '未知错误' }}
           </template>
         </span>
-        <button @click="uploadResult = null" class="text-gray-500 hover:text-white ml-2">✕</button>
+        <button @click="uploadResult = null" class="text-gray-500 hover:text-slate-900 ml-2">✕</button>
       </div>
     </div>
 
     <!-- Summary bar -->
     <div
       v-if="totalCount > 0"
-      class="px-4 py-2.5 bg-surface-800/50 border-b border-gray-700/30 shrink-0"
+      class="px-4 py-2.5 bg-surface-800 border-b border-gray-700/30 shrink-0"
     >
       <div class="flex items-center gap-4 text-sm">
         <span class="text-gray-400">
-          共 <span class="text-white font-medium">{{ totalCount }}</span> 个技能
+          共 <span class="text-slate-900 font-medium">{{ totalCount }}</span> 个技能
         </span>
         <span class="text-gray-600">|</span>
         <span class="text-green-400">
-          <span class="text-white font-medium">{{ enabledCount }}</span> 已启用
+          <span class="text-slate-900 font-medium">{{ enabledCount }}</span> 已启用
         </span>
         <span class="text-gray-600">|</span>
         <span class="text-gray-500">
@@ -211,7 +211,7 @@ onMounted(() => {
       </div>
 
       <!-- Error -->
-      <div v-else-if="error" class="text-red-400 text-sm bg-red-900/30 rounded-lg p-4">
+      <div v-else-if="error" class="text-red-400 text-sm bg-red-50 rounded-lg p-4">
         <p>{{ error }}</p>
         <button @click="refresh" class="mt-2 underline hover:text-red-300 text-xs">重试</button>
       </div>
@@ -233,7 +233,7 @@ onMounted(() => {
           </label>
           <button
             @click="refresh"
-            class="text-sm text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-surface-800 transition-colors"
+            class="text-sm text-gray-400 hover:text-slate-900 px-3 py-1.5 rounded-lg hover:bg-surface-800 transition-colors"
           >
             🔄 刷新
           </button>
@@ -258,7 +258,7 @@ onMounted(() => {
               <span class="text-2xl shrink-0">{{ skill.emoji || '🔧' }}</span>
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <h3 class="font-medium text-white truncate">{{ skill.display_name }}</h3>
+                  <h3 class="font-medium text-slate-900 truncate">{{ skill.display_name }}</h3>
                   <span
                     v-if="skill.is_package"
                     class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30 shrink-0"

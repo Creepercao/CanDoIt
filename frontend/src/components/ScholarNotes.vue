@@ -45,7 +45,7 @@ function agentEmoji(type) {
 <template>
   <div class="flex flex-col h-full">
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 shrink-0">
-      <h2 class="font-semibold text-lg text-white">📓 学霸笔记</h2>
+      <h2 class="font-semibold text-lg text-slate-900">📓 学霸笔记</h2>
     </div>
 
     <div class="flex-1 overflow-y-auto p-4 space-y-4">
@@ -57,7 +57,7 @@ function agentEmoji(type) {
           placeholder="Describe the subject you want study notes for..."
           rows="3"
           :disabled="store.noteGenerating"
-          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 resize-none disabled:opacity-50 focus:border-primary-500 focus:outline-none"
+          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder-gray-500 resize-none disabled:opacity-50 focus:border-primary-500 focus:outline-none"
         />
       </div>
 
@@ -72,7 +72,7 @@ function agentEmoji(type) {
             :class="[
               'text-left p-3 rounded-xl border transition-colors disabled:opacity-50',
               style === s.value
-                ? 'bg-primary-600/20 border-primary-500/50 text-white'
+                ? 'bg-primary-600/20 border-primary-500/50 text-slate-900'
                 : 'bg-surface-800 border-gray-600 text-gray-400 hover:border-gray-500',
             ]"
           >
@@ -101,14 +101,14 @@ function agentEmoji(type) {
       <!-- Live streaming area -->
       <div v-if="store.noteGenerating || (store.noteStreamText && !store.noteResults.length)"
         class="bg-surface-800 rounded-xl border border-gray-700/50 overflow-hidden">
-        <div v-if="store.noteSteps.length" class="px-4 py-2 border-b border-gray-700/30 bg-gray-900/30">
+        <div v-if="store.noteSteps.length" class="px-4 py-2 border-b border-gray-700/30 bg-gray-800">
           <div class="flex items-center gap-2 flex-wrap">
             <template v-for="(step, i) in store.noteSteps" :key="i">
               <span v-if="step.type === 'phase'" class="text-[10px] text-gray-500">{{ step.message }}</span>
               <span v-else-if="step.type === 'agent_start'"
                 :class="['text-[10px] px-1.5 py-0.5 rounded-full border transition-colors',
-                  step.done ? 'bg-emerald-900/30 text-emerald-400 border-emerald-700/50'
-                           : 'bg-amber-900/30 text-amber-400 border-amber-700/50 animate-pulse']">
+                  step.done ? 'bg-emerald-50 text-emerald-400 border-emerald-200/50'
+                           : 'bg-amber-50 text-amber-400 border-amber-200/50 animate-pulse']">
                 {{ agentEmoji(step.agentType) }} {{ step.label || step.agentType }}
                 {{ step.done ? ' ✓' : ' …' }}
               </span>
@@ -117,7 +117,7 @@ function agentEmoji(type) {
         </div>
         <div ref="streamContainer" class="p-4 max-h-[40vh] overflow-y-auto">
           <div v-if="store.noteStreamText"
-            class="prose prose-invert prose-sm max-w-none text-sm leading-relaxed"
+            class="prose prose-sm max-w-none text-sm leading-relaxed"
             v-html="streamHtml" />
           <div v-else class="text-sm text-gray-500 animate-pulse">Researching and writing notes...</div>
         </div>
@@ -133,13 +133,13 @@ function agentEmoji(type) {
         <div v-for="(item, idx) in store.noteResults.slice().reverse()" :key="idx"
           class="bg-surface-800 rounded-xl border border-gray-700/50 p-4 space-y-2">
           <div class="flex items-center justify-between">
-            <p class="text-sm text-white font-medium truncate max-w-[70%]">{{ item.topic }}</p>
+            <p class="text-sm text-slate-900 font-medium truncate max-w-[70%]">{{ item.topic }}</p>
             <span class="text-[10px] text-gray-500">{{ item.style === 'b' ? 'Style B' : 'Style A' }}</span>
           </div>
           <div v-if="item.error" class="text-sm text-red-400">{{ item.error }}</div>
           <div v-else class="space-y-2">
             <div v-for="html in (item.htmlResults || [])" :key="html.html_url"
-              class="flex items-center justify-between bg-gray-900/50 rounded-lg px-3 py-2">
+              class="flex items-center justify-between bg-gray-800 rounded-lg px-3 py-2">
               <a :href="html.html_url" target="_blank"
                 class="text-primary-400 hover:underline text-sm truncate mr-2">
                 📄 {{ html.title || 'HTML Preview' }}
@@ -147,7 +147,7 @@ function agentEmoji(type) {
             </div>
             <details v-if="item.response" class="text-xs">
               <summary class="text-gray-500 cursor-pointer">Response text</summary>
-              <div class="mt-1 text-gray-400 max-h-48 overflow-y-auto prose prose-invert prose-xs max-w-none"
+              <div class="mt-1 text-gray-400 max-h-48 overflow-y-auto prose prose-xs max-w-none"
                 v-html="renderMarkdown(item.response)" />
             </details>
           </div>

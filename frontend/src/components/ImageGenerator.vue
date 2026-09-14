@@ -53,7 +53,7 @@ function openLightbox(src, alt) {
           v-model="prompt"
           placeholder="描述你想生成的图像..."
           rows="3"
-          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white
+          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-slate-900
                  placeholder-gray-500 resize-none focus:border-primary-500 focus:outline-none"
         ></textarea>
       </div>
@@ -63,7 +63,7 @@ function openLightbox(src, alt) {
         <input
           v-model="negativePrompt"
           placeholder="不想出现的内容..."
-          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white
+          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-slate-900
                  placeholder-gray-500 focus:border-primary-500 focus:outline-none"
         />
       </div>
@@ -71,7 +71,7 @@ function openLightbox(src, alt) {
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="text-xs text-gray-400 mb-1 block">宽度</label>
-          <select v-model.number="width" class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+          <select v-model.number="width" class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900">
             <option :value="512">512</option>
             <option :value="768">768</option>
             <option :value="1024">1024</option>
@@ -80,7 +80,7 @@ function openLightbox(src, alt) {
         </div>
         <div>
           <label class="text-xs text-gray-400 mb-1 block">高度</label>
-          <select v-model.number="height" class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white">
+          <select v-model.number="height" class="w-full bg-surface-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-slate-900">
             <option :value="512">512</option>
             <option :value="768">768</option>
             <option :value="1024">1024</option>
@@ -103,7 +103,7 @@ function openLightbox(src, alt) {
         {{ generating ? '生成中...' : '🎨 生成图像' }}
       </button>
 
-      <div v-if="error" class="text-red-400 text-sm bg-red-900/30 rounded-lg p-3">{{ error }}</div>
+      <div v-if="error" class="text-red-400 text-sm bg-red-50 rounded-lg p-3">{{ error }}</div>
 
       <!-- Results gallery -->
       <div v-if="store.imageResults.length" class="space-y-4">
@@ -117,7 +117,7 @@ function openLightbox(src, alt) {
             v-if="item.result?.url"
             :src="item.result.url"
             :alt="item.prompt"
-            class="w-full max-h-80 object-contain bg-black/50 cursor-zoom-in hover:opacity-90 transition-opacity"
+            class="w-full max-h-80 object-contain bg-slate-100 cursor-zoom-in hover:opacity-90 transition-opacity"
             @click="openLightbox(item.result.url, item.prompt)"
             loading="lazy"
           />

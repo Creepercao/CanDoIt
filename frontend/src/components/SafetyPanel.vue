@@ -155,7 +155,7 @@ onMounted(async () => {
         <button
           @click="refreshAll"
           :disabled="busy"
-          class="text-xs text-gray-400 hover:text-white px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors disabled:opacity-50"
+          class="text-xs text-gray-400 hover:text-slate-900 px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors disabled:opacity-50"
         >
           刷新
         </button>
@@ -177,7 +177,7 @@ onMounted(async () => {
         class="text-xs px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
         :class="activeSection === tab.key
           ? 'bg-primary-600/20 text-primary-400 border border-primary-500/30'
-          : 'text-gray-400 hover:text-white hover:bg-surface-800'"
+          : 'text-gray-400 hover:text-slate-900 hover:bg-surface-800'"
       >
         {{ tab.label }}
       </button>
@@ -188,12 +188,12 @@ onMounted(async () => {
       <template v-if="activeSection === 'overview'">
         <!-- Stats -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3">
+          <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-3">
             <div class="text-[10px] text-gray-500 uppercase tracking-wider">审计记录（内存）</div>
             <div class="text-xl font-semibold text-gray-100">{{ status.audit?.buffered ?? 0 }}</div>
             <div class="text-[10px] text-gray-500">磁盘可写：{{ status.audit?.writable ? '是' : '否' }}</div>
           </div>
-          <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3">
+          <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-3">
             <div class="text-[10px] text-gray-500 uppercase tracking-wider">待审批 / 已决</div>
             <div class="text-xl font-semibold text-gray-100">
               {{ status.approvals?.pending ?? 0 }} / {{ status.approvals?.decided ?? 0 }}
@@ -202,14 +202,14 @@ onMounted(async () => {
               通过 {{ status.approvals?.approved ?? 0 }} · 拒绝 {{ status.approvals?.rejected ?? 0 }}
             </div>
           </div>
-          <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3">
+          <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-3">
             <div class="text-[10px] text-gray-500 uppercase tracking-wider">已注册代理</div>
             <div class="text-xl font-semibold text-gray-100">{{ status.agents?.total ?? 0 }}</div>
             <div class="text-[10px] text-gray-500">
               第三方扩展 {{ status.agents?.package ?? 0 }} · 可触及主机 {{ status.agents?.executing ?? 0 }}
             </div>
           </div>
-          <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3">
+          <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-3">
             <div class="text-[10px] text-gray-500 uppercase tracking-wider">规则总数</div>
             <div class="text-xl font-semibold text-gray-100">
               {{ (status.rules?.policy ?? 0) + (status.rules?.static ?? 0) }}
@@ -221,7 +221,7 @@ onMounted(async () => {
         </div>
 
         <!-- Switches -->
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4 space-y-4">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4 space-y-4">
           <div class="text-sm font-medium text-gray-200">审查策略</div>
 
           <div class="grid md:grid-cols-2 gap-4">
@@ -275,7 +275,7 @@ onMounted(async () => {
                 { key: 'redact_outputs', label: '输出脱敏', hint: 'worker 结果中的凭据在入库前替换为占位符' },
               ]"
               :key="sw.key"
-              class="flex items-start gap-2 p-2 rounded-lg hover:bg-surface-900/60 transition-colors cursor-pointer"
+              class="flex items-start gap-2 p-2 rounded-lg hover:bg-surface-900 transition-colors cursor-pointer"
             >
               <input
                 type="checkbox"
@@ -298,7 +298,7 @@ onMounted(async () => {
         </div>
 
         <!-- severity breakdown -->
-        <div v-if="status.audit?.by_severity" class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4">
+        <div v-if="status.audit?.by_severity" class="rounded-xl border border-gray-700/50 bg-surface-800 p-4">
           <div class="text-sm font-medium text-gray-200 mb-2">审计严重度分布</div>
           <div class="flex flex-wrap gap-2">
             <span
@@ -355,7 +355,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-if="store.approvalHistory.length" class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3">
+        <div v-if="store.approvalHistory.length" class="rounded-xl border border-gray-700/50 bg-surface-800 p-3">
           <div class="text-sm font-medium text-gray-200 mb-2">最近决定</div>
           <div class="space-y-1">
             <div
@@ -375,7 +375,7 @@ onMounted(async () => {
 
       <!-- ── Audit ── -->
       <template v-else-if="activeSection === 'audit'">
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-3 space-y-3">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-3 space-y-3">
           <div class="grid md:grid-cols-4 gap-2">
             <input
               v-model="store.auditFilter.run_id"
@@ -431,7 +431,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 divide-y divide-gray-700/40">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 divide-y divide-gray-700/40">
           <div v-if="!records.length" class="p-4 text-sm text-gray-500">没有匹配的审计记录。</div>
           <div v-for="rec in records" :key="rec.id" class="p-3">
             <div class="flex items-center gap-2 flex-wrap text-[11px]">
@@ -459,7 +459,7 @@ onMounted(async () => {
 
       <!-- ── Rules ── -->
       <template v-else-if="activeSection === 'rules'">
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4">
           <div class="text-sm font-medium text-gray-200 mb-2">风险 → 决策映射</div>
           <div class="flex flex-wrap gap-2">
             <span
@@ -473,7 +473,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4">
           <div class="text-sm font-medium text-gray-200 mb-2">代理风险分级</div>
           <div class="overflow-x-auto">
             <table class="w-full text-[11px]">
@@ -503,7 +503,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4">
           <div class="text-sm font-medium text-gray-200 mb-2">注入与破坏性动作检测规则</div>
           <div class="space-y-1">
             <div
@@ -518,7 +518,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4">
           <div class="text-sm font-medium text-gray-200 mb-2">内容策略规则</div>
           <div class="space-y-1">
             <div
@@ -536,7 +536,7 @@ onMounted(async () => {
 
       <!-- ── Probe ── -->
       <template v-else>
-        <div class="rounded-xl border border-gray-700/50 bg-surface-800/70 p-4 space-y-3">
+        <div class="rounded-xl border border-gray-700/50 bg-surface-800 p-4 space-y-3">
           <div class="text-sm font-medium text-gray-200">文本审查试运行</div>
           <p class="text-[11px] text-gray-500">
             粘贴一段计划或提示词，用当前策略做一次静态审查。只返回判定结果，不执行任何操作。
@@ -570,7 +570,7 @@ onMounted(async () => {
             </button>
           </div>
 
-          <div v-if="probe" class="rounded-lg border border-gray-700/50 bg-surface-900/60 p-3">
+          <div v-if="probe" class="rounded-lg border border-gray-700/50 bg-surface-900 p-3">
             <template v-if="probe.ok">
               <div class="flex items-center gap-2 text-xs">
                 <span class="px-1.5 py-0.5 rounded" :class="RISK_STYLE[probe.risk]">{{ probe.risk }}</span>

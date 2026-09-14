@@ -106,7 +106,7 @@ watch(() => store.currentResponse, (val) => {
       <h2 class="font-semibold text-lg">💬 多智能体对话</h2>
       <button
         @click="store.clearChat()"
-        class="text-xs text-gray-400 hover:text-white px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors"
+        class="text-xs text-gray-400 hover:text-slate-900 px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors"
       >
         清空对话
       </button>
@@ -137,10 +137,10 @@ watch(() => store.currentResponse, (val) => {
             'max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed',
             'overflow-hidden',
             msg.role === 'user'
-              ? 'bg-primary-600 text-white rounded-br-md'
+              ? 'bg-primary-600 text-white rounded-br-md shadow-sm'
               : msg.isError
-                ? 'bg-red-900/50 border border-red-500/30 text-red-200 rounded-bl-md'
-                : 'bg-surface-800 border border-gray-700/50 rounded-bl-md',
+                ? 'bg-red-50 border border-red-500/30 text-red-200 rounded-bl-md'
+                : 'bg-surface-800 border border-gray-700/50 rounded-bl-md shadow-sm',
           ]"
         >
           <!-- Past think steps (collapsed by default) -->
@@ -152,7 +152,7 @@ watch(() => store.currentResponse, (val) => {
 
           <!-- Rendered markdown content -->
           <div
-            class="prose prose-invert prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300 [&_blockquote]:border-l-primary-500 [&_table]:text-xs"
+            class="prose prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300 [&_blockquote]:border-l-primary-500 [&_table]:text-xs"
             v-html="renderContent(msg.content)"
           ></div>
 
@@ -167,7 +167,7 @@ watch(() => store.currentResponse, (val) => {
                 v-if="ir.result?.url"
                 :src="ir.result.url"
                 :alt="ir.task"
-                class="w-full max-h-80 object-contain bg-black/50 cursor-zoom-in hover:opacity-90 transition-opacity"
+                class="w-full max-h-80 object-contain bg-slate-100 cursor-zoom-in hover:opacity-90 transition-opacity"
                 @click="openLightbox(ir.result.url, ir.task)"
                 loading="lazy"
               />
@@ -264,7 +264,7 @@ watch(() => store.currentResponse, (val) => {
       <!-- Streaming: live thinking + response -->
       <div v-if="store.isLoading" class="flex gap-3 justify-start">
         <div class="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-sm shrink-0">🤖</div>
-        <div class="max-w-[80%] rounded-2xl rounded-bl-md px-4 py-3 bg-surface-800 border border-gray-700/50 text-sm">
+        <div class="max-w-[80%] rounded-2xl rounded-bl-md px-4 py-3 bg-surface-800 border border-gray-700/50 shadow-sm text-sm">
           <!-- Live thinking panel -->
           <ThinkingPanel
             :steps="store.thinkSteps"
@@ -274,7 +274,7 @@ watch(() => store.currentResponse, (val) => {
           <!-- Streaming response preview (debounced markdown for performance) -->
           <div
             v-if="store.currentResponse"
-            class="prose prose-invert prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300"
+            class="prose prose-sm max-w-none [&_a]:text-blue-400 [&_a]:underline [&_a]:break-all [&_pre]:bg-surface-900 [&_code]:text-green-300"
             v-html="streamingHtml"
           ></div>
 
@@ -297,7 +297,7 @@ watch(() => store.currentResponse, (val) => {
             @keydown="handleKeydown"
             placeholder="输入任务，多智能体并行处理... | Shift+Enter 换行，Enter 发送"
             rows="2"
-            class="flex-1 bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white
+            class="flex-1 bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-slate-900
                    placeholder-gray-500 resize-none focus:border-primary-500 focus:outline-none"
             :disabled="store.isLoading"
           ></textarea>

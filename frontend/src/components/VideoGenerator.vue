@@ -45,7 +45,7 @@ function openLightbox(src, alt) {
           v-model="prompt"
           placeholder="描述你想生成的视频场景..."
           rows="4"
-          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-white
+          class="w-full bg-surface-800 border border-gray-600 rounded-xl px-4 py-2.5 text-sm text-slate-900
                  placeholder-gray-500 resize-none focus:border-primary-500 focus:outline-none"
         ></textarea>
       </div>
@@ -64,7 +64,7 @@ function openLightbox(src, alt) {
         {{ generating ? '生成中...' : '🎬 生成视频' }}
       </button>
 
-      <div v-if="error" class="text-red-400 text-sm bg-red-900/30 rounded-lg p-3">{{ error }}</div>
+      <div v-if="error" class="text-red-400 text-sm bg-red-50 rounded-lg p-3">{{ error }}</div>
 
       <div v-if="store.videoResults.length" class="space-y-4">
         <h3 class="text-sm font-medium text-gray-300">生成结果</h3>
@@ -89,7 +89,7 @@ function openLightbox(src, alt) {
             <img
               v-if="item.result?.fallback_image?.url"
               :src="item.result.fallback_image.url"
-              class="mt-2 rounded-lg max-w-full max-h-48 object-contain bg-black/50 cursor-zoom-in hover:opacity-90"
+              class="mt-2 rounded-lg max-w-full max-h-48 object-contain bg-slate-100 cursor-zoom-in hover:opacity-90"
               @click="openLightbox(item.result.fallback_image.url, item.prompt)"
               loading="lazy"
             />

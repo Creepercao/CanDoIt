@@ -122,7 +122,7 @@ const selectedShortId = computed(() => {
     <button
       ref="triggerRef"
       @click="toggleDropdown"
-      class="flex items-center gap-1.5 bg-surface-800 border border-gray-600 rounded-lg px-2.5 py-1.5 text-sm text-white
+      class="flex items-center gap-1.5 bg-surface-800 border border-gray-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-900
              hover:border-gray-500 focus:border-primary-500 focus:outline-none transition-colors min-w-0"
     >
       <span class="text-xs">{{ label }}</span>
@@ -135,7 +135,7 @@ const selectedShortId = computed(() => {
       <div
         v-if="open"
         ref="panelRef"
-        class="fixed bg-surface-900 border border-gray-600 rounded-xl shadow-2xl z-[9999] max-h-[70vh] overflow-hidden flex flex-col"
+        class="fixed bg-white border border-gray-600 rounded-xl shadow-xl z-[9999] max-h-[70vh] overflow-hidden flex flex-col"
         :style="{ top: panelStyle.top, left: panelStyle.left, width: '380px', maxWidth: '92vw' }"
       >
         <!-- Header -->
@@ -146,7 +146,7 @@ const selectedShortId = computed(() => {
           <button
             @click="store.doRefreshModels()"
             :disabled="store.modelsLoading"
-            class="text-xs text-gray-500 hover:text-white px-2 py-0.5 rounded hover:bg-surface-700 transition-colors disabled:opacity-50"
+            class="text-xs text-gray-500 hover:text-slate-900 px-2 py-0.5 rounded hover:bg-surface-700 transition-colors disabled:opacity-50"
             title="刷新模型列表"
           >
             <span v-if="store.modelsLoading" class="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-1 align-middle"></span>
@@ -163,7 +163,7 @@ const selectedShortId = computed(() => {
           <div v-for="group in providerGroups" :key="group.name">
             <button
               @click="toggleProvider(group.name)"
-              class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-800 transition-colors border-b border-gray-700/20"
+              class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-800 transition-colors border-b border-gray-700/20"
             >
               <span class="text-[10px] text-gray-500 transition-transform" :class="{ 'rotate-90': !collapsedProviders[group.name] }">▶</span>
               <span class="text-xs text-gray-300 font-medium truncate flex-1">{{ group.name }}</span>
@@ -179,7 +179,7 @@ const selectedShortId = computed(() => {
                   'w-full text-left px-6 py-1.5 text-sm transition-colors truncate block',
                   selected === m.id
                     ? 'bg-primary-600/20 text-primary-400 border-l-2 border-primary-500'
-                    : 'text-gray-400 hover:text-white hover:bg-surface-800 border-l-2 border-transparent',
+                    : 'text-gray-400 hover:text-slate-900 hover:bg-gray-800 border-l-2 border-transparent',
                 ]"
               >
                 {{ m.id }}
