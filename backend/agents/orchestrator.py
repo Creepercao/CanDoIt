@@ -226,11 +226,14 @@ def _summarize_output(agent: str, output: dict) -> dict:
 
 # ── Supervisor ─────────────────────────────────────────────────────────
 
-def _build_supervisor_prompt() -> str:
+def _build_supervisor_prompt(memories: str = "") -> str:
     skills_section = skill_registry.build_skills_section()
     routing_rules = skill_registry.build_routing_rules()
     prompt = SUPERVISOR_PROMPT_TEMPLATE.replace("{skills_section}", skills_section)
-    return prompt.replace("{routing_rules}", routing_rules)
+    prompt = prompt.replace("{routing_rules}", routing_rules)
+    if memories:
+        prompt = f"{memories}\n\n{prompt}"
+    return prompt
 
 
 async def supervisor_node(state: dict) -> dict:
@@ -244,7 +247,9 @@ async def supervisor_node(state: dict) -> dict:
         temperature=0.1, max_tokens=2048, provider_config=None,
     )
 
-    prompt = _build_supervisor_prompt().replace("{user_request}", user_req)
+    prompt = _build_supervisor_prompt(state.get("_memories") or "").replace(
+        "{user_request}", user_req
+    )
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
 
@@ -635,6 +640,28 @@ async def _run_agent_loop_events(
     # ── 1. Supervisor ──────────────────────────────────────────────────
 
     yield {"event": "phase", "data": {"phase": "supervisor", "message": "analyzing request..."}}
+
+    # Recall cross-session memories so planning respects standing preferences.
+    try:
+        from backend.memory import get_memory_store, memory_enabled
+
+        if memory_enabled():
+            block, recalled = await get_memory_store().recall_for_prompt(user_request)
+            if block:
+                state["_memories"] = block
+                state["_recalled_memories"] = recalled
+                yield {"event": "memory", "data": {
+                    "run_id": reviewer.run_id,
+                    "count": len(recalled),
+                    "items": [
+                        {"kind": item["kind"], "text": item["text"],
+                         "score": item.get("score")}
+                        for item in recalled
+                    ],
+                }}
+    except Exception as memory_err:
+        logger.debug("Memory recall skipped: %s", memory_err)
+
     sup_result = await supervisor_node(state)
     merge_worker_results(state, [sup_result])
 

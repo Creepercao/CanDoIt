@@ -342,3 +342,40 @@ export async function deleteRun(runId) {
   const { data } = await api.delete(`/runs/${encodeURIComponent(runId)}`)
   return data
 }
+
+// ---- Cross-session memory ----
+
+export async function fetchMemories(params = {}) {
+  const { data } = await api.get('/memory', { params })
+  return data
+}
+
+export async function fetchMemoryStats() {
+  const { data } = await api.get('/memory/stats')
+  return data
+}
+
+export async function createMemory({ text, kind = 'fact', status = '', tags = [] }) {
+  const { data } = await api.post('/memory', { text, kind, status: status || null, tags })
+  return data
+}
+
+export async function confirmMemory(memoryId) {
+  const { data } = await api.post(`/memory/${encodeURIComponent(memoryId)}/confirm`)
+  return data
+}
+
+export async function rejectMemory(memoryId) {
+  const { data } = await api.post(`/memory/${encodeURIComponent(memoryId)}/reject`)
+  return data
+}
+
+export async function deleteMemory(memoryId) {
+  const { data } = await api.delete(`/memory/${encodeURIComponent(memoryId)}`)
+  return data
+}
+
+export async function searchMemory(query, topK = 5) {
+  const { data } = await api.post('/memory/search', { query, top_k: topK })
+  return data
+}

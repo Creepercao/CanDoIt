@@ -41,6 +41,7 @@ const approvalSteps = computed(() => props.steps.filter(s => s.type === 'approva
 const pendingApprovals = computed(() => approvalSteps.value.filter(s => s.status === 'pending'))
 const remediationSteps = computed(() => props.steps.filter(s => s.type === 'remediation'))
 const retrySteps = computed(() => props.steps.filter(s => s.type === 'agent_retry'))
+const memorySteps = computed(() => props.steps.filter(s => s.type === 'memory' && s.count))
 const retryByTask = computed(() => {
   const map = {}
   for (const step of retrySteps.value) {
@@ -305,6 +306,18 @@ async function reject(item) {
             >
               {{ by === 'llm' ? '模型复核' : '产出物核验' }}
             </span>
+          </div>
+        </div>
+
+        <!-- ── Cross-session memory recall ── -->
+        <div v-if="memorySteps.length" class="rounded-lg border border-indigo-500/40 bg-indigo-500/10 p-2.5">
+          <div class="flex items-center justify-between text-xs mb-1.5">
+            <span class="font-medium text-indigo-200">🧠 召回长期记忆</span>
+            <span class="text-gray-500">{{ memorySteps[memorySteps.length - 1].count }} 条</span>
+          </div>
+          <div v-for="(m, mi) in memorySteps[memorySteps.length - 1].items" :key="mi"
+               class="text-[11px] text-gray-300">
+            <span class="text-[10px] text-indigo-300">[{{ m.kind }}]</span> {{ m.text }}
           </div>
         </div>
 

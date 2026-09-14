@@ -30,6 +30,7 @@ outputs/audit/
 outputs/safety/
 outputs/sessions/
 outputs/runs/
+outputs/memory/
 
 # Local scratch space
 temp/

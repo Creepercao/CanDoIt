@@ -30,12 +30,16 @@ _TOKEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}")),
 ]
 
-# ``api_key = "..."`` / ``"password": "..."`` style assignments.
+# ``api_key = "..."`` / ``"password": "..."`` style assignments, including the
+# Chinese field names that show up in scraped pages and user paste-ins.
 _KV_PATTERN = re.compile(
     r"""(?ix)
-    (?P<key>\b(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|
-        client[_-]?secret|secret[_-]?key|password|passwd|pwd)\b)
-    \s*[:=]\s*
+    (?P<key>
+        \b(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|
+            client[_-]?secret|secret[_-]?key|password|passwd|pwd)\b
+        |(?:密码|口令|密钥|令牌|凭据)
+    )
+    \s*[:=：]\s*
     (?P<quote>["']?)
     (?P<value>[A-Za-z0-9_\-./+=]{8,})
     (?P=quote)

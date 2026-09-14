@@ -10,6 +10,7 @@ import ScholarNotes from './components/ScholarNotes.vue'
 import ProviderEditor from './components/ProviderEditor.vue'
 import SafetyPanel from './components/SafetyPanel.vue'
 import RunHistory from './components/RunHistory.vue'
+import MemoryPanel from './components/MemoryPanel.vue'
 import ModelSelector from './components/ModelSelector.vue'
 
 const store = useChatStore()
@@ -32,6 +33,7 @@ const tabs = [
   { key: 'skills', label: '🔧 技能', component: SkillManager },
   { key: 'safety', label: '🔒 安全', component: SafetyPanel },
   { key: 'runs', label: '📈 运行', component: RunHistory },
+  { key: 'memory', label: '🧠 记忆', component: MemoryPanel },
   { key: 'providers', label: '⚙️ Providers', component: ProviderEditor },
 ]
 async function deleteSession(session) {
@@ -185,6 +187,7 @@ async function deleteSession(session) {
           <SkillManager v-else-if="store.activeTab === 'skills'" key="skills" />
           <SafetyPanel v-else-if="store.activeTab === 'safety'" key="safety" />
           <RunHistory v-else-if="store.activeTab === 'runs'" key="runs" />
+          <MemoryPanel v-else-if="store.activeTab === 'memory'" key="memory" />
           <ProviderEditor v-else-if="store.activeTab === 'providers'" key="providers" />
         </KeepAlive>
       </div>

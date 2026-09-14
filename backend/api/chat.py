@@ -274,6 +274,27 @@ def _build_synth_prompt(user_request: str, state: dict, history: list = None) ->
 
 # ---- Sync run ----
 
+async def _remember(req: ChatRequest, result: dict) -> dict:
+    """Extract cross-session memories from a finished run.
+
+    Facts and preferences are stored immediately; reusable conclusions are
+    staged as pending and need an explicit confirmation before they can be
+    recalled.  Never raises — memory is best-effort.
+    """
+    try:
+        from backend.memory import remember_run
+
+        return await remember_run(
+            user_request=req.message,
+            final_response=result.get("final_response", ""),
+            state=result,
+            model_id=req.chat_model_id or "",
+        )
+    except Exception as exc:
+        logger.debug("Memory extraction skipped: %s", exc)
+        return {"stored": [], "pending": [], "skipped": str(exc)}
+
+
 def _finish_trace(trace, state: dict) -> None:
     """Attach the outcome of a run to its trace before persisting it."""
     verification = state.get("_verification") or {}
@@ -302,6 +323,7 @@ async def _run_agents(req: ChatRequest) -> dict:
         with track_run(run_id, session_id=req.session_id, request=req.message) as trace:
             result = await run_agent_loop(state)
             _finish_trace(trace, result)
+            memory = await _remember(req, result)
             save_run(trace.to_dict())
 
         return {
@@ -312,6 +334,8 @@ async def _run_agents(req: ChatRequest) -> dict:
             "usage": trace.to_dict().get("usage", {}),
             "safety": result.get("_safety", {}),
             "verification": result.get("_verification"),
+            "memory": memory,
+            "recalled_memories": result.get("_recalled_memories", []),
             "dropped_tasks": result.get("dropped_tasks", []),
             "safety_blocks": result.get("safety_blocks", []),
             "stopped_reason": result.get("_stopped_reason", ""),
@@ -483,6 +507,8 @@ async def _stream_chat_inner(req: ChatRequest, state: dict,
     except Exception as trace_err:
         logger.debug("Trace finalisation skipped: %s", trace_err)
 
+    memory = await _remember(req, {**state, "final_response": full_response})
+
     yield _sse("final", {
         "response": full_response,
         "chart_results": state.get("chart_results", []),
@@ -493,6 +519,8 @@ async def _stream_chat_inner(req: ChatRequest, state: dict,
         "verification": verification,
         "safety_blocks": safety_blocks,
         "usage": trace.usage(),
+        "memory": memory,
+        "recalled_memories": state.get("_recalled_memories", []),
     })
     yield _sse("done", {})
 
