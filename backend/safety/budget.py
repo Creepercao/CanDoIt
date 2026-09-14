@@ -41,11 +41,13 @@ class RunBudget:
     max_replans: int = 1
     max_wall_seconds: float = 1800.0
     max_llm_reviews: int = 6
+    max_retries: int = 12
 
     steps: int = 0
     waves: int = 0
     replans: int = 0
     llm_reviews: int = 0
+    retries: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
     # ── construction ───────────────────────────────────────────────────
@@ -58,6 +60,7 @@ class RunBudget:
             "max_replans": _env_int("AGENT_MAX_REPLANS", 1),
             "max_wall_seconds": _env_float("AGENT_MAX_WALL_SECONDS", 1800.0),
             "max_llm_reviews": _env_int("SAFETY_MAX_LLM_REVIEWS", 6),
+            "max_retries": _env_int("AGENT_MAX_RETRIES", 12),
         }
         params.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**params)
@@ -104,6 +107,15 @@ class RunBudget:
     def consume_llm_review(self) -> None:
         self.llm_reviews += 1
 
+    def allow_retry(self) -> bool:
+        """Retries are capped per run so a pathological loop cannot spin."""
+        if self.expired:
+            return False
+        return self.retries < self.max_retries
+
+    def consume_retry(self) -> None:
+        self.retries += 1
+
     # ── reporting ──────────────────────────────────────────────────────
 
     def exceeded(self) -> list[str]:
@@ -129,6 +141,8 @@ class RunBudget:
             "max_replans": self.max_replans,
             "llm_reviews": self.llm_reviews,
             "max_llm_reviews": self.max_llm_reviews,
+            "retries": self.retries,
+            "max_retries": self.max_retries,
             "elapsed_seconds": round(self.elapsed, 2),
             "max_wall_seconds": self.max_wall_seconds,
             "exhausted": self.exceeded(),

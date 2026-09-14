@@ -26,6 +26,8 @@ def safety_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SAFETY_AUTO_REMEDIATE", "1")
     monkeypatch.setenv("SAFETY_NONSTREAM_REVIEW", "deny")
     monkeypatch.setenv("SAFETY_APPROVAL_TIMEOUT_SECONDS", "1")
+    # Tests must never reach a provider; recovery gets its own stub-based tests.
+    monkeypatch.setenv("AGENT_LLM_REPLAN", "0")
 
     settings_mod._settings = SafetySettings(path=tmp_path / "settings.json")
     audit_mod._audit_log = AuditLog(directory=tmp_path / "audit")

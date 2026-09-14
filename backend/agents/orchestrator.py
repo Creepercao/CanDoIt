@@ -34,6 +34,7 @@ from langchain_core.messages import HumanMessage
 from backend.models.provider import create_chat_model
 from backend.cache import cache
 from backend.skills.registry import skill_registry
+from backend.agents import recovery
 from backend.agents.builtin_workers import synthesizer_node
 from backend.prompts import SUPERVISOR_PROMPT_TEMPLATE
 from backend.safety import RunBudget, SafetyReviewer, new_run_id
@@ -457,6 +458,47 @@ def _budget_note(reviewer: SafetyReviewer) -> str:
     return "；".join(reasons) if reasons else "执行预算已用尽"
 
 
+async def _propose_recovery(
+    user_request: str,
+    tasks: list[dict],
+    state: dict,
+    verdict: dict,
+    reviewer: SafetyReviewer,
+) -> tuple[list[dict], str, str]:
+    """Decide how to recover from an incomplete run.
+
+    An incremental LLM re-plan is preferred because it can route *around* a
+    broken agent (different step, different decomposition); the mechanical
+    remediation derived from the unmet criteria is the deterministic fallback.
+
+    Returns ``(tasks, strategy, reason)``; the caller owns budget accounting.
+    """
+    from backend.safety import verifier as _verifier
+    from backend.safety import get_safety_settings
+
+    if not verdict or verdict.get("status") == _verifier.COMPLETE:
+        return [], "none", ""
+    # ``auto_remediate`` governs recovery as a whole, including the LLM
+    # re-plan — otherwise switching it off would still spend a model call.
+    if not get_safety_settings().auto_remediate:
+        return [], "none", ""
+
+    if recovery.llm_replan_enabled() and reviewer.budget.allow_llm_review():
+        reviewer.budget.consume_llm_review()
+        planned, reason = await recovery.replan(
+            user_request=user_request,
+            tasks=tasks,
+            state=state,
+            verdict=verdict,
+            catalog=reviewer.catalog,
+            model_id=reviewer.model_id,
+        )
+        if planned:
+            return planned, "llm_replan", reason
+
+    return reviewer.build_remediation(tasks), "mechanical", ""
+
+
 # ── Agent Loop (shared core) ───────────────────────────────────────────
 
 async def _run_agent_loop_events(
@@ -772,22 +814,83 @@ async def _run_agent_loop_events(
                 }}
 
             # Execute the wave in parallel, heart-beating while we wait.
-            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict]:
+            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict, int, list[dict]]:
+                """Run one task, retrying while the result stays unusable.
+
+                Returns ``(task, output, attempts, retry_events)``.  Transient
+                provider failures (429 / timeout / connection) are retried
+                unchanged after a backoff; semantic failures (empty or errored
+                output) are retried with the reason fed back into the prompt.
+                Only the final attempt's output is merged into the state.
+                """
                 agent = task.get("agent", "")
-                try:
-                    timeout = _task_timeout_seconds(agent)
-                    result = await asyncio.wait_for(fn(_state_for_task(st, task)), timeout=timeout)
-                    return task, result
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "Agent Loop: '%s' timed out after %.0fs",
-                        task.get("id"),
-                        _task_timeout_seconds(agent),
+                attempts = 0
+                retry_events: list[dict] = []
+                output: dict = {}
+                current = task
+
+                while True:
+                    attempts += 1
+                    try:
+                        timeout = _task_timeout_seconds(agent)
+                        output = await asyncio.wait_for(
+                            fn(_state_for_task(st, current)), timeout=timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "Agent Loop: '%s' timed out after %.0fs",
+                            task.get("id"),
+                            _task_timeout_seconds(agent),
+                        )
+                        output = {f"{agent}_results": [{"error": "task timed out"}]}
+                    except Exception as e:
+                        logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
+                        output = {f"{agent}_results": [{"error": str(e)}]}
+
+                    if not isinstance(output, dict):
+                        output = {f"{agent}_results": [{"error": "worker returned a non-dict result"}]}
+
+                    if not recovery.is_unusable(output):
+                        break
+
+                    reason = recovery.failure_reason(output)
+                    if attempts >= recovery.max_attempts():
+                        break
+                    if not reviewer.budget.allow_retry():
+                        logger.warning(
+                            "Agent Loop: '%s' retry budget exhausted (%s)",
+                            task.get("id"), reason,
+                        )
+                        break
+
+                    transient = recovery.classify_failure(reason) == recovery.TRANSIENT
+                    reviewer.budget.consume_retry()
+                    delay = recovery.backoff_seconds(attempts) if transient else 0.0
+                    retry_events.append({"event": "agent_retry", "data": {
+                        "run_id": reviewer.run_id,
+                        "agent": agent,
+                        "task_id": task.get("id", ""),
+                        "label": agent_labels.get(agent_map.get(agent, ""), agent),
+                        "attempt": attempts + 1,
+                        "max_attempts": recovery.max_attempts(),
+                        "kind": recovery.TRANSIENT if transient else recovery.SEMANTIC,
+                        "reason": reason,
+                        "backoff_seconds": round(delay, 1),
+                    }})
+                    reviewer.record(
+                        "agent.retry", stage="wave", target=task.get("id", ""),
+                        decision="allow",
+                        risk="medium" if not transient else "low",
+                        severity="warning",
+                        message=f"{agent} 第 {attempts + 1} 次尝试：{reason}",
+                        details={"kind": "transient" if transient else "semantic",
+                                 "delay": delay},
                     )
-                    return task, {f"{agent}_results": [{"error": "task timed out"}]}
-                except Exception as e:
-                    logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
-                    return task, {f"{agent}_results": [{"error": str(e)}]}
+                    if delay:
+                        await asyncio.sleep(delay)
+                    current = recovery.retry_task(task, attempts, reason, transient=transient)
+
+                return task, output, attempts, retry_events
 
             wave_future = asyncio.gather(*[
                 _run_one(task, fn, state) for task, fn in approved_wave
@@ -802,8 +905,11 @@ async def _run_agent_loop_events(
             results = await wave_future
 
             # Merge and emit agent_done
-            for task, output in results:
+            for task, output, attempts, retry_events in results:
                 agent = task.get("agent", "")
+
+                for event in retry_events:
+                    yield event
 
                 # ── Safety checkpoint 3: output review + redaction ──
                 output_decision = None
@@ -857,6 +963,7 @@ async def _run_agent_loop_events(
                     "task_id": task.get("id", ""),
                     "slide_index": task.get("slide_index"),
                     "status": "done",
+                    "attempts": attempts,
                     **summary,
                 }
                 if output_decision is not None and output_decision.findings:
@@ -874,19 +981,35 @@ async def _run_agent_loop_events(
         yield {"event": "verification", "data": verdict}
 
         # A remediation round must never restart an already exhausted budget.
-        remediation = [] if budget_exhausted else reviewer.build_remediation(tasks)
-        if remediation:
-            state["tasks"] = _normalize_tasks(tasks + remediation)
-            yield {"event": "remediation", "data": {
-                "run_id": reviewer.run_id,
-                "round": reviewer.budget.replans,
-                "tasks": [
-                    {"agent": t.get("agent", ""), "prompt": (t.get("prompt") or "")[:120]}
-                    for t in remediation
-                ],
-            }}
-            continue
-        break
+        if budget_exhausted or not reviewer.budget.allow_replan():
+            break
+
+        remediation, strategy, reason = await _propose_recovery(
+            user_request, tasks, state, verdict, reviewer
+        )
+        if not remediation:
+            break
+
+        reviewer.budget.consume_replan()
+        reviewer.record(
+            "verification.remediation", stage="verify", decision="allow", risk="medium",
+            severity="warning",
+            message=f"追加 {len(remediation)} 个补救步骤（{strategy}，第 {reviewer.budget.replans} 轮）",
+            details={"strategy": strategy, "reason": reason,
+                     "tasks": [t.get("agent") for t in remediation]},
+        )
+        state["tasks"] = _normalize_tasks(tasks + remediation)
+        yield {"event": "remediation", "data": {
+            "run_id": reviewer.run_id,
+            "round": reviewer.budget.replans,
+            "strategy": strategy,
+            "reason": reason,
+            "tasks": [
+                {"agent": t.get("agent", ""), "prompt": (t.get("prompt") or "")[:120]}
+                for t in remediation
+            ],
+        }}
+        continue
 
     state["_safety"] = reviewer.summary()
     state["_stopped_reason"] = stopped_reason

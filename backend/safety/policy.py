@@ -456,6 +456,23 @@ def redact_output(output: Any) -> tuple[Any, int]:
     return sanitized, (1 if changed else 0)
 
 
+# Public predicates over worker results, shared with the recovery layer.
+
+def output_has_error(output: Any) -> bool:
+    """True when any nested entry of *output* carries an ``error`` field."""
+    return _has_error(output)
+
+
+def output_is_empty(output: Any) -> bool:
+    """True when *output* contains no meaningful result payload."""
+    return _is_empty(output)
+
+
+def first_error(output: Any) -> str:
+    """First ``error`` message found in *output* (empty string when none)."""
+    return _first_error(output)
+
+
 # ── output helpers ─────────────────────────────────────────────────────
 
 

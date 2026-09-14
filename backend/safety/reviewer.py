@@ -396,28 +396,19 @@ class SafetyReviewer:
         return verdict
 
     def build_remediation(self, tasks: list[dict]) -> list[dict]:
-        """Propose bounded remediation tasks for an incomplete verdict."""
+        """Propose deterministic remediation tasks for an incomplete verdict.
+
+        Pure proposal: the caller decides whether to run them and owns the
+        re-plan budget/audit accounting, because an LLM re-plan may be
+        attempted first and only one of the two strategies is used.
+        """
         if not self.verdict or self.verdict["status"] == verifier.COMPLETE:
             return []
-        settings = get_safety_settings()
-        if not settings.auto_remediate or not self.budget.allow_replan():
+        if not get_safety_settings().auto_remediate:
             return []
-        additions = verifier.build_remediation_tasks(
+        return verifier.build_remediation_tasks(
             self.verdict, tasks, self.catalog, max_tasks=MAX_REMEDIATION_TASKS
         )
-        if not additions:
-            return []
-        self.budget.consume_replan()
-        self.record(
-            "verification.remediation",
-            stage="verify",
-            decision="allow",
-            risk="medium",
-            severity="warning",
-            message=f"针对未完成事项追加 {len(additions)} 个补救步骤（第 {self.budget.replans} 轮）",
-            details={"tasks": [a.get("agent") for a in additions]},
-        )
-        return additions
 
     # ── summary ────────────────────────────────────────────────────────
 

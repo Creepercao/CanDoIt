@@ -193,7 +193,6 @@ PLAN_REVIEW_PROMPT = """你是多智能体平台的**执行审查员**。下面�
 
 
 # ── Safety: goal completion confirmation ──────────────────────────────
-
 GOAL_VERIFICATION_PROMPT = """你是多智能体平台的**目标完成确认员**。请判断这次执行是否真正完成了用户的原始目标。
 
 用户原始请求:
@@ -221,4 +220,57 @@ GOAL_VERIFICATION_PROMPT = """你是多智能体平台的**目标完成确认员
     "missing": ["未完成的具体事项"],
     "unverified_claims": ["回复中无法被产出物支持的说法"],
     "reason": "一句话中文结论"
+}}"""
+
+
+# ── Agent self-correction: retry feedback ─────────────────────────────
+
+TASK_RETRY_FEEDBACK_TRANSIENT = """
+
+[重试反馈 · 第 {attempt} 次尝试]
+上一次尝试因为可恢复的服务问题失败了：{reason}
+请重新完整地执行同一个任务，不要改变目标，也不需要额外解释失败原因。"""
+
+TASK_RETRY_FEEDBACK_SEMANTIC = """
+
+[重试反馈 · 第 {attempt} 次尝试]
+上一次尝试产出的结果不可用：{reason}
+请针对该问题重新产出，要求：
+- 不要重复上一次的做法，换一个更可靠的思路
+- 必须返回完整、非空、可直接使用的产出
+- 如果需要先获取信息，请先完成信息获取再产出结果"""
+
+
+# ── Agent self-correction: incremental re-planning ────────────────────
+
+REPLAN_PROMPT = """你是多智能体平台的任务规划器。上一次执行有步骤失败或目标未达成，请给出**修订后的后续步骤**。
+
+用户原始请求:
+{user_request}
+
+已执行的步骤及结果:
+{attempts}
+
+已产出的交付物:
+{artifacts}
+
+目标完成确认指出的缺口:
+{gaps}
+
+可用代理:
+{agents}
+
+要求:
+- 只规划**尚未完成**的工作，已经成功的部分不要重复
+- depends_on 填依赖的步骤编号（从 1 开始，指本次输出的步骤序号）
+- 只能使用上面列出的代理名，禁止编造
+- 最多 {max_steps} 个步骤
+- 如果现有产出已经足够满足用户请求，返回空的 plan 数组
+
+只输出 JSON：
+{{
+    "reason": "一句话说明为什么这样修订",
+    "plan": [
+        {{"step": 1, "agent": "代理名", "prompt": "具体任务描述", "depends_on": []}}
+    ]
 }}"""

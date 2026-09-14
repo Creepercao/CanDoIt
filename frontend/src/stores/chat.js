@@ -426,6 +426,7 @@ export const useChatStore = defineStore('chat', () => {
         status: data.status || 'done',
         blocked: data.status === 'blocked',
         review: data.review || null,
+        attempts: data.attempts || 1,
         summary: data.summary || (data.status === 'blocked' ? '已被安全审查拦截' : '完成'),
         resultKey: data.result_key || '',
         resultCount: data.count || 0,
@@ -724,6 +725,20 @@ export const useChatStore = defineStore('chat', () => {
               break
             case 'agent_done':
               finishThinkStep(data)
+              break
+            case 'agent_retry':
+              addThinkStep({
+                type: 'agent_retry',
+                agent: data.agent,
+                agentType: data.agent_type,
+                label: data.label,
+                taskId: data.task_id,
+                attempt: data.attempt,
+                maxAttempts: data.max_attempts,
+                kind: data.kind,
+                reason: data.reason,
+                backoffSeconds: data.backoff_seconds || 0,
+              })
               break
             case 'token':
               // Incremental token streaming from synthesizer

@@ -40,6 +40,15 @@ const reviewSteps = computed(() => props.steps.filter(s => s.type === 'safety_re
 const approvalSteps = computed(() => props.steps.filter(s => s.type === 'approval'))
 const pendingApprovals = computed(() => approvalSteps.value.filter(s => s.status === 'pending'))
 const remediationSteps = computed(() => props.steps.filter(s => s.type === 'remediation'))
+const retrySteps = computed(() => props.steps.filter(s => s.type === 'agent_retry'))
+const retryByTask = computed(() => {
+  const map = {}
+  for (const step of retrySteps.value) {
+    const key = step.taskId || step.agent
+    map[key] = (map[key] || 0) + 1
+  }
+  return map
+})
 const budgetSteps = computed(() => props.steps.filter(s => s.type === 'budget'))
 const verification = computed(() => {
   const list = props.steps.filter(s => s.type === 'verification')
@@ -77,6 +86,7 @@ const headerSummary = computed(() => {
     return '正在规划任务'
   }
   const parts = [`已完成 ${progress.value.done}/${progress.value.total || progress.value.done} 个智能体任务`]
+  if (retrySteps.value.length) parts.push(`🔁 重试 ${retrySteps.value.length} 次`)
   if (verification.value) {
     const map = { complete: '✅ 目标已完成', partial: '⚠️ 目标部分完成', incomplete: '❌ 目标未完成', failed: '❌ 执行失败' }
     parts.push(map[verification.value.status] || verification.value.status)
@@ -298,14 +308,40 @@ async function reject(item) {
           </div>
         </div>
 
+        <!-- ── Self-correction: task retries ── -->
+        <div
+          v-if="retrySteps.length"
+          class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5"
+        >
+          <div class="flex items-center justify-between text-xs mb-1.5">
+            <span class="font-medium text-amber-200">🔁 自我纠错重试</span>
+            <span class="text-gray-500">{{ retrySteps.length }} 次</span>
+          </div>
+          <div v-for="(r, ri) in retrySteps" :key="ri" class="text-[11px] text-gray-300">
+            <span class="text-amber-300">{{ r.label || r.agent }}</span>
+            第 {{ r.attempt }}/{{ r.maxAttempts }} 次
+            <span class="text-gray-500">
+              （{{ r.kind === 'transient' ? '服务波动' : '产出不合格' }}）
+            </span>
+            <span v-if="r.backoffSeconds">· 退避 {{ r.backoffSeconds }}s</span>
+            <div class="text-[10px] text-gray-500 line-clamp-1">{{ r.reason }}</div>
+          </div>
+        </div>
+
         <!-- ── Remediation rounds ── -->
         <div
           v-if="remediationSteps.length"
           class="rounded-lg border border-blue-500/40 bg-blue-500/10 p-2.5"
         >
-          <div class="text-xs font-medium text-blue-200 mb-1">🔁 自动补救轮次</div>
+          <div class="text-xs font-medium text-blue-200 mb-1">
+            🔁 自动补救轮次
+            <span class="text-[10px] font-normal text-gray-400">
+              （{{ remediationSteps[0].strategy === 'llm_replan' ? '模型重规划' : '按缺口补齐' }}）
+            </span>
+          </div>
           <div v-for="(r, ri) in remediationSteps" :key="ri" class="text-[11px] text-gray-300">
             第 {{ r.round }} 轮：{{ (r.tasks || []).map(t => t.agent).join('、') }}
+            <div v-if="r.reason" class="text-[10px] text-gray-500 italic">{{ r.reason }}</div>
           </div>
         </div>
 
@@ -463,6 +499,9 @@ async function reject(item) {
             </div>
             <div v-if="step.task" class="mt-1 text-xs text-gray-400 line-clamp-2">
               {{ step.task }}
+            </div>
+            <div v-if="step.attempts > 1" class="mt-1 flex items-center gap-1 text-[10px] text-amber-300">
+              🔁 第 {{ step.attempts }} 次尝试才成功
             </div>
             <div v-if="step.summary" class="mt-1 text-xs" :class="step.blocked ? 'text-red-300' : 'text-green-300'">
               {{ step.summary }}
