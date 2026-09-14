@@ -41,7 +41,13 @@ npm run build      # 生产构建 → dist/
 npm run preview    # 预览生产构建
 ```
 
-后端暂无测试和 linter 配置。
+后端测试位于 `backend/tests/`，使用 pytest：
+
+```bash
+python -m pytest backend/tests -q
+```
+
+后端暂无 linter 配置。
 
 ## 架构
 
@@ -77,7 +83,19 @@ backend/
 │   ├── research_cache.py# GET/POST/PATCH/DELETE /api/research/cache
 │   ├── pptx.py          # HTML → PPTX 导出（Playwright 截图 + python-pptx）
 │   ├── ppt_runs.py      # PPT 运行记录追踪
+│   ├── safety.py        # 安全审查 / 审计日志 / 人工审批 REST 接口
 │   └── mcp.py           # MCP 工具配置 API
+│
+├── safety/              # Agent 安全层 — 执行审查、审批、目标完成确认
+│   ├── reviewer.py      # SafetyReviewer — 四个检查点的门面（编排器唯一入口）
+│   ├── policy.py        # 策略引擎：代理能力分级 + 内容规则 → 风险 → 决策
+│   ├── injection.py     # 提示词注入筛查 + 不可信内容围栏
+│   ├── verifier.py      # 目标完成确认（产出物核验 + LLM 复核）与补救任务生成
+│   ├── approvals.py     # 人在回路审批登记表（超时即拒绝，fail-closed）
+│   ├── audit.py         # 哈希链审计日志 outputs/audit/audit-YYYY-MM-DD.jsonl
+│   ├── budget.py        # 运行预算：步骤 / 波次 / 补救轮次 / 时长
+│   ├── redact.py        # 凭据脱敏（审计、日志、worker 输出）
+│   └── settings.py      # 运行期开关（outputs/safety/settings.json 持久化）
 │
 ├── skills/              # 技能系统 — 可插拔的代理扩展模块
 │   ├── base.py          # Skill 基类（dataclass）
@@ -116,7 +134,19 @@ backend/
 5. **Synthesizer** — 所有波次完成后，综合所有结果生成最终回复（token 级别流式输出）
 6. **流式路径** — `run_agent_loop_stream()` 将每一步映射为 SSE 事件（`phase`、`plan`、`agent_start`、`agent_done`、`token`、`final`、`done`）
 
-**状态结构**：`messages`、`user_request`、`tasks`、`plan_steps`、`research_results`、`analyst_results`、`chart_results`、`image_results`、`video_results`、`code_results`、`skill_outputs`、`final_response`，以及模型 ID 选择字段。
+**安全层检查点**（`backend/safety/`，由 `SafetyReviewer` 统一接入两个编排循环）：
+
+1. **执行前计划审查** — 丢弃引用未注册代理的步骤（否则会卡到死锁保护）、检查破坏性/凭据外传/注入意图、校验步骤预算；可选用 LLM 复核计划
+2. **动作门禁** — 每个任务执行前判定：`high` 暂停等待人工审批（SSE `approval_required`），`critical` 直接拦截且不可放行
+3. **输出审查** — worker 返回后扫描凭据/错误/空结果，凭据在进入 state 前替换为占位符
+4. **目标完成确认** — 核验每个步骤产出与用户明确要求的交付物（图表/图片/视频/代码/HTML/检索依据/数据表格）是否真实存在，并由 LLM 复核；未完成且预算允许时追加补救步骤
+
+审查结论写入哈希链审计日志 `outputs/audit/audit-YYYY-MM-DD.jsonl`（`GET /api/safety/audit/verify` 可校验完整性）。`SAFETY_MODE=off` 时整层旁路，`monitor` 只记录不拦截。
+
+风险 → 决策：`low`→allow、`medium`→notify、`high`→review（人工审批）、`critical`→block。
+内置 worker 标记 `executes=false`（只产出内容），Skill 包与 MCP 工具标记 `executes=true`，因此同样的提示词在两类代理下的判定不同。
+
+**状态结构**：`messages`、`user_request`、`tasks`、`plan_steps`、`research_results`、`analyst_results`、`chart_results`、`image_results`、`video_results`、`code_results`、`skill_outputs`、`final_response`，以及模型 ID 选择字段。安全层额外写入 `run_id`、`safety_blocks`、`dropped_tasks`、`_verification`、`_safety`。
 
 ### 内置代理（agents.yaml + agent_loader.py）
 
@@ -202,7 +232,8 @@ frontend/src/
 ├── utils/markdown.js    # markdown-it + highlight.js 配置
 └── components/
     ├── ChatPanel.vue    # 主聊天界面，支持 markdown 渲染、图表/图片显示
-    ├── ThinkingPanel.vue # 可折叠的代理思考时间线
+    ├── ThinkingPanel.vue # 可折叠的代理思考时间线（含审查结论、审批按钮、目标完成确认）
+    ├── SafetyPanel.vue  # 🔒 安全选项卡 — 总览开关、审批队列、审计检索、规则表、文本审查
     ├── ModelSelector.vue # 按类型（chat/image/video）选择模型的下拉菜单
     ├── ImageGenerator.vue # 独立图片生成标签页
     ├── VideoGenerator.vue # 独立视频生成标签页
@@ -211,7 +242,9 @@ frontend/src/
     └── AgentStatus.vue   # 代理实时状态徽章（遗留组件，当前 SSE 流中未使用）
 ```
 
-**数据流**：`ChatPanel` → `store.sendChatMessage()` → `api.sendMessage(stream=true)` → SSE 事件响应式更新 `store.thinkSteps` 和 `store.currentResponse` → `ChatPanel` 渲染 markdown + ThinkingPanel 时间线。
+**数据流**：`ChatPanel` → `store.sendChatMessage()` → `api.sendMessage(stream=true)` → SSE 事件响应式更新 `store.thinkSteps`、`store.currentResponse`、`store.pendingApprovals` 和 `store.currentVerification` → `ChatPanel` 渲染 markdown + ThinkingPanel 时间线。
+
+**审批交互**：`approval_required` 事件进入 `store.pendingApprovals`，ThinkingPanel 与顶部栏出现「待审批」入口；用户点击批准/拒绝调用 `POST /api/safety/approvals/{id}`，被暂停的 SSE 流随即恢复（`approval_resolved`）。超时按拒绝处理。
 
 **模型选择**和**会话 ID**持久化到 `localStorage`，键名前缀为 `multiagent_`。
 
@@ -254,6 +287,9 @@ frontend/src/
   - 标准 Skill 包（`backend/skills/packages/my-skill/`）— SKILL.md + LLM-as-worker
 - **播放 PPT 动画时，前端 nginx 超时设为 10 分钟** — PPT 生成可能耗时较长，SSE 有心跳保活。
 - **Skill 包上传限制 200 MB** — 与 `starlette.formparsers.MultiPartParser.max_file_size` 一致。
+- **安全层默认开启（`SAFETY_MODE=enforce`）** — 新增 worker 时应确认其风险分级；第三方 Skill 包与 MCP 工具默认按 `executes=true`（可触及主机）处理，触发高风险时会停下等待人工审批。
+- **安全层改动必须同时更新 `backend/safety/` 与 `backend/tests/test_safety.py`** — 策略、脱敏、审计链、审批、完成确认都有对应测试。
+- **审计日志与安全设置写入 `outputs/audit/`、`outputs/safety/`**，已加入 `.gitignore`，属于运行期数据。
 
 ## Feishu/Lark Dedicated Backend
 

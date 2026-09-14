@@ -25,6 +25,13 @@ outputs/skills/
 outputs/chroma_db/
 outputs/ppt_runs/
 outputs/pptx_frames/
+# Safety layer runtime state: audit trail + live policy overrides
+outputs/audit/
+outputs/safety/
+outputs/sessions/
+
+# Local scratch space
+temp/
 
 # Local demo artifacts (generated during development, not product source)
 /arknights_presentation.html

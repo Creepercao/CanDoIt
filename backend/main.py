@@ -18,6 +18,7 @@ from backend.api.research_cache import router as knowledge_router
 from backend.api.pptx import router as pptx_router
 from backend.api.mcp import router as mcp_router
 from backend.api.ppt_runs import router as ppt_runs_router
+from backend.api.safety import router as safety_router
 
 # Allow up to 200 MB file uploads (skill packages)
 MultiPartParser.max_file_size = 200 * 1024 * 1024
@@ -50,6 +51,7 @@ app.include_router(knowledge_router, prefix="/api")
 app.include_router(pptx_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(ppt_runs_router, prefix="/api")
+app.include_router(safety_router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -72,6 +74,29 @@ async def startup():
         logger.warning(f"Dependency warning: {w}")
 
     # Agent Loop mode — no graph build needed; workers are registered in skill_registry
+
+    # ── Safety layer: audit trail, policy settings, approval store ──
+    from backend.safety import get_approval_store, get_audit_log, get_safety_settings
+    safety = get_safety_settings()
+    audit = get_audit_log()
+    get_approval_store()  # lazy init
+    audit.record(
+        "system.startup",
+        stage="startup",
+        actor="system",
+        severity="info",
+        message="安全审查层已启动",
+        details={
+            "mode": safety.mode,
+            "llm_review": safety.llm_review,
+            "goal_verification": safety.goal_verification,
+            "auto_approve": safety.auto_approve,
+        },
+    )
+    logger.info(
+        f"Safety layer: mode={safety.mode} | audit dir={audit.directory} | "
+        f"auto_approve={safety.auto_approve}"
+    )
 
     # ── Initialize research cache + knowledge base ──
     from backend.research_cache import get_knowledge_base, get_research_cache

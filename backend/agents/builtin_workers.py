@@ -48,6 +48,39 @@ def _get_chat_llm(state: dict) -> Any:
     return create_chat_model(model_id or "deepseek-ai/DeepSeek-V3", temperature=0.7, max_tokens=4096)
 
 
+def _screen_external(state: dict, text: str, *, source: str) -> tuple[str, list[dict]]:
+    """Screen external text for injection payloads, then fence it as data.
+
+    External content (web pages, MCP tool output) is never an instruction.
+    Findings are audited against the current run so operators can see when a
+    source tried to steer the agent.
+    """
+    from backend.safety.injection import screen as _screen, wrap_untrusted as _wrap
+
+    findings = _screen(text, source=source)
+    flagged = [f for f in findings if f.get("severity") in ("high", "critical")]
+    if flagged:
+        try:
+            from backend.safety.audit import get_audit_log
+
+            get_audit_log().record(
+                "guard.untrusted_content",
+                run_id=state.get("run_id", ""),
+                session_id=state.get("session_id", ""),
+                stage="research",
+                actor="worker",
+                target=source,
+                decision="notify",
+                risk="high",
+                severity="warning",
+                message=f"外部内容包含 {len(flagged)} 条注入特征，已按数据隔离",
+                details={"findings": flagged[:8]},
+            )
+        except Exception as audit_err:  # auditing must never break research
+            logger.debug(f"Untrusted-content audit skipped: {audit_err}")
+    return _wrap(text, source=source, limit=7000), findings[:10]
+
+
 def _fmt(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) if data else "None"
 
@@ -445,8 +478,12 @@ async def research_worker(state: dict) -> dict:
                     f"[MCP:{hit['server']}/{hit['tool']}]\n{hit['text']}"
                     for hit in mcp_hits
                 )
+                # MCP tool results are external content: screen + fence them.
+                guarded, mcp_findings = _screen_external(
+                    state, combined, source=f"mcp:{mcp_hits[0]['server']}"
+                )
                 synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined[:8000]))])
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=guarded))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
                 results.append({
                     "task": prompt_text,
@@ -458,6 +495,7 @@ async def research_worker(state: dict) -> dict:
                     "raw_text": combined[:4000],
                     "structured_data": None,
                     "_from_mcp": True,
+                    "safety_findings": mcp_findings,
                 })
                 continue
 
@@ -487,6 +525,7 @@ async def research_worker(state: dict) -> dict:
             all_sources = []
             all_synthesis = []
             seen_urls = set()
+            external_findings: list[dict] = []
 
             # With Tavily (agent-optimised search), one call is usually enough.
             # Without Tavily, generate multiple queries for broader coverage.
@@ -509,6 +548,7 @@ async def research_worker(state: dict) -> dict:
                 raw_text = scraped.get("synthesis", "")
                 sources = scraped.get("sources", [])
                 structured_data = scraped.get("structured_data")
+                external_findings.extend(scraped.get("injection_findings") or [])
 
                 for src in sources:
                     url = src.get("url", "")
@@ -521,8 +561,12 @@ async def research_worker(state: dict) -> dict:
 
             combined_text = "\n\n---\n\n".join(all_synthesis) if all_synthesis else ""
             if combined_text:
+                guarded_text, _ = _screen_external(
+                    state, combined_text,
+                    source=f"research:{prompt_text[:60]}",
+                )
                 synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=combined_text[:8000]))])
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=guarded_text))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
             else:
                 synthesis = "No data found from web search."
@@ -532,6 +576,8 @@ async def research_worker(state: dict) -> dict:
                 "synthesis": synthesis, "raw_text": combined_text[:4000],
                 "structured_data": structured_data,
             }
+            if external_findings:
+                result_entry["safety_findings"] = external_findings[:10]
             results.append(result_entry)
 
             # ── Store in cache + knowledge base ──

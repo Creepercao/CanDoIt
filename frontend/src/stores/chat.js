@@ -9,6 +9,9 @@ import {
   saveSession, deleteSessionApi,
   fetchProviders, createProvider, updateProvider, deleteProvider,
   streamPPT, streamNote,
+  fetchSafetyStatus, fetchSafetyPolicy, updateSafetySettings,
+  fetchAuditTrail, fetchRunAudit, verifyAuditChain,
+  fetchApprovals, decideApproval, reviewText,
 } from '../api/index.js'
 
 // localStorage helpers
@@ -82,11 +85,27 @@ export const useChatStore = defineStore('chat', () => {
   const noteSteps = ref([])
   let noteAbortController = null
 
+  // ── Safety / execution review ──────────────────────────────────
+  const safetyStatus = ref(null)        // /safety/status snapshot
+  const safetyPolicy = ref(null)        // agent risk catalog + rules
+  const safetySettings = ref({})        // live switches
+  const auditRecords = ref([])          // newest-first audit trail
+  const auditDays = ref([])
+  const auditFilter = ref({ run_id: '', event: '', severity: '', decision: '', day: '' })
+  const auditChain = ref(null)          // hash-chain verification result
+  const pendingApprovals = ref([])      // approvals waiting for a human
+  const approvalHistory = ref([])
+  const currentRunId = ref('')          // run id of the latest request
+  const currentVerification = ref(null) // goal-confirmation verdict
+  const safetyBusy = ref(false)
+  const reviewProbe = ref(null)         // ad-hoc /safety/review result
+
   // Dynamic agent emoji map (built-in + skills) for ThinkingPanel
   const agentEmojiMap = computed(() => {
     const map = {
       research: '🔍', analyst: '🔢', chart: '📊',
       image_gen: '🎨', video_gen: '🎬', code: '💻',
+      reviewer: '🛡️', verifier: '✅',
     }
     for (const skill of skills.value) {
       if (skill.enabled) {
@@ -404,13 +423,143 @@ export const useChatStore = defineStore('chat', () => {
       thinkSteps.value[realIdx] = {
         ...thinkSteps.value[realIdx],
         done: true,
-        summary: data.summary || '完成',
+        status: data.status || 'done',
+        blocked: data.status === 'blocked',
+        review: data.review || null,
+        summary: data.summary || (data.status === 'blocked' ? '已被安全审查拦截' : '完成'),
         resultKey: data.result_key || '',
         resultCount: data.count || 0,
         doneAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       }
     } else {
       addThinkStep({ type: 'agent_done', ...data })
+    }
+  }
+
+  // ── Safety actions ──────────────────────────────────────────────
+
+  async function loadSafetyStatus() {
+    try {
+      const status = await fetchSafetyStatus()
+      safetyStatus.value = status
+      safetySettings.value = status.settings || {}
+    } catch (e) {
+      console.error('Failed to load safety status:', e)
+    }
+  }
+
+  async function loadSafetyPolicy() {
+    try {
+      safetyPolicy.value = await fetchSafetyPolicy()
+    } catch (e) {
+      console.error('Failed to load safety policy:', e)
+    }
+  }
+
+  async function doUpdateSafetySettings(changes) {
+    safetyBusy.value = true
+    try {
+      safetySettings.value = await updateSafetySettings(changes)
+      await loadSafetyStatus()
+      return safetySettings.value
+    } finally {
+      safetyBusy.value = false
+    }
+  }
+
+  async function loadAudit(params = null) {
+    safetyBusy.value = true
+    try {
+      const query = { ...auditFilter.value, limit: 200, ...(params || {}) }
+      Object.keys(query).forEach(k => { if (!query[k]) delete query[k] })
+      const result = await fetchAuditTrail(query)
+      auditRecords.value = result.records || []
+      auditDays.value = result.days || []
+      return result
+    } catch (e) {
+      console.error('Failed to load audit trail:', e)
+      return { records: [] }
+    } finally {
+      safetyBusy.value = false
+    }
+  }
+
+  async function loadRunAudit(runId) {
+    if (!runId) return { records: [] }
+    safetyBusy.value = true
+    try {
+      const result = await fetchRunAudit(runId)
+      auditRecords.value = result.records || []
+      return result
+    } catch (e) {
+      console.error('Failed to load run audit:', e)
+      return { records: [] }
+    } finally {
+      safetyBusy.value = false
+    }
+  }
+
+  async function doVerifyAudit(day = '') {
+    safetyBusy.value = true
+    try {
+      auditChain.value = await verifyAuditChain(day)
+      return auditChain.value
+    } catch (e) {
+      console.error('Failed to verify audit chain:', e)
+      return null
+    } finally {
+      safetyBusy.value = false
+    }
+  }
+
+  async function loadApprovals() {
+    try {
+      const result = await fetchApprovals()
+      pendingApprovals.value = result.pending || []
+      approvalHistory.value = result.history || []
+    } catch (e) {
+      console.error('Failed to load approvals:', e)
+    }
+  }
+
+  async function doDecideApproval(approvalId, approved, note = '') {
+    // Resolve locally first so the timeline reacts immediately; the run also
+    // gets an approval_resolved event when the wait completes.
+    for (let i = pendingApprovals.value.length - 1; i >= 0; i--) {
+      if (pendingApprovals.value[i].id === approvalId) {
+        const step = {
+          type: 'approval',
+          id: approvalId,
+          status: approved ? 'approved' : 'rejected',
+          risk: pendingApprovals.value[i].risk,
+          summary: pendingApprovals.value[i].summary,
+          reasons: pendingApprovals.value[i].reasons || [],
+          decidedBy: 'user',
+        }
+        const existing = thinkSteps.value.find(
+          s => s.type === 'approval' && s.id === approvalId && s.status === 'pending'
+        )
+        if (existing) Object.assign(existing, step)
+        else thinkSteps.value.push(step)
+        pendingApprovals.value.splice(i, 1)
+        break
+      }
+    }
+    const result = await decideApproval(approvalId, approved, note)
+    await loadApprovals()
+    return result
+  }
+
+  async function doReviewText(text, stage = 'action', agent = '') {
+    safetyBusy.value = true
+    try {
+      reviewProbe.value = await reviewText({ text, stage, agent })
+      return reviewProbe.value
+    } catch (e) {
+      reviewProbe.value = { ok: false, error: e.message }
+      return reviewProbe.value
+    } finally {
+      safetyBusy.value = false
     }
   }
 
@@ -522,11 +671,16 @@ export const useChatStore = defineStore('chat', () => {
     isLoading.value = true
     thinkSteps.value = []
     currentResponse.value = ''
+    currentVerification.value = null
+    pendingApprovals.value = []
 
     // Capture chart/image/html results from final SSE event
     let finalChartResults = []
     let finalImageResults = []
     let finalHtmlResults = []
+    let finalSafety = null
+    let finalVerification = null
+    let finalRunId = ''
 
     // Create abort controller for stop button
     abortController = new AbortController()
@@ -548,11 +702,13 @@ export const useChatStore = defineStore('chat', () => {
               addThinkStep({ type: 'phase', phase: data.phase, message: data.message })
               break
             case 'plan':
+              if (data.run_id) currentRunId.value = data.run_id
               addThinkStep({
                 type: 'plan',
                 tasks: data.tasks,
                 count: data.count,
                 steps: data.steps || [],  // 🆕 Plan Mode steps with deps & reasons
+                dropped: data.dropped || [],
               })
               break
             case 'agent_start':
@@ -573,6 +729,68 @@ export const useChatStore = defineStore('chat', () => {
               // Incremental token streaming from synthesizer
               currentResponse.value += data.text || ''
               break
+            // ── Safety layer ──
+            case 'safety_review':
+              addThinkStep({
+                type: 'safety_review',
+                gate: data.gate,
+                stage: data.stage,
+                decision: data.decision,
+                intended: data.intended_decision,
+                risk: data.risk,
+                summary: data.summary,
+                reasons: data.reasons || [],
+                findings: data.findings || [],
+              })
+              break
+            case 'approval_required': {
+              pendingApprovals.value.push(data)
+              addThinkStep({
+                type: 'approval',
+                id: data.id,
+                status: 'pending',
+                risk: data.risk,
+                stage: data.stage,
+                summary: data.summary,
+                reasons: data.reasons || [],
+                task: data.task,
+                agent: data.agent,
+              })
+              break
+            }
+            case 'approval_resolved': {
+              const idx = pendingApprovals.value.findIndex(a => a.id === data.id)
+              if (idx >= 0) pendingApprovals.value.splice(idx, 1)
+              const existing = thinkSteps.value.find(
+                s => s.type === 'approval' && s.id === data.id
+              )
+              const patch = {
+                status: data.status,
+                decidedBy: data.decided_by,
+                note: data.note,
+              }
+              if (existing) Object.assign(existing, patch)
+              else addThinkStep({ type: 'approval', id: data.id, risk: data.risk, ...patch })
+              break
+            }
+            case 'verification':
+              currentVerification.value = data
+              addThinkStep({ type: 'verification', verdict: data })
+              break
+            case 'remediation':
+              addThinkStep({
+                type: 'remediation',
+                round: data.round,
+                tasks: data.tasks || [],
+              })
+              break
+            case 'budget_exceeded':
+              addThinkStep({
+                type: 'budget',
+                reason: data.reason,
+                budget: data.budget,
+              })
+              break
             case 'final':
               // Accumulate tokens already handled via 'token' events;
               // only use final.response as fallback when no tokens arrived.
@@ -582,6 +800,9 @@ export const useChatStore = defineStore('chat', () => {
               finalChartResults = data.chart_results || []
               finalImageResults = data.image_results || []
               finalHtmlResults = data.html_results || []
+              finalSafety = data.safety || null
+              finalVerification = data.verification || currentVerification.value
+              finalRunId = data.run_id || currentRunId.value
               break
             case 'error':
               currentResponse.value = `**Error:** ${data.error}`
@@ -600,6 +821,9 @@ export const useChatStore = defineStore('chat', () => {
         chart_results: finalChartResults,
         image_results: finalImageResults,
         html_results: finalHtmlResults,
+        run_id: finalRunId,
+        safety: finalSafety,
+        verification: finalVerification,
       })
     } catch (e) {
       if (e.name === 'AbortError') {
@@ -675,6 +899,10 @@ export const useChatStore = defineStore('chat', () => {
     providers, pptResults, pptGenerating, pptStreamText, pptSteps,
     noteResults, noteGenerating, noteStreamText, noteSteps,
     modelsLoading,
+    // Safety / execution review
+    safetyStatus, safetyPolicy, safetySettings, auditRecords, auditDays,
+    auditFilter, auditChain, pendingApprovals, approvalHistory,
+    currentRunId, currentVerification, safetyBusy, reviewProbe,
     loadModels, doRefreshModels, sendChatMessage, stopGeneration,
     doGenerateImage, doGenerateVideo, clearChat,
     loadSkills, doToggleSkill, doInstallPackage, doUninstallPackage,
@@ -682,5 +910,8 @@ export const useChatStore = defineStore('chat', () => {
     loadProviders, doSaveProvider, doDeleteProvider,
     doGeneratePPT, stopPPTGeneration,
     doGenerateNote, stopNoteGeneration,
+    loadSafetyStatus, loadSafetyPolicy, doUpdateSafetySettings,
+    loadAudit, loadRunAudit, doVerifyAudit,
+    loadApprovals, doDecideApproval, doReviewText,
   }
 })

@@ -8,6 +8,7 @@ import SkillManager from './components/SkillManager.vue'
 import PPTGenerator from './components/PPTGenerator.vue'
 import ScholarNotes from './components/ScholarNotes.vue'
 import ProviderEditor from './components/ProviderEditor.vue'
+import SafetyPanel from './components/SafetyPanel.vue'
 import ModelSelector from './components/ModelSelector.vue'
 
 const store = useChatStore()
@@ -28,6 +29,7 @@ const tabs = [
   { key: 'ppt', label: '📊 PPT', component: PPTGenerator },
   { key: 'notes', label: '📓 笔记', component: ScholarNotes },
   { key: 'skills', label: '🔧 技能', component: SkillManager },
+  { key: 'safety', label: '🔒 安全', component: SafetyPanel },
   { key: 'providers', label: '⚙️ Providers', component: ProviderEditor },
 ]
 async function deleteSession(session) {
@@ -153,6 +155,15 @@ async function deleteSession(session) {
           </div>
         </div>
         <button
+          v-if="store.pendingApprovals.length"
+          @click="store.activeTab = 'safety'"
+          class="text-xs px-3 py-1 rounded-lg bg-orange-600/20 border border-orange-500/40 text-orange-300
+                 hover:bg-orange-600/30 transition-colors shrink-0 animate-pulse"
+          title="有动作正在等待人工审批"
+        >
+          ⏸ {{ store.pendingApprovals.length }} 项待审批
+        </button>
+        <button
           @click="store.doRefreshModels()"
           class="text-xs text-gray-500 hover:text-white px-3 py-1 rounded-lg hover:bg-surface-700 transition-colors shrink-0"
           title="刷新模型"
@@ -170,6 +181,7 @@ async function deleteSession(session) {
           <PPTGenerator v-else-if="store.activeTab === 'ppt'" key="ppt" />
           <ScholarNotes v-else-if="store.activeTab === 'notes'" key="notes" />
           <SkillManager v-else-if="store.activeTab === 'skills'" key="skills" />
+          <SafetyPanel v-else-if="store.activeTab === 'safety'" key="safety" />
           <ProviderEditor v-else-if="store.activeTab === 'providers'" key="providers" />
         </KeepAlive>
       </div>

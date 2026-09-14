@@ -16,6 +16,7 @@
 - **💬 会话管理** — 创建/切换/删除会话，进度持久化
 - **📡 SSE 实时流式** — 前端实时展示智能体思考过程和生成结果
 - **🖼️ PPTX 导出** — Playwright 渲染 HTML 幻灯片为高质量 PPTX 文件
+- **🔒 Agent 安全层** — 执行前计划审查、高风险动作人工审批、输出脱敏、任务完成确认与哈希链审计日志
 - **🐳 Docker 部署** — 一键 `docker compose up`
 
 ## 1. 架构说明
@@ -32,13 +33,16 @@ CanDoIt 采用“控制平面 + 执行平面 + 产物平面”的分层设计：
                                 │ REST + SSE
 ┌───────────────────────────────▼──────────────────────────────────────────┐
 │ FastAPI API Layer                                                        │
-│ 请求校验、会话、模型、Skill、PPTX、研究缓存、MCP 配置                    │
+│ 请求校验、会话、模型、Skill、PPTX、研究缓存、MCP 配置、安全审查/审计      │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 │
 ┌───────────────────────────────▼──────────────────────────────────────────┐
 │ Agent Control Plane                                                     │
 │ Supervisor → Plan JSON → 依赖补全 → Wave 调度 → Synthesizer             │
 │                   asyncio.gather（同波次并行）                           │
+├──────────────────────────────────────────────────────────────────────────┤
+│ Safety Plane（backend/safety）                                           │
+│ 计划审查 → 动作门禁/人工审批 → 输出审查与脱敏 → 目标完成确认 → 审计链     │
 └───────────────┬───────────────────┬───────────────────────┬──────────────┘
                 │                   │                       │
 ┌───────────────▼──────┐ ┌──────────▼─────────┐ ┌──────────▼─────────────┐
@@ -62,18 +66,21 @@ CanDoIt 采用“控制平面 + 执行平面 + 产物平面”的分层设计：
 - **依赖驱动并行**：调度器根据 `depends_on` 计算可运行任务，同一 wave 用 `asyncio.gather` 并发执行。
 - **共享状态归并**：普通结果采用列表追加语义，`skill_outputs` 采用按 Skill 名称合并语义，动态任务通过 `_add_tasks` 注入。
 - **产物与服务解耦**：生成文件统一落到 `outputs/`，既供 `/outputs/` 静态访问，也作为 Docker 持久化卷。
+- **安全层旁路可关**：`backend/safety/` 在四个检查点介入执行，`SAFETY_MODE=off` 时完全不介入也不记录。
 - **双后端边界**：Web 后端使用 `backend.main:app`；飞书/Lark 使用独立的 `backend_lark.main:app`，两者不互相挂载路由。
 
 ### 1.2 一次请求的生命周期
 
-1. API 将用户输入、会话历史和模型选择构造成统一 state。
+1. API 将用户输入、会话历史和模型选择构造成统一 state（并分配 `run_id`）。
 2. Supervisor 使用低温度模型输出结构化 Plan JSON：`step / agent / prompt / depends_on / reason`。
 3. `validate_and_complete_plan()` 校验计划，并补齐必要的研究、PPT 等上下游任务。
-4. Agent Loop 根据显式依赖和 Agent 的静态依赖计算 wave。
-5. 同一 wave 内并行执行；每个任务有超时、异常隔离和可选降级策略。
-6. Worker 结果合并回共享 state，PPT planner 等 Worker 还可以动态注入后续任务。
-7. 所有任务结束后，Synthesizer 读取完整 state，生成面向用户的最终答案。
-8. 流式模式下，生命周期事件和最终文本通过 SSE 持续推送到前端。
+4. **执行前审查**：丢弃引用未注册代理的步骤，按策略检查破坏性/凭据外传/注入意图；命中高风险时暂停等待人工审批。
+5. Agent Loop 根据显式依赖和 Agent 的静态依赖计算 wave。
+6. 每个任务执行前再过一道动作门禁；同一 wave 内并行执行，每个任务有超时、异常隔离和可选降级策略。
+7. Worker 结果先做输出审查与凭据脱敏，再合并回共享 state；PPT planner 等 Worker 还可以动态注入后续任务。
+8. **目标完成确认**：核对每个步骤产出与用户明确要求的交付物是否真实存在；未完成时按预算追加补救步骤。
+9. 所有任务结束后，Synthesizer 读取完整 state，生成面向用户的最终答案（未完成事项会被强制如实说明）。
+10. 流式模式下，生命周期事件、审查结论和最终文本通过 SSE 持续推送到前端。
 
 ### 1.3 PPT 专用流水线
 
@@ -168,12 +175,18 @@ PPT HTML 遵循 16:9、单文件、无外部脚本依赖、逐层缓入、键盘
 | Event | 含义 |
 |-------|------|
 | `phase` | 当前处于规划、执行或综合阶段 |
-| `plan` | Supervisor 生成的任务计划 |
+| `plan` | Supervisor 生成的任务计划（含被丢弃的未注册代理） |
 | `agent_start` | 某个 Worker 开始执行，含任务 ID 和 PPT 页码等元数据 |
-| `agent_done` | Worker 完成及结果摘要 |
+| `agent_done` | Worker 完成及结果摘要（`status=blocked` 表示被安全审查拦截） |
+| `safety_review` | 一次执行审查结论：阶段、风险等级、决策与依据 |
+| `approval_required` | 执行已暂停，等待人工审批（前端可直接批准/拒绝） |
+| `approval_resolved` | 审批已决定，执行继续或终止 |
+| `verification` | 目标完成确认结论：状态、得分、逐项核验与模型复核 |
+| `remediation` | 针对未完成事项追加的补救轮次 |
+| `budget_exceeded` | 触达步骤/波次/时长预算上限 |
 | `heartbeat` | 长任务每 30 秒保活，避免代理或网关关闭连接 |
 | `token` | Synthesizer 的增量文本 |
-| `final` | 最终回复、HTML 产物列表等汇总数据 |
+| `final` | 最终回复、HTML 产物列表、`run_id` 与本次安全摘要 |
 | `done` | 本次流结束 |
 | `error` | 可展示的错误事件 |
 
@@ -206,6 +219,59 @@ PPT HTML 遵循 16:9、单文件、无外部脚本依赖、逐层缓入、键盘
 - 研究请求先查精确缓存，再做 embedding 相似度匹配，最后访问网络。
 - 研究综合结果写入 ChromaDB，可跨会话召回。
 - Worker 只接收当前任务和所需共享状态，避免把全部历史无差别塞入每次模型调用。
+- 研究路径抓取到的外部文本会先做注入筛查并加上不可信内容围栏，再交给模型综合。
+- 安全层的 LLM 计划评审与目标完成确认各受 `SAFETY_MAX_LLM_REVIEWS` 限制，避免审查本身失控。
+
+### 3.5 Agent 安全与执行审查（backend/safety）
+
+Agent 安全层是编排循环的旁路守卫，不改变 Wave 调度语义：
+
+```text
+计划生成
+   │
+   ├─[1] 计划审查 review_plan    未知代理丢弃、破坏性/凭据/注入意图、预算检查
+   │                             └─ 高风险 → 人工审批（approval_required）
+   ├─[2] 动作门禁 review_action  每个任务执行前逐条判定
+   │                             └─ high → 暂停等审批；critical → 直接拦截
+   ├─[3] 输出审查 review_output  Worker 返回后：密钥扫描、错误/空结果、外部内容注入
+   │                             └─ 凭据在进入 state 前替换为占位符
+   └─[4] 目标完成确认 verify      步骤产出 + 交付物关键词核验 + LLM 复核
+                                 └─ 未完成 → 预算内追加补救步骤
+   ↓
+全程写入哈希链审计日志 outputs/audit/audit-YYYY-MM-DD.jsonl
+```
+
+**风险 → 决策映射**（由 `SAFETY_MODE` 决定是否真正执行）：
+
+| 风险 | enforce | monitor |
+|------|---------|---------|
+| low | allow | allow（记录意图 allow） |
+| medium | notify | allow（记录意图 notify） |
+| high | review（人工审批） | allow（记录意图 review） |
+| critical | block（拒绝执行） | allow（记录意图 block） |
+
+关键实现要点：
+
+- **代理能力分级**：内置 Worker 只调用模型与本地渲染，标记为 `executes=false`；Skill 包与 MCP 工具属于第三方扩展，标记为 `executes=true`，因此同一句话在不同代理下的判定不同。
+- **注入防护**：`injection.py` 覆盖中英文指令覆盖、角色切换、系统分隔符伪造、工具调用伪造、提示词套取、数据外传、凭据读取、破坏性命令等规则；外部内容统一用 `<<<UNTRUSTED_EXTERNAL_CONTENT>>>` 围栏包裹。
+- **审批失败即拒绝**：审批超时（默认 180s）按拒绝处理，`block` 决策不因任何配置而放行。
+- **运行预算**：`AGENT_MAX_STEPS` / `AGENT_MAX_WAVES` / `AGENT_MAX_REPLANS` / `AGENT_MAX_WALL_SECONDS` 限制单次运行，补救轮次不会重启已耗尽的预算。
+- **审计链**：每条记录包含 `prev_hash` 与 `hash`，`GET /api/safety/audit/verify` 可校验链是否被篡改；日志写入前对凭据脱敏。
+- **前端可交互**：对话时间线内嵌审查结论与审批按钮，`🔒 安全` 选项卡提供总览开关、审批队列、审计检索、风险规则表和文本审查试运行。
+
+### 3.6 安全 REST API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/safety/status` | 安全态势总览（模式、计数、预算、代理风险分布） |
+| GET/PATCH | `/api/safety/settings` | 读取 / 修改运行期开关 |
+| GET | `/api/safety/policy` | 代理风险分级与全部检测规则 |
+| GET | `/api/safety/audit` | 审计日志检索（run_id / event / severity / decision / day） |
+| GET | `/api/safety/audit/verify` | 校验审计哈希链完整性 |
+| GET | `/api/safety/audit/{run_id}` | 单次运行的全部审计记录 |
+| GET | `/api/safety/approvals` | 待审批与历史审批 |
+| POST | `/api/safety/approvals/{id}` | 批准 / 拒绝一个被暂停的动作 |
+| POST | `/api/safety/review` | 对任意文本做一次策略试审查（不执行任何操作） |
 
 ## 4. 部署步骤说明
 
@@ -372,7 +438,19 @@ CanDoIt/
 │   │   ├── research_cache.py # 研究缓存 API
 │   │   ├── pptx.py           # PPTX 导出
 │   │   ├── ppt_runs.py       # PPT 运行追踪
+│   │   ├── safety.py         # 安全审查 / 审计 / 审批 API
 │   │   └── mcp.py            # MCP 工具配置
+│   │
+│   ├── safety/               # Agent 安全层
+│   │   ├── reviewer.py       # SafetyReviewer — 四个检查点的门面
+│   │   ├── policy.py         # 策略引擎：风险分级 → 决策
+│   │   ├── injection.py      # 提示词注入 / 外部内容围栏
+│   │   ├── verifier.py       # 目标完成确认 + 补救任务生成
+│   │   ├── approvals.py      # 人在回路审批（超时即拒绝）
+│   │   ├── audit.py          # 哈希链审计日志
+│   │   ├── budget.py         # 步骤/波次/补救/时长预算
+│   │   ├── redact.py         # 凭据脱敏
+│   │   └── settings.py       # 运行期开关
 │   │
 │   ├── skills/               # Skill 插件目录
 │   │   ├── base.py           # Skill 基类
@@ -397,6 +475,10 @@ CanDoIt/
 │       ├── ppt_export.py     # HTML → PPTX 导出
 │       └── ppt_run_store.py  # PPT 运行记录存储
 │
+├── backend/tests/
+│   ├── test_safety.py        # 安全层测试（策略/审计/审批/完成确认/编排接线）
+│   └── test_ppt_animation_contract.py
+│
 └── frontend/
     └── src/
         ├── App.vue           # 根组件
@@ -404,11 +486,18 @@ CanDoIt/
         ├── stores/chat.js    # Pinia 状态管理
         └── components/
             ├── ChatPanel.vue       # 主聊天界面
-            ├── ThinkingPanel.vue   # 智能体思考时间线
+            ├── ThinkingPanel.vue   # 智能体思考时间线（含审查/审批/完成确认）
+            ├── SafetyPanel.vue     # 安全总览、审批队列、审计检索
             ├── ModelSelector.vue   # 模型选择器
             ├── ImageGenerator.vue  # 图像生成标签页
             ├── VideoGenerator.vue  # 视频生成标签页
             └── SkillManager.vue    # 技能管理面板
+```
+
+### 运行测试
+
+```bash
+python -m pytest backend/tests -q
 ```
 
 ## Skill 技能系统
@@ -491,6 +580,18 @@ SKILL = Skill(
 | `RESEARCH_CACHE_TTL` | 研究缓存 TTL（秒） | `86400`（24h） |
 | `RESEARCH_CACHE_THRESHOLD` | 语义匹配相似度阈值 | `0.85` |
 | `EMBEDDING_MODEL` | 嵌入模型 ID | `BAAI/bge-large-zh-v1.5` |
+| `SAFETY_MODE` | 安全审查模式：`off` / `monitor` / `enforce` | `enforce` |
+| `SAFETY_AUTO_APPROVE` | 跳过人工审批直接放行（仅记录审计） | `false` |
+| `SAFETY_LLM_REVIEW` | 静态扫描命中风险时调用 LLM 复核计划 | `true` |
+| `SAFETY_GOAL_VERIFICATION` | 执行结束后做目标完成确认 | `true` |
+| `SAFETY_AUTO_REMEDIATE` | 未完成时自动追加补救步骤 | `true` |
+| `SAFETY_NONSTREAM_REVIEW` | 非流式运行遇到需审批动作时的处理：`allow` / `deny` / `review` | `allow` |
+| `SAFETY_APPROVAL_TIMEOUT_SECONDS` | 人工审批超时（超时按拒绝） | `180` |
+| `SAFETY_REDACT_OUTPUTS` | Worker 输出中的凭据入库前脱敏 | `true` |
+| `SAFETY_MAX_LLM_REVIEWS` | 单次运行允许的审查类 LLM 调用次数上限 | `6` |
+| `AGENT_MAX_STEPS` / `AGENT_MAX_WAVES` / `AGENT_MAX_REPLANS` | 单次运行的步骤/波次/补救轮次上限 | `32` / `12` / `1` |
+| `AGENT_MAX_WALL_SECONDS` | 单次运行墙钟上限（秒） | `1800` |
+| `AGENT_TASK_TIMEOUT_SECONDS` | 单个任务硬超时（秒，可按代理覆盖） | `600` |
 
 ## 注意事项
 
@@ -500,3 +601,6 @@ SKILL = Skill(
 - 视频生成在不支持的提供商上会回退到图像关键帧
 - PPT 动画预览页面 nginx 超时 10 分钟，SSE 有心跳保活
 - Skill 包上传限制 200 MB
+- **安全审查默认开启（`SAFETY_MODE=enforce`）**：只有「高风险」动作会被暂停等待审批；确认可信任的环境可用 `SAFETY_AUTO_APPROVE=true` 放行，或先切 `monitor` 观察一段时间
+- **审计日志写入 `outputs/audit/`**，属于运行期数据，已加入 `.gitignore`，请按需做轮转与归档
+- `outputs/safety/settings.json` 保存运行期开关覆盖值；删除该文件即恢复环境变量默认值

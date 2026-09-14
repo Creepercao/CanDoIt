@@ -259,3 +259,57 @@ export async function deleteSessionApi(id) {
   const { data } = await api.delete(`/sessions/${encodeURIComponent(id)}`)
   return data
 }
+
+// ---- Safety / execution review ----
+
+export async function fetchSafetyStatus() {
+  const { data } = await api.get('/safety/status')
+  return data
+}
+
+export async function fetchSafetyPolicy() {
+  const { data } = await api.get('/safety/policy')
+  return data
+}
+
+export async function fetchSafetySettings() {
+  const { data } = await api.get('/safety/settings')
+  return data
+}
+
+export async function updateSafetySettings(changes) {
+  const { data } = await api.patch('/safety/settings', changes)
+  return data
+}
+
+export async function fetchAuditTrail(params = {}) {
+  const { data } = await api.get('/safety/audit', { params })
+  return data
+}
+
+export async function fetchRunAudit(runId) {
+  const { data } = await api.get(`/safety/audit/${encodeURIComponent(runId)}`)
+  return data
+}
+
+export async function verifyAuditChain(day = '') {
+  const { data } = await api.get('/safety/audit/verify', { params: day ? { day } : {} })
+  return data
+}
+
+export async function fetchApprovals() {
+  const { data } = await api.get('/safety/approvals')
+  return data
+}
+
+export async function decideApproval(approvalId, approved, note = '') {
+  const { data } = await api.post(`/safety/approvals/${encodeURIComponent(approvalId)}`, {
+    approved, note, decided_by: 'user',
+  })
+  return data
+}
+
+export async function reviewText({ text, stage = 'action', agent = '' }) {
+  const { data } = await api.post('/safety/review', { text, stage, agent })
+  return data
+}

@@ -24,6 +24,7 @@ from backend.tools.image_gen import generate_image
 from backend.tools.video_gen import generate_video
 from backend.skills.registry import skill_registry
 from backend.prompts import SYNTHESIZER_PROMPT_TEMPLATE
+from backend.safety import get_audit_log
 from backend.api import (
     logger as _parent_logger,
     sse as _sse,
@@ -167,6 +168,7 @@ def _make_state(req: ChatRequest, skip_synthesizer: bool = False) -> dict:
         video_model_id=req.video_model_id,
         router_model_id=req.router_model_id,
         history=req.history,
+        session_id=req.session_id,
     )
     state["_skip_synthesizer"] = skip_synthesizer
     return state
@@ -180,6 +182,36 @@ def _extract_output(data: dict) -> dict:
     if isinstance(chunk, dict):
         return chunk
     return {}
+
+
+def _verification_section(state: dict) -> str:
+    """Render the goal-confirmation result so the synthesizer must be honest."""
+    verdict = state.get("_verification") or {}
+    if not verdict:
+        return ""
+    lines = [
+        "\n\n## 目标完成确认（系统审查结果）",
+        f"- 结论: {verdict.get('status')} (score={verdict.get('score')})",
+        f"- 说明: {verdict.get('summary', '')}",
+    ]
+    for criterion in verdict.get("unmet", [])[:8]:
+        lines.append(
+            f"- 未完成: {criterion.get('label')} — {criterion.get('evidence', '')}"
+        )
+    llm = verdict.get("llm") or {}
+    for item in (llm.get("missing") or [])[:5]:
+        lines.append(f"- 模型判定缺失: {item}")
+    for item in (llm.get("unverified_claims") or [])[:5]:
+        lines.append(f"- 无法证实的说法: {item}")
+    blocked = state.get("safety_blocks") or []
+    for block in blocked[:5]:
+        lines.append(
+            f"- 被安全审查拦截的步骤: {block.get('agent')} — {block.get('summary', '')}"
+        )
+    lines.append(
+        "如果上面存在未完成或未产出的事项，必须在回复中明确说明，禁止声称已完成。"
+    )
+    return "\n".join(lines)
 
 
 def _build_synth_prompt(user_request: str, state: dict, history: list = None) -> str:
@@ -237,7 +269,7 @@ def _build_synth_prompt(user_request: str, state: dict, history: list = None) ->
         skill_outputs=skill_outputs_json if skill_outputs_json != '{}' else 'None',
         table_blocks=table_blocks if table_blocks else "(no tables generated)",
         html_links=html_links_section,
-    )
+    ) + _verification_section(state)
 
 
 # ---- Sync run ----
@@ -250,6 +282,12 @@ async def _run_agents(req: ChatRequest) -> dict:
             "success": True,
             "response": result.get("final_response", ""),
             "tasks": result.get("tasks", []),
+            "run_id": result.get("run_id", ""),
+            "safety": result.get("_safety", {}),
+            "verification": result.get("_verification"),
+            "dropped_tasks": result.get("dropped_tasks", []),
+            "safety_blocks": result.get("safety_blocks", []),
+            "stopped_reason": result.get("_stopped_reason", ""),
             "research_results": result.get("research_results", []),
             "analyst_results": result.get("analyst_results", []),
             "image_results": result.get("image_results", []),
@@ -275,6 +313,10 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
     agent_map = _get_agent_map()
     collected_html: list[dict] = []
     accumulated: dict[str, list] = {}
+    run_id = state.get("run_id", "")
+    safety_info: dict = {}
+    verification: dict | None = None
+    safety_blocks: list[dict] = []
 
     try:
         async for event in run_agent_loop_stream(state, agent_labels, agent_map):
@@ -297,6 +339,26 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
             elif ev_type == "agent_done":
                 yield _sse("agent_done", data)
 
+            # ── Safety layer events ──
+            elif ev_type == "safety_review":
+                yield _sse("safety_review", data)
+
+            elif ev_type == "approval_required":
+                yield _sse("approval_required", data)
+
+            elif ev_type == "approval_resolved":
+                yield _sse("approval_resolved", data)
+
+            elif ev_type == "verification":
+                verification = data
+                yield _sse("verification", data)
+
+            elif ev_type == "remediation":
+                yield _sse("remediation", data)
+
+            elif ev_type == "budget_exceeded":
+                yield _sse("budget_exceeded", data)
+
             elif ev_type == "final":
                 yield _sse("final", data)
                 yield _sse("done", {})
@@ -311,6 +373,10 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
                 state = data.get("state", state)
                 accumulated = data.get("accumulated", {})
                 collected_html = data.get("collected_html", [])
+                run_id = data.get("run_id", run_id)
+                safety_info = data.get("safety", {})
+                safety_blocks = data.get("safety_blocks", [])
+                verification = verification or (state.get("_verification") or None)
 
     except Exception as e:
         logger.error(f"Agent loop streaming error: {e}")
@@ -339,11 +405,35 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
         yield _sse("done", {})
         return
 
+    # Record delivery in the audit trail so a run has an explicit ending.
+    try:
+        get_audit_log().record(
+            "run.delivered",
+            run_id=run_id,
+            session_id=req.session_id,
+            stage="deliver",
+            actor="orchestrator",
+            decision="allow",
+            severity="info",
+            message="最终回复已交付",
+            details={
+                "response_chars": len(full_response),
+                "verification_status": (verification or {}).get("status", ""),
+                "safety_blocks": len(safety_blocks),
+            },
+        )
+    except Exception as audit_err:  # auditing must never break delivery
+        logger.debug("Audit delivery record skipped: %s", audit_err)
+
     yield _sse("final", {
         "response": full_response,
         "chart_results": state.get("chart_results", []),
         "image_results": state.get("image_results", []),
         "html_results": collected_html,
+        "run_id": run_id,
+        "safety": safety_info,
+        "verification": verification,
+        "safety_blocks": safety_blocks,
     })
     yield _sse("done", {})
 
