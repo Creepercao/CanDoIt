@@ -3,6 +3,9 @@
 Covers secret redaction, prompt-injection screening, the policy decision
 matrix, run budgets, the hash-chained audit trail, human-in-the-loop
 approvals, goal-completion confirmation, and the orchestrator wiring.
+
+Shared fixtures (``safety_env``, ``temp_audit``, ``fake_skills``) live in
+``conftest.py``.
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ import pytest
 from backend.safety import approvals as approvals_mod
 from backend.safety import audit as audit_mod
 from backend.safety import policy, verifier
-from backend.safety import settings as settings_mod
 from backend.safety.approvals import ApprovalStore
 from backend.safety.audit import GENESIS_HASH, AuditLog
 from backend.safety.budget import RunBudget
@@ -30,67 +32,6 @@ from backend.safety.redact import redact, scan_secrets
 from backend.safety.reviewer import SafetyReviewer, build_agent_catalog
 from backend.safety.settings import SafetySettings
 
-
-# ── fixtures ───────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def safety_env(monkeypatch, tmp_path):
-    """Isolate safety singletons and pin an enforcing configuration."""
-    monkeypatch.setenv("SAFETY_MODE", "enforce")
-    monkeypatch.setenv("SAFETY_AUTO_APPROVE", "0")
-    monkeypatch.setenv("SAFETY_LLM_REVIEW", "0")
-    monkeypatch.setenv("SAFETY_GOAL_VERIFICATION", "0")
-    monkeypatch.setenv("SAFETY_AUTO_REMEDIATE", "1")
-    monkeypatch.setenv("SAFETY_NONSTREAM_REVIEW", "deny")
-    monkeypatch.setenv("SAFETY_APPROVAL_TIMEOUT_SECONDS", "1")
-
-    settings_mod._settings = SafetySettings(path=tmp_path / "settings.json")
-    audit_mod._audit_log = AuditLog(directory=tmp_path / "audit")
-    approvals_mod._store = ApprovalStore()
-    try:
-        yield settings_mod._settings
-    finally:
-        settings_mod._settings = None
-        audit_mod._audit_log = None
-        approvals_mod._store = None
-
-
-@pytest.fixture
-def temp_audit(tmp_path):
-    return AuditLog(directory=tmp_path / "audit")
-
-
-@pytest.fixture
-def fake_skills():
-    """Register throwaway agents for orchestration tests."""
-    from backend.skills.base import Skill
-    from backend.skills.registry import skill_registry
-
-    saved = dict(skill_registry._skills)
-
-    async def _echo(state):
-        task = state["_current_task"]
-        return {"research_results": [{"task": task["prompt"], "synthesis": "x" * 120,
-                                      "sources": [{"url": "https://example.com", "title": "e"}]}]}
-
-    async def _danger(state):
-        task = state["_current_task"]
-        return {"code_results": [{"task": task["prompt"], "result": "sk-abcdefghijklmnopqrstuvwxyz"}]}
-
-    skill_registry.register(Skill(
-        name="research", display_name="Research", description="d",
-        worker=_echo, result_key="research_results",
-    ))
-    skill_registry.register(Skill(
-        name="code", display_name="Code", description="d",
-        worker=_danger, result_key="code_results",
-    ))
-    try:
-        yield skill_registry
-    finally:
-        skill_registry._skills.clear()
-        skill_registry._skills.update(saved)
 
 
 # ── redaction ──────────────────────────────────────────────────────────
@@ -587,7 +528,7 @@ def test_orchestrator_drops_unknown_agents_and_runs_the_rest(safety_env, fake_sk
 
 def test_orchestrator_redacts_secrets_from_worker_output(safety_env, fake_skills):
     result = _run_loop(
-        [{"step": 1, "agent": "code", "prompt": "写一段示例代码"}],
+        [{"step": 1, "agent": "code", "prompt": "写一段示例代码", "_test_secret": True}],
         "写一段示例代码",
     )
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in json.dumps(result["code_results"])

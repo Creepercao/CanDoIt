@@ -457,246 +457,39 @@ def _budget_note(reviewer: SafetyReviewer) -> str:
     return "；".join(reasons) if reasons else "执行预算已用尽"
 
 
-# ── Agent Loop (non-streaming) ─────────────────────────────────────────
+# ── Agent Loop (shared core) ───────────────────────────────────────────
 
-async def run_agent_loop(initial_state: dict) -> dict:
-    """Execute the full agent pipeline synchronously.
-
-    1. Supervisor → plan
-    2. Validate, screen & review plan (safety checkpoint 1)
-    3. Wave execution loop with per-task action gate + output review
-    4. Goal completion confirmation + one bounded remediation round
-    5. Synthesizer
-    6. Return final state
-    """
-    state = dict(initial_state)
-    reviewer = SafetyReviewer(
-        state.get("run_id") or new_run_id(),
-        session_id=state.get("session_id", ""),
-        streaming=False,
-        budget=RunBudget.from_env(),
-        model_id=state.get("chat_model_id", ""),
-    )
-    state["run_id"] = reviewer.run_id
-    reviewer.record(
-        "run.start", stage="start", message="开始执行",
-        details={"request": (state.get("user_request") or "")[:500]},
-    )
-
-    # 1. Supervisor
-    logger.info("Agent Loop: running supervisor...")
-    sup_result = await supervisor_node(state)
-    merge_worker_results(state, [sup_result])
-
-    if state.get("final_response"):
-        state["_safety"] = reviewer.summary()
-        return state
-
-    tasks = _normalize_tasks(state.get("tasks", []))
-    if not tasks:
-        state["final_response"] = "I didn't understand that request."
-        state["_safety"] = reviewer.summary()
-        return state
-
-    # 2. Validate & review the plan
-    user_request = state.get("user_request", "")
-    tasks = _normalize_tasks(validate_and_complete_plan(tasks, user_request))
-    tasks, dropped = reviewer.screen_tasks(tasks)
-    state["dropped_tasks"] = dropped
-    state["tasks"] = tasks
-
-    if not tasks:
-        state["final_response"] = (
-            "计划中的步骤都引用了当前未注册的代理，无法执行。请检查技能是否已启用。"
-        )
-        state["_safety"] = reviewer.summary()
-        return state
-
-    plan_decision = reviewer.review_plan(user_request, tasks)
-    plan_decision = await reviewer.enrich_plan_review(user_request, tasks, plan_decision)
-    reviewer.record_decision(plan_decision, target="plan")
-    if plan_decision.blocked:
-        state["final_response"] = _refusal_text(plan_decision)
-        state["_safety"] = reviewer.summary()
-        return state
-    if plan_decision.requires_approval:
-        resolved = await reviewer.resolve_without_human(
-            plan_decision, stage="plan", target="plan"
-        )
-        if resolved.status != "approved":
-            state["final_response"] = _refusal_text(
-                plan_decision, f"人工审批未通过（{resolved.decided_by}）"
-            )
-            state["_safety"] = reviewer.summary()
-            return state
-
-    # 3. Wave execution (+ 4. verification / remediation)
-    workers = _get_worker_registry()
-    completed: set[str] = set()
-    stopped_reason = ""
-    budget_exhausted = False
-
-    while True:
-        # ── inner wave loop ──
-        while True:
-            tasks = _normalize_tasks(state.get("tasks", []))
-            state["tasks"] = tasks
-            all_task_ids = {t.get("id", "") for t in tasks}
-            if completed >= all_task_ids:
-                break
-
-            wave: list[tuple[dict, Callable]] = []
-            for task in tasks:
-                agent = task.get("agent", "")
-                task_id = task.get("id", "")
-                if task_id in completed:
-                    continue
-                deps = _task_deps(task, tasks)
-                if all(d in completed for d in deps):
-                    worker_fn = workers.get(agent)
-                    if worker_fn:
-                        wave.append((task, worker_fn))
-
-            if not wave:
-                logger.warning(
-                    "Agent Loop: deadlock detected — "
-                    f"completed={completed}, pending={all_task_ids - completed}"
-                )
-                stopped_reason = stopped_reason or "检测到任务依赖死锁，提前结束执行"
-                break
-
-            if not reviewer.budget.allow_wave() or not reviewer.budget.allow_steps(len(wave)):
-                stopped_reason = _budget_note(reviewer)
-                budget_exhausted = True
-                logger.warning("Agent Loop: %s", stopped_reason)
-                reviewer.record(
-                    "guard.budget_exceeded", stage="wave", decision="block", risk="medium",
-                    severity="warning", message=stopped_reason,
-                    details=reviewer.budget.snapshot(),
-                )
-                break
-
-            # ── safety checkpoint 2: per-task action gate ──
-            approved_wave: list[tuple[dict, Callable]] = []
-            for task, fn in wave:
-                decision = reviewer.review_action(task)
-                reviewer.record_decision(decision, target=task.get("id", ""))
-                if decision.blocked:
-                    block = _block_record(task, decision, "action")
-                    state["safety_blocks"].append(block)
-                    completed.add(task.get("id", ""))
-                    continue
-                if decision.requires_approval:
-                    resolved = await reviewer.resolve_without_human(
-                        decision, stage="action", target=task.get("id", "")
-                    )
-                    if resolved.status != "approved":
-                        block = _block_record(
-                            task, decision, "action",
-                            f"审批未通过（{resolved.decided_by}）",
-                        )
-                        state["safety_blocks"].append(block)
-                        completed.add(task.get("id", ""))
-                        continue
-                approved_wave.append((task, fn))
-
-            if not approved_wave:
-                continue
-
-            reviewer.budget.consume_wave()
-            reviewer.budget.consume_steps(len(approved_wave))
-            logger.info(
-                f"Agent Loop: wave {[t.get('id') for t, _ in approved_wave]} "
-                f"({len(approved_wave)} task(s))"
-            )
-
-            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[str, dict]:
-                agent = task.get("agent", "")
-                try:
-                    timeout = _task_timeout_seconds(agent)
-                    result = await asyncio.wait_for(fn(_state_for_task(st, task)), timeout=timeout)
-                    logger.info(f"Agent Loop: '{task.get('id')}' completed")
-                    return task.get("id", ""), result
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "Agent Loop: '%s' timed out after %.0fs",
-                        task.get("id"),
-                        _task_timeout_seconds(agent),
-                    )
-                    return task.get("id", ""), {f"{agent}_results": [{"error": "task timed out"}]}
-                except Exception as e:
-                    logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
-                    return task.get("id", ""), {f"{agent}_results": [{"error": str(e)}]}
-
-            results = await asyncio.gather(*[
-                _run_one(task, fn, state) for task, fn in approved_wave
-            ])
-
-            # ── safety checkpoint 3: output review + redaction ──
-            for (task, _fn), (_task_id, output) in zip(approved_wave, results):
-                if isinstance(output, dict):
-                    decision = reviewer.review_output(task, output)
-                    reviewer.record_decision(decision, target=task.get("id", ""))
-                    output, _ = reviewer.scrub_output(output)
-                merge_worker_results(state, [output])
-                completed.add(task.get("id", ""))
-
-        # ── safety checkpoint 4: goal completion confirmation ──
-        tasks = _normalize_tasks(state.get("tasks", []))
-        verdict = await reviewer.verify(user_request, tasks, state)
-        state["_verification"] = verdict
-
-        # A remediation round must never restart an already exhausted budget.
-        remediation = [] if budget_exhausted else reviewer.build_remediation(tasks)
-        if remediation:
-            state["tasks"] = _normalize_tasks(tasks + remediation)
-            continue
-        break
-
-    state["_safety"] = reviewer.summary()
-    state["_stopped_reason"] = stopped_reason
-
-    # 5. Synthesizer
-    logger.info("Agent Loop: running synthesizer...")
-    if not state.get("_skip_synthesizer"):
-        synth_result = await synthesizer_node(state)
-        merge_worker_results(state, [synth_result])
-
-    reviewer.record(
-        "run.finish", stage="finish",
-        decision="allow",
-        severity="info",
-        message="执行结束",
-        details={
-            "stopped_reason": stopped_reason,
-            "status": (state.get("_verification") or {}).get("status", ""),
-            "blocks": len(state.get("safety_blocks") or []),
-        },
-    )
-    return state
-
-
-# ── Agent Loop (streaming) ─────────────────────────────────────────────
-
-async def run_agent_loop_stream(
+async def _run_agent_loop_events(
     initial_state: dict,
     agent_labels: dict[str, str],
     agent_map: dict[str, str],
+    *,
+    streaming: bool,
 ) -> AsyncGenerator[dict, None]:
-    """Execute the agent pipeline, yielding lifecycle events.
+    """Run the whole agent pipeline, yielding lifecycle events.
 
-    Yields dicts with keys ``event`` and ``data``, compatible with the
-    existing SSE streaming layer in ``chat.py``.
+    This is the **single** orchestration core: ``run_agent_loop_stream``
+    forwards every event to SSE, while ``run_agent_loop`` drains the generator
+    and keeps only the final state.  Both modes share the wave scheduling, the
+    safety checkpoints, the budget guard and the goal-confirmation round, so a
+    behaviour fix only has to be written once.
 
-    Safety checkpoints additionally emit ``safety_review``,
-    ``approval_required``, ``approval_resolved``, ``verification``,
-    ``remediation`` and ``budget_exceeded`` events.
+    The one intentional difference is how a ``review`` decision is resolved:
+
+    * ``streaming=True``  — emit ``approval_required`` and wait for a human.
+    * ``streaming=False`` — apply ``SAFETY_NONSTREAM_REVIEW`` immediately.
+
+    Events yielded: ``phase``, ``plan``, ``agent_start``, ``agent_done``,
+    ``heartbeat``, ``safety_review``, ``approval_required``,
+    ``approval_resolved``, ``verification``, ``remediation``,
+    ``budget_exceeded``, ``final``, ``done`` and the terminal
+    ``_agent_loop_done`` carrying the final state.
     """
     state = dict(initial_state)
     reviewer = SafetyReviewer(
         state.get("run_id") or new_run_id(),
         session_id=state.get("session_id", ""),
-        streaming=True,
+        streaming=streaming,
         budget=RunBudget.from_env(),
         model_id=state.get("chat_model_id", ""),
     )
@@ -705,6 +498,8 @@ async def run_agent_loop_stream(
         "run.start", stage="start", message="开始执行",
         details={"request": (state.get("user_request") or "")[:500]},
     )
+
+    # ── event builders ─────────────────────────────────────────────────
 
     def safety_review_event(decision: PolicyDecision, gate: str) -> dict:
         return {"event": "safety_review", "data": {
@@ -714,6 +509,7 @@ async def run_agent_loop_stream(
         }}
 
     def finish_event(response: str, extra: dict = None) -> dict:
+        state["final_response"] = response
         reviewer.record(
             "run.finish", stage="finish", severity="info", message="执行结束",
             details={
@@ -730,7 +526,55 @@ async def run_agent_loop_stream(
         data.update(extra or {})
         return {"event": "final", "data": data}
 
-    # 1. Supervisor
+    def state_event() -> dict:
+        # Attach the summary on every exit path (refusals included) so the
+        # non-streaming caller always finds it.
+        state["_safety"] = reviewer.summary()
+        return {"event": "_agent_loop_done", "data": {
+            "state": state,
+            "accumulated": accumulated,
+            "collected_html": collected_html,
+            "run_id": reviewer.run_id,
+            "safety": state["_safety"],
+            "dropped_tasks": dropped,
+            "safety_blocks": state.get("safety_blocks") or [],
+            "stopped_reason": stopped_reason,
+        }}
+
+    async def resolve_gate(decision: PolicyDecision, *, stage: str,
+                           task: dict = None, target: str = ""):
+        """Resolve a plan/action review decision.
+
+        Returns ``(events, allowed, note)``; the caller yields *events* so the
+        approval round-trip stays visible in the stream.
+        """
+        events: list[dict] = []
+        if decision.blocked:
+            return events, False, "被安全策略拦截"
+        if not decision.requires_approval:
+            return events, True, ""
+        if streaming:
+            request = await reviewer.request_approval(
+                decision, stage=stage, target=target, task=task
+            )
+            events.append({"event": "approval_required", "data": request.to_dict()})
+            resolved = await reviewer.wait_approval(request)
+            events.append({"event": "approval_resolved", "data": resolved.to_dict()})
+        else:
+            resolved = await reviewer.resolve_without_human(
+                decision, stage=stage, target=target
+            )
+        if resolved.status != "approved":
+            return events, False, f"审批未通过（{resolved.decided_by}）"
+        return events, True, ""
+
+    accumulated: dict[str, list] = {}
+    collected_html: list[dict] = []
+    dropped: list[dict] = []
+    stopped_reason = ""
+
+    # ── 1. Supervisor ──────────────────────────────────────────────────
+
     yield {"event": "phase", "data": {"phase": "supervisor", "message": "analyzing request..."}}
     sup_result = await supervisor_node(state)
     merge_worker_results(state, [sup_result])
@@ -739,20 +583,22 @@ async def run_agent_loop_stream(
         yield {"event": "phase", "data": {"phase": "done", "message": "direct reply"}}
         yield finish_event(state["final_response"])
         yield {"event": "done", "data": {}}
+        yield state_event()
         return
 
     tasks = _normalize_tasks(state.get("tasks", []))
     plan_steps = state.get("plan_steps", [])
 
     if not tasks:
-        response = "unable to understand request"
-        yield finish_event(response)
+        yield finish_event("unable to understand request")
         yield {"event": "done", "data": {}}
+        yield state_event()
         return
 
     user_request = state.get("user_request", "")
 
-    # 2. Validate, screen & emit plan
+    # ── 2. Validate, screen & publish the plan ─────────────────────────
+
     tasks = _normalize_tasks(validate_and_complete_plan(tasks, user_request))
     tasks, dropped = reviewer.screen_tasks(tasks)
     state["dropped_tasks"] = dropped
@@ -784,41 +630,36 @@ async def run_agent_loop_stream(
     }}
 
     if not tasks:
-        response = "计划中的步骤都引用了当前未注册的代理，无法执行。请检查技能是否已启用。"
-        yield finish_event(response)
+        yield finish_event(
+            "计划中的步骤都引用了当前未注册的代理，无法执行。请检查技能是否已启用。"
+        )
         yield {"event": "done", "data": {}}
+        yield state_event()
         return
 
-    # ── Safety checkpoint 1: plan review ──
+    # ── 3. Safety checkpoint 1: plan review ────────────────────────────
+
     yield {"event": "phase", "data": {"phase": "review", "message": "执行审查中..."}}
     plan_decision = reviewer.review_plan(user_request, tasks)
     plan_decision = await reviewer.enrich_plan_review(user_request, tasks, plan_decision)
     reviewer.record_decision(plan_decision, target="plan")
     yield safety_review_event(plan_decision, "plan")
 
-    if plan_decision.blocked:
-        yield finish_event(_refusal_text(plan_decision))
+    gate_events, allowed, note = await resolve_gate(
+        plan_decision, stage="plan", target="plan"
+    )
+    for event in gate_events:
+        yield event
+    if not allowed:
+        yield finish_event(_refusal_text(plan_decision, note if note != "被安全策略拦截" else ""))
         yield {"event": "done", "data": {}}
+        yield state_event()
         return
 
-    if plan_decision.requires_approval:
-        request = await reviewer.request_approval(plan_decision, stage="plan", target="plan")
-        yield {"event": "approval_required", "data": request.to_dict()}
-        resolved = await reviewer.wait_approval(request)
-        yield {"event": "approval_resolved", "data": resolved.to_dict()}
-        if resolved.status != "approved":
-            yield finish_event(
-                _refusal_text(plan_decision, f"人工审批未通过（{resolved.decided_by}）")
-            )
-            yield {"event": "done", "data": {}}
-            return
+    # ── 4. Wave execution (+ 5. goal confirmation / remediation) ───────
 
-    # 3. Wave execution
     workers = _get_worker_registry()
     completed: set[str] = set()
-    collected_html: list[dict] = []
-    accumulated: dict[str, list] = {}
-    stopped_reason = ""
     budget_exhausted = False
 
     while True:
@@ -874,28 +715,17 @@ async def run_agent_loop_stream(
                 if decision.findings or decision.decision != "allow":
                     yield safety_review_event(decision, "action")
 
-                refused = False
-                refusal_note = ""
-                if decision.blocked:
-                    # ``block`` is a refusal — never negotiable at runtime.
-                    refused = True
-                    refusal_note = "被安全策略拦截"
-                elif decision.requires_approval:
-                    request = await reviewer.request_approval(
-                        decision, stage="action", target=task.get("id", ""), task=task
-                    )
-                    yield {"event": "approval_required", "data": request.to_dict()}
-                    resolved = await reviewer.wait_approval(request)
-                    yield {"event": "approval_resolved", "data": resolved.to_dict()}
-                    if resolved.status != "approved":
-                        refused = True
-                        refusal_note = f"审批未通过（{resolved.decided_by}）"
+                gate_events, allowed, note = await resolve_gate(
+                    decision, stage="action", task=task, target=task.get("id", "")
+                )
+                for event in gate_events:
+                    yield event
 
-                if refused:
+                if not allowed:
                     agent = task.get("agent", "")
                     node_name = agent_map.get(agent, f"{agent}_worker")
                     state.setdefault("safety_blocks", []).append(
-                        _block_record(task, decision, "action", refusal_note)
+                        _block_record(task, decision, "action", note)
                     )
                     completed.add(task.get("id", ""))
                     yield {"event": "agent_start", "data": {
@@ -925,10 +755,9 @@ async def run_agent_loop_stream(
             reviewer.budget.consume_wave()
             reviewer.budget.consume_steps(len(approved_wave))
             logger.info(
-                f"Agent Loop stream: wave {[t.get('id') for t, _ in approved_wave]}"
+                f"Agent Loop: wave {[t.get('id') for t, _ in approved_wave]}"
             )
 
-            # Emit agent_start for each approved task in this wave
             for task, _ in approved_wave:
                 agent = task.get("agent", "")
                 node_name = agent_map.get(agent, f"{agent}_worker")
@@ -942,7 +771,7 @@ async def run_agent_loop_stream(
                     "slide_index": task.get("slide_index"),
                 }}
 
-            # Execute wave in parallel, with heartbeat to prevent timeout
+            # Execute the wave in parallel, heart-beating while we wait.
             async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict]:
                 agent = task.get("agent", "")
                 try:
@@ -960,17 +789,12 @@ async def run_agent_loop_stream(
                     logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
                     return task, {f"{agent}_results": [{"error": str(e)}]}
 
-            wave_tasks = [
+            wave_future = asyncio.gather(*[
                 _run_one(task, fn, state) for task, fn in approved_wave
-            ]
-            # Wrap in a task so we can heartbeat while waiting
-            wave_future = asyncio.gather(*wave_tasks)
+            ])
 
-            # Heartbeat loop: yield a comment every 30s to keep SSE alive
             while True:
-                done, _ = await asyncio.wait(
-                    [wave_future], timeout=30.0
-                )
+                done, _ = await asyncio.wait([wave_future], timeout=30.0)
                 if done:
                     break
                 yield {"event": "heartbeat", "data": {}}
@@ -993,7 +817,7 @@ async def run_agent_loop_stream(
                 merge_worker_results(state, [output])
                 completed.add(task.get("id", ""))
 
-                # Accumulate for final event
+                # Accumulate for the final event
                 for key in RESULT_KEYS:
                     if key in output and output[key]:
                         accumulated.setdefault(key, []).extend(
@@ -1024,7 +848,6 @@ async def run_agent_loop_stream(
                                                 "task": item.get("task", ""),
                                             })
 
-                # Summary
                 node_name = agent_map.get(agent, f"{agent}_worker")
                 summary = _summarize_output(agent, output)
                 done_data = {
@@ -1069,15 +892,36 @@ async def run_agent_loop_stream(
     state["_stopped_reason"] = stopped_reason
 
     yield {"event": "phase", "data": {"phase": "synthesize", "message": "synthesizing..."}}
+    yield state_event()
 
-    # Pass accumulated state + HTML to caller for synthesizer streaming
-    yield {"event": "_agent_loop_done", "data": {
-        "state": state,
-        "accumulated": accumulated,
-        "collected_html": collected_html,
-        "run_id": reviewer.run_id,
-        "safety": reviewer.summary(),
-        "dropped_tasks": dropped,
-        "safety_blocks": state.get("safety_blocks") or [],
-        "stopped_reason": stopped_reason,
-    }}
+
+async def run_agent_loop_stream(
+    initial_state: dict,
+    agent_labels: dict[str, str],
+    agent_map: dict[str, str],
+) -> AsyncGenerator[dict, None]:
+    """Streaming entry point — forwards every core event to the SSE layer."""
+    async for event in _run_agent_loop_events(
+        initial_state, agent_labels, agent_map, streaming=True
+    ):
+        yield event
+
+
+async def run_agent_loop(initial_state: dict) -> dict:
+    """Non-streaming entry point used by ``/api/chat/sync``.
+
+    Drains the shared core and keeps only the final state, then runs the
+    synthesizer unless the caller asked to skip it.
+    """
+    state = dict(initial_state)
+
+    async for event in _run_agent_loop_events(state, {}, {}, streaming=False):
+        if event.get("event") == "_agent_loop_done":
+            state = event["data"]["state"]
+
+    if not state.get("_skip_synthesizer") and not state.get("final_response"):
+        logger.info("Agent Loop: running synthesizer...")
+        synth_result = await synthesizer_node(state)
+        merge_worker_results(state, [synth_result])
+
+    return state
