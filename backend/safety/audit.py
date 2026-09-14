@@ -15,9 +15,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -29,6 +31,68 @@ logger = logging.getLogger("safety.audit")
 GENESIS_HASH = "0" * 32
 _RING_SIZE = 2000
 _DETAIL_LIMIT = 4000
+_TAIL_BYTES = 16 * 1024
+
+
+@contextmanager
+def _cross_process_lock(handle):
+    """Best-effort exclusive lock so two processes cannot fork the chain.
+
+    A non-blocking lock is retried briefly and then given up on: auditing must
+    never hang a run, and the caller additionally re-reads the chain head from
+    disk inside the lock, which already covers the realistic case of several
+    short-lived processes appending in turn.
+    """
+    if handle is None:
+        yield
+        return
+
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            for _ in range(20):
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    import time
+
+                    time.sleep(0.005)
+        else:
+            import fcntl
+
+            for _ in range(20):
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                    break
+                except OSError:
+                    import time
+
+                    time.sleep(0.005)
+    except Exception:  # platform without either module
+        locked = False
+
+    try:
+        yield
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
 
 
 def _now() -> datetime:
@@ -121,47 +185,90 @@ class AuditLog:
             "tags": list(tags or []),
         }
 
-        with self._lock:
-            prev_hash = self._last_hash.get(day)
-            if prev_hash is None:
-                prev_hash = self._read_tail_hash(day)
-            record = {
-                "id": uuid.uuid4().hex[:16],
-                **body,
-                "prev_hash": prev_hash,
-            }
-            record["hash"] = _digest(prev_hash, body)
-            self._last_hash[day] = record["hash"]
+        handle = None
+        if self._ensure_dir():
+            try:
+                # "a+" keeps O_APPEND semantics while still allowing the tail
+                # read used to recover the chain head.
+                handle = open(self.path_for(day), "a+", encoding="utf-8")
+            except OSError as exc:
+                logger.debug("Audit append unavailable: %s", exc)
 
-            if self._ensure_dir():
+        try:
+            with self._lock, _cross_process_lock(handle):
+                # Always recover the head from disk: another process may have
+                # appended since this one last wrote.
+                prev_hash = (
+                    self._tail_hash_from(handle) if handle is not None
+                    else self._last_hash.get(day, GENESIS_HASH)
+                )
+                record = {
+                    "id": uuid.uuid4().hex[:16],
+                    **body,
+                    "prev_hash": prev_hash,
+                }
+                record["hash"] = _digest(prev_hash, body)
+                self._last_hash[day] = record["hash"]
+
+                if handle is not None:
+                    try:
+                        handle.seek(0, os.SEEK_END)
+                        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    except OSError as exc:
+                        logger.debug("Audit append failed: %s", exc)
+
+                self._ring.append(record)
+        finally:
+            if handle is not None:
                 try:
-                    with open(self.path_for(day), "a", encoding="utf-8") as fh:
-                        fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-                except OSError as exc:
-                    logger.debug("Audit append failed: %s", exc)
+                    handle.close()
+                except OSError:
+                    pass
 
-            self._ring.append(record)
         return record
 
+    @staticmethod
+    def _tail_hash_from(handle) -> str:
+        """Read the chain head from the end of an open audit file.
+
+        Only the last chunk is read, so appending stays O(1) instead of
+        re-parsing the whole day.  A torn final line (crash mid-write) is
+        skipped by walking backwards to the last parseable record.
+        """
+        try:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            if size == 0:
+                return GENESIS_HASH
+            handle.seek(max(0, size - _TAIL_BYTES))
+            data = handle.read()
+        except (OSError, ValueError):
+            return GENESIS_HASH
+
+        for line in reversed(data.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue                     # partial line at the chunk boundary
+            if isinstance(parsed, dict) and parsed.get("hash"):
+                return parsed["hash"]
+        return GENESIS_HASH
+
     def _read_tail_hash(self, day: str) -> str:
-        """Recover the chain head so restarts keep the chain intact."""
+        """Recover the chain head for *day* (used when no handle is open)."""
         path = self.path_for(day)
         if not path.exists():
             return GENESIS_HASH
-        tail = GENESIS_HASH
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        tail = json.loads(line).get("hash", tail)
-                    except json.JSONDecodeError:
-                        continue
+                return self._tail_hash_from(fh)
         except OSError:
             return GENESIS_HASH
-        return tail
 
     # ── read ───────────────────────────────────────────────────────────
 

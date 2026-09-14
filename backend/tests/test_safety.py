@@ -294,6 +294,41 @@ def test_audit_redacts_details_and_filters_queries(temp_audit):
     assert temp_audit.stats()["by_severity"]["critical"] == 1
 
 
+def test_two_writers_share_one_unbroken_chain(tmp_path):
+    """Two processes (e.g. a reloader and a worker) must not fork the chain."""
+    directory = tmp_path / "audit"
+    first = AuditLog(directory=directory)
+    second = AuditLog(directory=directory)
+
+    r1 = first.record("run.start", run_id="r1", message="writer A")
+    # A cold in-memory cache must not make writer B reuse the genesis hash.
+    r2 = second.record("run.finish", run_id="r1", message="writer B")
+    r3 = first.record("run.delivered", run_id="r1", message="writer A again")
+
+    assert r1["prev_hash"] == GENESIS_HASH
+    assert r2["prev_hash"] == r1["hash"]
+    assert r3["prev_hash"] == r2["hash"]
+    assert second.verify_chain()["ok"] is True
+    assert len(second.read_day(AuditLog.day_of())) == 3
+
+
+def test_a_torn_last_line_does_not_poison_the_chain(tmp_path):
+    """A crash mid-write leaves a partial line; the next append must recover."""
+    directory = tmp_path / "audit"
+    writer = AuditLog(directory=directory)
+    good = writer.record("run.start", run_id="r1")
+    path = writer.path_for(AuditLog.day_of())
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write('{"hash": "partial-write')
+
+    recovered = AuditLog(directory=directory)
+    next_record = recovered.record("run.finish", run_id="r1")
+
+    assert next_record["prev_hash"] == good["hash"]
+    # verify_chain walks the records it can parse and stays intact.
+    assert recovered.verify_chain()["ok"] is True
+
+
 # ── approvals ──────────────────────────────────────────────────────────
 
 

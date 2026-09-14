@@ -81,7 +81,18 @@ class SafetySettings:
             self.approval_timeout = float(data["approval_timeout"])
 
     def _persist(self) -> None:
-        payload = self.snapshot()
+        # Only mutable settings are written; derived fields such as
+        # ``enabled``/``enforcing`` are computed on read.
+        payload = {
+            "mode": self.mode,
+            "auto_approve": self.auto_approve,
+            "llm_review": self.llm_review,
+            "goal_verification": self.goal_verification,
+            "auto_remediate": self.auto_remediate,
+            "nonstream_review": self.nonstream_review,
+            "approval_timeout": self.approval_timeout,
+            "redact_outputs": self.redact_outputs,
+        }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
