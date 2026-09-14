@@ -28,6 +28,7 @@ from backend.tools.data_scraper import search_and_scrape
 from backend.prompts import (
     RESEARCH_QUERY_PROMPT,
     RESEARCH_SYNTHESIS_PROMPT,
+    RESEARCH_GAP_PROMPT,
     ANALYST_PROMPT,
     IMAGE_ENHANCE_PROMPT,
     CODE_WORKER_PROMPT,
@@ -445,6 +446,205 @@ def _fallback_slide_html(slide: dict, total: int) -> str:
 
 # ── Research Worker ──
 
+def _research_env_int(name: str, default: int, floor: int = 1) -> int:
+    try:
+        return max(floor, int(float(os.environ.get(name, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# Below this much extracted text (and with no sources at all) a hop counts as
+# unproductive and the search is broadened instead of analysed.
+_MIN_EVIDENCE_CHARS = 120
+
+
+def _source_catalogue(sources: list[dict], limit: int) -> list[dict]:
+    """Number the deduplicated sources so the synthesis can cite ``[n]``."""
+    numbered: list[dict] = []
+    for index, source in enumerate(sources[:limit], start=1):
+        numbered.append({
+            "index": index,
+            "title": (source.get("title") or "").strip() or f"来源 {index}",
+            "url": source.get("url", ""),
+            "snippet": (source.get("snippet") or "")[:300],
+        })
+    return numbered
+
+
+def _render_catalogue(catalogue: list[dict]) -> str:
+    if not catalogue:
+        return "（无可用来源）"
+    return "\n".join(
+        f"[{item['index']}] {item['title']} — {item['url'] or '无链接'}"
+        for item in catalogue
+    )
+
+
+async def _research_missing_gaps(
+    llm: Any, task: str, evidence: str, titles: list[str]
+) -> dict:
+    """Ask the model what is still missing after the current evidence.
+
+    Failure is treated as "sufficient" so a flaky analysis call can never turn
+    into an unbounded search loop.
+    """
+    prompt = RESEARCH_GAP_PROMPT.format(
+        task=(task or "")[:600],
+        titles="\n".join(f"- {t}" for t in titles[:15]) or "（尚无来源）",
+        evidence=(evidence or "")[:6000] or "（尚无内容）",
+    )
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        logger.debug(f"Gap analysis skipped: {exc}")
+        return {"sufficient": True, "missing": [], "follow_up_queries": []}
+
+    content = response.content if hasattr(response, "content") else str(response)
+    data = _json_from_text(content)
+    if not isinstance(data, dict):
+        return {"sufficient": True, "missing": [], "follow_up_queries": []}
+    queries = [
+        str(q).strip()[:120]
+        for q in (data.get("follow_up_queries") or [])
+        if str(q).strip()
+    ]
+    return {
+        "sufficient": bool(data.get("sufficient")) or not queries,
+        "missing": [str(m)[:200] for m in (data.get("missing") or [])][:5],
+        "follow_up_queries": queries[:3],
+    }
+
+
+async def _research_alt_queries(
+    llm: Any, task: str, *, limit: int, exclude: str
+) -> list[str]:
+    """Ask for alternative phrasings when a hop came back empty.
+
+    Repeating the identical query almost always returns the identical empty
+    result, so an unproductive hop broadens the search instead.
+    """
+    try:
+        response = await llm.ainvoke([HumanMessage(
+            content=RESEARCH_QUERY_PROMPT.format(text=task))])
+    except Exception as exc:
+        logger.debug(f"Query broadening skipped: {exc}")
+        return []
+
+    text = response.content if hasattr(response, "content") else str(response)
+    queries: list[str] = []
+    for line in text.strip().splitlines():
+        candidate = line.strip().lstrip("0123456789.-) ").strip()
+        # Reject JSON, and reject prose: a real query is short and unpunctuated.
+        if len(candidate) < 6 or len(candidate) > 60:
+            continue
+        if candidate.startswith("{") or "。" in candidate or candidate.endswith("."):
+            continue
+        if candidate != exclude:
+            queries.append(candidate[:120])
+    return queries[:limit]
+
+
+async def _iterative_web_research(
+    state: dict, llm: Any, prompt_text: str, *, seed_queries: list[str],
+    max_queries: int, max_hops: int, max_sources: int,
+) -> dict:
+    """Search → read → find gaps → search again, bounded by *max_hops*.
+
+    Returns the accumulated sources (numbered), the merged text, the gap
+    reports per hop, and any injection findings seen along the way.
+    """
+    all_sources: list[dict] = []
+    all_synthesis: list[str] = []
+    seen_urls: set[str] = set()
+    external_findings: list[dict] = []
+    knowledge_gaps: list[str] = []
+    hops: list[dict] = []
+    structured_data = None
+
+    queries = list(seed_queries)
+    searched: set[str] = set()
+    rounds = 0
+
+    for hop in range(max_hops + 1):
+        # Never re-run a query we already searched: an unproductive hop must
+        # change the strategy, not burn the budget repeating itself.
+        queries = [q for q in queries if q and q not in searched]
+        if not queries:
+            break
+
+        rounds += 1
+        hop_sources = 0
+        for query in queries[:max_queries]:
+            searched.add(query)
+            scraped = await search_and_scrape(query, llm, max_pages=3)
+            raw_text = scraped.get("synthesis", "")
+            sources = scraped.get("sources", [])
+            external_findings.extend(scraped.get("injection_findings") or [])
+            if structured_data is None and scraped.get("structured_data"):
+                structured_data = scraped["structured_data"]
+
+            for src in sources:
+                url = src.get("url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_sources.append(src)
+                    hop_sources += 1
+
+            if raw_text and len(raw_text) > 50:
+                all_synthesis.append(raw_text)
+
+        logger.info(
+            f"Research hop {hop + 1}/{max_hops + 1}: "
+            f"+{hop_sources} new source(s), total {len(all_sources)}"
+        )
+
+        if hop >= max_hops:
+            break
+
+        combined_so_far = "\n\n---\n\n".join(all_synthesis)
+        # Judge on evidence, not on length: a short but real result must still
+        # go through gap analysis, while a genuinely empty hop should broaden
+        # the query instead of repeating it.
+        has_evidence = bool(all_sources) or len(combined_so_far.strip()) >= _MIN_EVIDENCE_CHARS
+        if not has_evidence:
+            broader = await _research_alt_queries(
+                llm, prompt_text, limit=max_queries, exclude=prompt_text
+            )
+            queries = broader or [prompt_text]
+            logger.info(
+                f"Research hop {hop + 1} produced no usable evidence; "
+                f"broadening to {len(queries)} alternate quer"
+                f"{'y' if len(queries) == 1 else 'ies'}"
+            )
+            continue
+
+        gap = await _research_missing_gaps(
+            llm, prompt_text, combined_so_far,
+            [s.get("title", "") for s in all_sources],
+        )
+        hops.append({
+            "hop": hop + 1,
+            "new_sources": hop_sources,
+            "sufficient": gap["sufficient"],
+            "missing": gap["missing"],
+        })
+        knowledge_gaps.extend(gap["missing"])
+
+        if gap["sufficient"]:
+            break
+        queries = gap["follow_up_queries"]
+
+    return {
+        "sources": all_sources,
+        "text": "\n\n---\n\n".join(all_synthesis) if all_synthesis else "",
+        "findings": external_findings,
+        "gaps": knowledge_gaps[:5],
+        "hops": hops,
+        "rounds": rounds,
+        "structured_data": structured_data,
+    }
+
+
 async def research_worker(state: dict) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "research"]
     if not my_tasks:
@@ -484,20 +684,27 @@ async def research_worker(state: dict) -> dict:
                 guarded, mcp_findings = _screen_external(
                     state, combined, source=f"mcp:{mcp_hits[0]['server']}"
                 )
+                mcp_sources = _source_catalogue([
+                    {"title": f"MCP {hit['server']}/{hit['tool']}", "url": "",
+                     "snippet": hit["text"][:300]}
+                    for hit in mcp_hits
+                ], _research_env_int("AGENT_RESEARCH_MAX_SOURCES", 10))
                 synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=guarded))])
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(
+                        task=prompt_text,
+                        sources=_render_catalogue(mcp_sources),
+                        text=guarded,
+                    ))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
                 results.append({
                     "task": prompt_text,
-                    "sources": [
-                        {"title": f"MCP {hit['server']}/{hit['tool']}", "url": "", "snippet": hit["text"][:300]}
-                        for hit in mcp_hits
-                    ],
+                    "sources": mcp_sources,
                     "synthesis": synthesis,
                     "raw_text": combined[:4000],
                     "structured_data": None,
                     "_from_mcp": True,
                     "safety_findings": mcp_findings,
+                    "research_hops": 1,
                 })
                 continue
 
@@ -524,17 +731,12 @@ async def research_worker(state: dict) -> dict:
                 continue
             # ── End cache check ──
 
-            all_sources = []
-            all_synthesis = []
-            seen_urls = set()
-            external_findings: list[dict] = []
-
             # With Tavily (agent-optimised search), one call is usually enough.
             # Without Tavily, generate multiple queries for broader coverage.
             from backend.config import get_provider_by_type
             has_tavily = get_provider_by_type("search") is not None
 
-            queries = [prompt_text]
+            seed_queries = [prompt_text]
             if not has_tavily and len(prompt_text) > 20:
                 kw_resp = await llm.ainvoke([HumanMessage(
                     content=RESEARCH_QUERY_PROMPT.format(text=prompt_text))])
@@ -542,41 +744,50 @@ async def research_worker(state: dict) -> dict:
                 for line in extra.strip().split("\n"):
                     q = line.strip().lstrip("0123456789.-) ").strip()
                     if q and len(q) > 5:
-                        queries.append(q[:120])
+                        seed_queries.append(q[:120])
 
-            max_queries = 2 if has_tavily else 4  # Tavily returns richer results
-            for query in queries[:max_queries]:
-                scraped = await search_and_scrape(query, llm, max_pages=3)
-                raw_text = scraped.get("synthesis", "")
-                sources = scraped.get("sources", [])
-                structured_data = scraped.get("structured_data")
-                external_findings.extend(scraped.get("injection_findings") or [])
+            max_queries = _research_env_int(
+                "AGENT_RESEARCH_QUERIES_PER_HOP", 2 if has_tavily else 4
+            )
+            max_hops = _research_env_int("AGENT_RESEARCH_MAX_HOPS", 2, floor=0)
+            max_sources = _research_env_int("AGENT_RESEARCH_MAX_SOURCES", 10)
 
-                for src in sources:
-                    url = src.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_sources.append(src)
+            search = await _iterative_web_research(
+                state, llm, prompt_text,
+                seed_queries=seed_queries,
+                max_queries=max_queries,
+                max_hops=max_hops,
+                max_sources=max_sources,
+            )
+            all_sources = search["sources"]
+            combined_text = search["text"]
+            external_findings = search["findings"]
+            catalogue = _source_catalogue(all_sources, max_sources)
 
-                if raw_text and len(raw_text) > 50:
-                    all_synthesis.append(raw_text)
-
-            combined_text = "\n\n---\n\n".join(all_synthesis) if all_synthesis else ""
             if combined_text:
                 guarded_text, _ = _screen_external(
                     state, combined_text,
                     source=f"research:{prompt_text[:60]}",
                 )
                 synth = await llm.ainvoke([HumanMessage(
-                    content=RESEARCH_SYNTHESIS_PROMPT.format(text=guarded_text))])
+                    content=RESEARCH_SYNTHESIS_PROMPT.format(
+                        task=prompt_text,
+                        sources=_render_catalogue(catalogue),
+                        text=guarded_text,
+                    ))])
                 synthesis = synth.content if hasattr(synth, "content") else str(synth)
             else:
                 synthesis = "No data found from web search."
 
             result_entry = {
-                "task": prompt_text, "sources": all_sources[:8],
-                "synthesis": synthesis, "raw_text": combined_text[:4000],
-                "structured_data": structured_data,
+                "task": prompt_text,
+                "sources": catalogue,
+                "synthesis": synthesis,
+                "raw_text": combined_text[:4000],
+                "structured_data": search["structured_data"],
+                "research_hops": search["rounds"] or 1,
+                "hop_reports": search["hops"],
+                "knowledge_gaps": search["gaps"],
             }
             if external_findings:
                 result_entry["safety_findings"] = external_findings[:10]

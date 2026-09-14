@@ -199,6 +199,22 @@ def _summarize_output(agent: str, output: dict) -> dict:
                 "count": total,
             }
         items = value if isinstance(value, list) else [value]
+        if key == "research_results":
+            sources = sum(
+                len(item.get("sources") or []) for item in items if isinstance(item, dict)
+            )
+            rounds = max(
+                (item.get("research_hops") or 1 for item in items if isinstance(item, dict)),
+                default=1,
+            )
+            gaps = sum(
+                len(item.get("knowledge_gaps") or []) for item in items if isinstance(item, dict)
+            )
+            summary = f"{rounds} 轮检索 · {sources} 个来源"
+            if gaps:
+                summary += f" · {gaps} 处信息缺口"
+            return {"result_key": key, "summary": summary, "count": len(items),
+                    "sources": sources, "rounds": rounds}
         return {
             "result_key": key,
             "summary": f"completed {agent}: {len(items)} result(s)",
