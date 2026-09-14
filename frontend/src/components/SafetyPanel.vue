@@ -273,6 +273,7 @@ onMounted(async () => {
                 { key: 'goal_verification', label: '目标完成确认', hint: '执行结束后核对产出物是否真的满足请求' },
                 { key: 'auto_remediate', label: '自动补救', hint: '未完成时自动追加补救步骤（受预算限制）' },
                 { key: 'redact_outputs', label: '输出脱敏', hint: 'worker 结果中的凭据在入库前替换为占位符' },
+                { key: 'code_execution', label: '代码执行与自测', hint: '程序员 agent 生成的 Python 会在受限子进程中真的运行，失败则回灌报错自我修复；关闭后只产出代码不执行' },
               ]"
               :key="sw.key"
               class="flex items-start gap-2 p-2 rounded-lg hover:bg-surface-900 transition-colors cursor-pointer"

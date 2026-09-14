@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import logging
 import html as html_lib
@@ -30,6 +31,7 @@ from backend.prompts import (
     ANALYST_PROMPT,
     IMAGE_ENHANCE_PROMPT,
     CODE_WORKER_PROMPT,
+    CODE_FIX_PROMPT,
 )
 
 logger = logging.getLogger("graph.workers")
@@ -747,6 +749,95 @@ async def video_worker(state: dict) -> dict:
 
 # ── Code Worker ──
 
+async def _verify_generated_code(state: dict, llm: Any, task_prompt: str, code: str) -> dict:
+    """Run generated Python and let the model repair it until it works.
+
+    Returns a dict merged into the ``code_results`` entry:
+    ``code`` (possibly repaired), ``execution`` (runner result) and
+    ``execution_summary`` (one line for the synthesizer).
+    """
+    from backend.tools import code_runner
+
+    if not code_runner.execution_enabled():
+        return {"execution": None, "execution_summary": "代码执行已关闭，未运行"}
+    if not code_runner.is_runnable_python(code):
+        return {"execution": None,
+                "execution_summary": "非可直接运行的 Python，按产物交付（未执行）"}
+
+    try:
+        attempts = max(1, int(os.environ.get("AGENT_CODE_EXEC_ATTEMPTS", "2")))
+    except (TypeError, ValueError):
+        attempts = 2
+
+    current = code
+    result = None
+    used = 0
+
+    for attempt in range(attempts):
+        used = attempt + 1
+        result = await code_runner.run_python(current)
+        _audit_code_execution(state, task_prompt, result, used)
+
+        if result.ok or result.refused:
+            break
+        if attempt + 1 >= attempts:
+            break
+
+        # Feed the failure back so the model repairs its own program.
+        try:
+            fix = await llm.ainvoke([HumanMessage(content=CODE_FIX_PROMPT.format(
+                task=task_prompt[:400],
+                code=current[:6000],
+                error=(result.stderr or result.stdout)[-2500:],
+            ))])
+        except Exception as exc:
+            logger.error(f"Code repair call failed: {exc}")
+            break
+        repaired = fix.content if hasattr(fix, "content") else str(fix)
+        if not code_runner.is_runnable_python(repaired):
+            break
+        current = repaired
+
+    payload = {
+        "code": current,
+        "execution": result.to_dict() if result else None,
+        "execution_summary": result.summary() if result else "未执行",
+        "execution_attempts": used,
+    }
+    if result is not None and not result.ok and not result.refused:
+        payload["execution_failed"] = True
+    return payload
+
+
+def _audit_code_execution(state: dict, task_prompt: str, result: Any, attempt: int) -> None:
+    """Record every execution decision in the audit trail."""
+    try:
+        from backend.safety.audit import get_audit_log
+
+        get_audit_log().record(
+            "code.execution_refused" if result.refused else "code.executed",
+            run_id=state.get("run_id", ""),
+            session_id=state.get("session_id", ""),
+            stage="execute",
+            actor="worker",
+            target="code",
+            decision="block" if result.refused else "allow",
+            risk="high" if result.refused else "medium",
+            severity="warning" if (result.refused or not result.ok) else "info",
+            message=result.summary(),
+            details={
+                "task": (task_prompt or "")[:200],
+                "attempt": attempt,
+                "exit_code": result.exit_code,
+                "duration": round(result.duration, 2),
+                "timed_out": result.timed_out,
+                "findings": [f.get("id") for f in result.findings],
+            },
+        )
+    except Exception as exc:  # auditing must never break execution
+        logger.debug(f"Code execution audit skipped: {exc}")
+
+
 async def code_worker(state: dict) -> dict:
     my_tasks = [t for t in state.get("tasks", []) if t.get("agent") == "code"]
     if not my_tasks:
@@ -761,10 +852,18 @@ async def code_worker(state: dict) -> dict:
             resp = await llm.ainvoke([HumanMessage(
                 content=CODE_WORKER_PROMPT.format(prompt=prompt_text))])
             content = resp.content if hasattr(resp, "content") else str(resp)
-            results.append({"task": prompt_text, "code": content})
         except Exception as e:
             logger.error(f"Code worker error: {e}")
             results.append({"task": prompt_text, "error": str(e)})
+            continue
+
+        entry: dict = {"task": prompt_text, "code": content}
+        try:
+            entry.update(await _verify_generated_code(state, llm, prompt_text, content))
+        except Exception as e:
+            logger.error(f"Code verification error: {e}")
+            entry["execution_summary"] = f"自测环节出错：{e}"
+        results.append(entry)
 
     return {"code_results": results}
 

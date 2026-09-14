@@ -55,6 +55,8 @@ class SafetySettings:
             os.environ.get("SAFETY_APPROVAL_TIMEOUT_SECONDS", "180") or 180
         )
         self.redact_outputs: bool = _env_bool("SAFETY_REDACT_OUTPUTS", True)
+        # Capability switch: may the programmer agent run what it generates?
+        self.code_execution: bool = _env_bool("AGENT_CODE_EXEC", True)
         self._load_overrides()
 
     # ── persistence ────────────────────────────────────────────────────
@@ -74,7 +76,7 @@ class SafetySettings:
         if data.get("nonstream_review") in VALID_NONSTREAM:
             self.nonstream_review = data["nonstream_review"]
         for key in ("auto_approve", "llm_review", "goal_verification",
-                    "auto_remediate", "redact_outputs"):
+                    "auto_remediate", "redact_outputs", "code_execution"):
             if isinstance(data.get(key), bool):
                 setattr(self, key, data[key])
         if isinstance(data.get("approval_timeout"), (int, float)):
@@ -92,6 +94,7 @@ class SafetySettings:
             "nonstream_review": self.nonstream_review,
             "approval_timeout": self.approval_timeout,
             "redact_outputs": self.redact_outputs,
+            "code_execution": self.code_execution,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +148,7 @@ class SafetySettings:
             "nonstream_review": self.nonstream_review,
             "approval_timeout": self.approval_timeout,
             "redact_outputs": self.redact_outputs,
+            "code_execution": self.code_execution,
         }
 
 
