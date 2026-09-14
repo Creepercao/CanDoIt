@@ -17,6 +17,11 @@
 - **📡 SSE 实时流式** — 前端实时展示智能体思考过程和生成结果
 - **🖼️ PPTX 导出** — Playwright 渲染 HTML 幻灯片为高质量 PPTX 文件
 - **🔒 Agent 安全层** — 执行前计划审查、高风险动作人工审批、输出脱敏、任务完成确认与哈希链审计日志
+- **🔁 自我纠错** — 任务失败自动重试（瞬时故障退避重试、产出不合格回灌原因自修），目标未达成时增量重规划剩余步骤
+- **🧭 多跳研究** — 检索 → 缺口分析 → 再检索，来源统一编号并要求 [n] 引用
+- **🧪 代码自测** — 程序员 agent 生成的 Python 会在受限子进程中真实运行，失败则回灌 traceback 自我修复
+- **🧠 跨会话记忆** — 偏好与事实自动沉淀并召回；研究结论先暂存，人工确认后才生效
+- **📈 运行可观测** — 每次运行的 token 用量（按 agent 归属）、任务耗时、重试与失败率
 - **🎨 明亮主题前端** — 白卡片 + slate 浅灰底 + 靛蓝强调色，代码块使用 GitHub 浅色高亮
 - **🐳 Docker 部署** — 一键 `docker compose up`
 
@@ -80,7 +85,9 @@ CanDoIt 采用“控制平面 + 执行平面 + 产物平面”的分层设计：
 6. 每个任务执行前再过一道动作门禁；同一 wave 内并行执行，每个任务有超时、异常隔离和可选降级策略。
 7. Worker 结果先做输出审查与凭据脱敏，再合并回共享 state；PPT planner 等 Worker 还可以动态注入后续任务。
 8. **目标完成确认**：核对每个步骤产出与用户明确要求的交付物是否真实存在；未完成时按预算追加补救步骤。
-9. 所有任务结束后，Synthesizer 读取完整 state，生成面向用户的最终答案（未完成事项会被强制如实说明）。
+9. 任务失败时先自我纠错：瞬时故障退避重试，产出不可用则把失败原因回灌给同一个 agent 重跑。
+10. 所有任务结束后，Synthesizer 读取完整 state，生成面向用户的最终答案（未完成事项会被强制如实说明）。
+11. 运行结束后抽取跨会话记忆（偏好/事实直接生效，结论待确认），并把本次运行的 token、耗时与失败情况写入运行记录。
 10. 流式模式下，生命周期事件、审查结论和最终文本通过 SSE 持续推送到前端。
 
 ### 1.3 PPT 专用流水线
@@ -274,6 +281,39 @@ Agent 安全层是编排循环的旁路守卫，不改变 Wave 调度语义：
 | POST | `/api/safety/approvals/{id}` | 批准 / 拒绝一个被暂停的动作 |
 | POST | `/api/safety/review` | 对任意文本做一次策略试审查（不执行任何操作） |
 
+### 3.7 Agent 能力增强
+
+除安全层外，编排内核还提供六项能力（均可在环境变量中开关）：
+
+| 能力 | 行为 | 关键开关 |
+|------|------|----------|
+| 自我纠错重试 | 产出不可用时重跑任务；瞬时失败（429/5xx/超时/连接）指数退避后原样重试，语义失败（空产出/报错）把原因追加到任务提示词让 agent 自己修 | `AGENT_TASK_MAX_ATTEMPTS`、`AGENT_MAX_RETRIES` |
+| 增量重规划 | 目标确认发现缺口时，让 supervisor 基于「已执行步骤 + 失败原因 + 已产出物 + 缺口」重新规划**剩余**步骤，模型不可用时回退到按缺口补齐 | `AGENT_LLM_REPLAN`、`AGENT_MAX_REPLANS` |
+| 多跳研究 | 检索 → 缺口分析 → 再检索；已搜查询不重复，空轮改为换问法；来源编号并要求 `[n]` 引用 | `AGENT_RESEARCH_MAX_HOPS` |
+| 代码自测闭环 | 生成的 Python 在受限子进程真实运行，失败回灌 traceback 修复；执行前先按注入规则筛查源码 | `AGENT_CODE_EXEC`、`AGENT_CODE_EXEC_ATTEMPTS` |
+| 跨会话记忆 | 计划阶段按请求召回并注入提示词；运行后抽取记忆，偏好/事实自动生效，结论需人工确认 | `AGENT_MEMORY`、`AGENT_MEMORY_TOP_K` |
+| 运行可观测 | 采集 token / 耗时 / 重试 / 失败，按 agent 归属，落盘 `outputs/runs/` | `AGENT_MODEL_PRICING`（成本估算，可选） |
+
+**代码执行的隔离边界**（重要）：临时工作目录、环境变量白名单（provider 凭据不会出现在子进程里）、`python -I` 隔离模式、墙钟超时、输出上限，POSIX 上还有 CPU/内存/进程数 rlimit，并且执行前会用注入规则扫描源码。这**不是容器级隔离**；若对模型产出的代码不放心，设 `AGENT_CODE_EXEC=0` 关闭，或把后端整体跑在容器里。
+
+**记忆的信任分级**：研究结论写错会静默污染后续所有回答，因此 `conclusion` 类记忆一律先进 `pending`，需在「🧠 记忆」选项卡确认后才参与召回；`fact` / `preference` 则自动生效。含密钥、密码等凭据的内容一律拒收。
+
+### 3.8 运行历史与记忆 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/runs` | 运行记录列表（可按会话过滤） |
+| GET | `/api/runs/stats` | 聚合统计：次数、调用数、token、平均耗时、失败与重试 |
+| GET/DELETE | `/api/runs/{run_id}` | 单次运行详情 / 删除 |
+| GET | `/api/runs/pricing` | 是否已配置模型价格 |
+| GET | `/api/memory` | 记忆列表（按状态、类型筛选） |
+| GET | `/api/memory/stats` | 记忆计数（生效 / 待确认 / 已否决） |
+| POST | `/api/memory` | 手动添加记忆（人工添加直接生效） |
+| POST | `/api/memory/search` | 语义召回试运行 |
+| POST | `/api/memory/{id}/confirm` | 确认一条待确认结论 |
+| POST | `/api/memory/{id}/reject` | 否决一条记忆 |
+| DELETE | `/api/memory/{id}` | 删除一条记忆 |
+
 ## 4. 部署步骤说明
 
 ### 4.1 环境要求
@@ -420,6 +460,7 @@ CanDoIt/
 │   ├── cache.py              # Redis 缓存（可选，回退到内存）
 │   ├── embedding.py          # 嵌入向量客户端
 │   ├── research_cache.py     # 研究缓存 + ChromaDB 知识库
+│   ├── memory.py             # 跨会话长期记忆
 │   ├── mcp_adapter.py        # MCP 兼容层
 │   ├── sessions.py           # 会话管理
 │   │
@@ -474,6 +515,8 @@ CanDoIt/
 │       ├── image_gen.py      # 图像生成
 │       ├── video_gen.py      # 视频生成
 │       ├── ppt_export.py     # HTML → PPTX 导出
+│       ├── code_runner.py    # 受限执行生成的 Python
+│       ├── code_exec_bootstrap.py # 子进程资源限制引导
 │       └── ppt_run_store.py  # PPT 运行记录存储
 │
 ├── backend/tests/
@@ -487,6 +530,8 @@ CanDoIt/
         ├── stores/chat.js    # Pinia 状态管理
         └── components/
             ├── ChatPanel.vue       # 主聊天界面
+            ├── RunHistory.vue      # 运行历史：token / 耗时 / 失败率
+            ├── MemoryPanel.vue     # 长期记忆：待确认结论与生效记忆
             ├── ThinkingPanel.vue   # 智能体思考时间线（含审查/审批/完成确认）
             ├── SafetyPanel.vue     # 安全总览、审批队列、审计检索
             ├── ModelSelector.vue   # 模型选择器
@@ -593,6 +638,18 @@ SKILL = Skill(
 | `AGENT_MAX_STEPS` / `AGENT_MAX_WAVES` / `AGENT_MAX_REPLANS` | 单次运行的步骤/波次/补救轮次上限 | `32` / `12` / `1` |
 | `AGENT_MAX_WALL_SECONDS` | 单次运行墙钟上限（秒） | `1800` |
 | `AGENT_TASK_TIMEOUT_SECONDS` | 单个任务硬超时（秒，可按代理覆盖） | `600` |
+| `AGENT_TASK_MAX_ATTEMPTS` | 单个任务的尝试次数（含首次） | `3` |
+| `AGENT_MAX_RETRIES` | 单次运行允许的总重试次数 | `12` |
+| `AGENT_RETRY_BASE_SECONDS` / `AGENT_RETRY_MAX_SECONDS` | 瞬时失败退避的基数与上限 | `2` / `20` |
+| `AGENT_LLM_REPLAN` | 目标未达成时用 LLM 增量重规划（否则按缺口补齐） | `true` |
+| `AGENT_RESEARCH_MAX_HOPS` | 研究最多追加几轮检索 | `2` |
+| `AGENT_RESEARCH_QUERIES_PER_HOP` / `AGENT_RESEARCH_MAX_SOURCES` | 每轮查询数 / 引用来源上限 | 视 Tavily 而定 / `10` |
+| `AGENT_CODE_EXEC` | 是否真实执行生成的 Python | `true` |
+| `AGENT_CODE_EXEC_ATTEMPTS` / `AGENT_CODE_EXEC_TIMEOUT` | 自测修复次数 / 单次执行超时（秒） | `2` / `25` |
+| `AGENT_CODE_EXEC_MEMORY_MB` / `AGENT_CODE_EXEC_CPU_SECONDS` | 子进程内存与 CPU 上限（POSIX） | `768` / `20` |
+| `AGENT_MEMORY` | 跨会话长期记忆 | `true` |
+| `AGENT_MEMORY_TOP_K` / `AGENT_MEMORY_MIN_SCORE` | 每次召回条数 / 相似度下限 | `5` / `0.35` |
+| `AGENT_MODEL_PRICING` | 模型价格 JSON（美元/百万 token），配置后才估算成本 | 空 |
 
 ## 注意事项
 

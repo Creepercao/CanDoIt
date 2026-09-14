@@ -63,15 +63,21 @@ backend/
 ├── cache.py             # Redis 缓存（可选，降级为内存 dict）
 ├── embedding.py         # 嵌入向量客户端（复用 provider 的 /v1/embeddings 端点）
 ├── research_cache.py    # 研究结果语义缓存 + ChromaDB 知识库
+├── memory.py            # 跨会话长期记忆（偏好/事实自动、结论需确认）
 ├── mcp_adapter.py       # MCP 兼容层 — 将外部 MCP 工具注册为 Skill 代理
 ├── sessions.py          # 会话管理（持久化到 outputs/sessions/）
 │
 ├── agents/              # 代理编排
 │   ├── orchestrator.py  # ★ Agent Loop 核心 — 分波次执行、结果合并、流式 SSE
 │   ├── builtin_workers.py# 所有内置 worker 函数（research/analyst/chart/image/video/code/PPT）
+│   ├── recovery.py      # 失败分类、任务重试反馈、增量重规划
 │   ├── graph.py         # 兼容性包装器（指向 orchestrator，LangGraph 图已移除）
 │   ├── agent_loader.py  # 从 agents.yaml 加载内置代理 Skill 定义
 │   └── agents.yaml      # 声明式代理配置（名称、依赖、worker 映射、prompt 贡献）
+│
+├── observability/       # 运行可观测性
+│   ├── trace.py         # 按 run 采集 token 用量与任务耗时（LangChain callback）
+│   └── store.py         # 运行记录持久化 outputs/runs/ 与聚合统计
 │
 ├── api/                 # 模块化 API 路由
 │   ├── __init__.py      # 共享常量（OUTPUTS_DIR, SKILL_HTML_DIR）
@@ -84,6 +90,8 @@ backend/
 │   ├── pptx.py          # HTML → PPTX 导出（Playwright 截图 + python-pptx）
 │   ├── ppt_runs.py      # PPT 运行记录追踪
 │   ├── safety.py        # 安全审查 / 审计日志 / 人工审批 REST 接口
+│   ├── runs.py          # 运行历史：token / 耗时 / 失败率（/api/runs）
+│   ├── memory.py        # 跨会话记忆管理（/api/memory，含结论确认）
 │   └── mcp.py           # MCP 工具配置 API
 │
 ├── safety/              # Agent 安全层 — 执行审查、审批、目标完成确认
@@ -120,6 +128,8 @@ backend/
     ├── image_gen.py     # 通过 provider 的 /images/generations 端点生成图片
     ├── video_gen.py     # 视频生成（provider 不支持时降级为图片关键帧生成）
     ├── ppt_export.py    # HTML 幻灯片 → PPTX（Playwright 截图 + python-pptx）
+    ├── code_runner.py   # 受限执行 model 产出的 Python（隔离环境 + 超时 + 输出上限）
+    ├── code_exec_bootstrap.py # 子进程侧资源限制引导（避免线程中使用 preexec_fn）
     └── ppt_run_store.py # PPT 运行记录持久化
 ```
 
@@ -145,6 +155,15 @@ backend/
 
 风险 → 决策：`low`→allow、`medium`→notify、`high`→review（人工审批）、`critical`→block。
 内置 worker 标记 `executes=false`（只产出内容），Skill 包与 MCP 工具标记 `executes=true`，因此同样的提示词在两类代理下的判定不同。
+
+**Agent 能力增强**（与安全层并列，全部接入同一个共享内核）：
+
+1. **自我纠错重试** — 任务产出不可用时自动重跑：瞬时失败（429/5xx/超时/连接）指数退避后原样重试，语义失败（空产出/报错）把失败原因追加到 `task['prompt']` 让 agent 自己修。`AGENT_TASK_MAX_ATTEMPTS` 限制单任务次数，`AGENT_MAX_RETRIES` 限制单次运行总重试数
+2. **增量重规划** — 目标确认发现缺口时，先让 supervisor 基于「已执行步骤 + 失败原因 + 已产出物 + 缺口」重新规划**剩余**步骤，模型不可用时回退到按缺口补齐的确定性补救
+3. **多跳研究** — research agent 走「检索 → 缺口分析 → 再检索」循环（`AGENT_RESEARCH_MAX_HOPS`），来源统一编号并要求 `[n]` 引用；已搜过的查询不重复，空轮改为换问法
+4. **代码自测闭环** — code agent 生成的 Python 在受限子进程中真实运行，失败则把 traceback 回灌修复；执行走文件重定向而非管道，环境变量白名单化，执行前先按注入规则筛查源码
+5. **跨会话记忆** — 计划阶段按请求召回记忆注入 supervisor 提示词；运行结束后抽取记忆，偏好/事实自动生效，研究结论先进 `pending` 待人工确认
+6. **运行可观测** — 每次运行采集 token 用量（按 agent 归属）、任务耗时、重试与失败，落盘 `outputs/runs/`，可经 `/api/runs` 查询
 
 **状态结构**：`messages`、`user_request`、`tasks`、`plan_steps`、`research_results`、`analyst_results`、`chart_results`、`image_results`、`video_results`、`code_results`、`skill_outputs`、`final_response`，以及模型 ID 选择字段。安全层额外写入 `run_id`、`safety_blocks`、`dropped_tasks`、`_verification`、`_safety`。
 
@@ -234,6 +253,8 @@ frontend/src/
     ├── ChatPanel.vue    # 主聊天界面，支持 markdown 渲染、图表/图片显示
     ├── ThinkingPanel.vue # 可折叠的代理思考时间线（含审查结论、审批按钮、目标完成确认）
     ├── SafetyPanel.vue  # 🔒 安全选项卡 — 总览开关、审批队列、审计检索、规则表、文本审查
+    ├── RunHistory.vue   # 📈 运行选项卡 — token/耗时/失败率、逐任务耗时、按 agent 的用量归属
+    ├── MemoryPanel.vue  # 🧠 记忆选项卡 — 待确认结论置顶、确认/否决、按状态与类型筛选
     ├── ModelSelector.vue # 按类型（chat/image/video）选择模型的下拉菜单
     ├── ImageGenerator.vue # 独立图片生成标签页
     ├── VideoGenerator.vue # 独立视频生成标签页
@@ -243,6 +264,8 @@ frontend/src/
 ```
 
 **数据流**：`ChatPanel` → `store.sendChatMessage()` → `api.sendMessage(stream=true)` → SSE 事件响应式更新 `store.thinkSteps`、`store.currentResponse`、`store.pendingApprovals` 和 `store.currentVerification` → `ChatPanel` 渲染 markdown + ThinkingPanel 时间线。
+
+**标签页**：`💬 对话` / `🎨 文生图` / `🎬 文生视频` / `📊 PPT` / `📓 笔记` / `🔧 技能` / `🔒 安全` / `📈 运行` / `🧠 记忆` / `⚙️ Providers`。
 
 **审批交互**：`approval_required` 事件进入 `store.pendingApprovals`，ThinkingPanel 与顶部栏出现「待审批」入口；用户点击批准/拒绝调用 `POST /api/safety/approvals/{id}`，被暂停的 SSE 流随即恢复（`approval_resolved`）。超时按拒绝处理。
 
@@ -297,7 +320,11 @@ frontend/src/
 - **Skill 包上传限制 200 MB** — 与 `starlette.formparsers.MultiPartParser.max_file_size` 一致。
 - **安全层默认开启（`SAFETY_MODE=enforce`）** — 新增 worker 时应确认其风险分级；第三方 Skill 包与 MCP 工具默认按 `executes=true`（可触及主机）处理，触发高风险时会停下等待人工审批。
 - **安全层改动必须同时更新 `backend/safety/` 与 `backend/tests/test_safety.py`** — 策略、脱敏、审计链、审批、完成确认都有对应测试。
-- **审计日志与安全设置写入 `outputs/audit/`、`outputs/safety/`**，已加入 `.gitignore`，属于运行期数据。
+- **审计日志、安全设置、运行记录与记忆写入 `outputs/audit/`、`outputs/safety/`、`outputs/runs/`、`outputs/memory/`**，已加入 `.gitignore`，属于运行期数据。
+- **Agent 能力开关**：`AGENT_TASK_MAX_ATTEMPTS`（默认 3）、`AGENT_MAX_RETRIES`（12）、`AGENT_LLM_REPLAN`（开）、`AGENT_RESEARCH_MAX_HOPS`（2）、`AGENT_CODE_EXEC`（开）、`AGENT_MEMORY`（开）、`AGENT_MEMORY_TOP_K`（5）。关掉 `AGENT_CODE_EXEC` 后 code agent 只产出代码不执行。
+- **代码执行不是容器级隔离**：临时目录 + 环境变量白名单（provider 凭据不可见）+ `python -I` + 超时 + 输出上限 + 执行前源码筛查。若担心模型产出的代码，用 `AGENT_CODE_EXEC=0` 关闭，或把后端跑在容器里。
+- **子进程不要用管道**：部分加固/沙箱环境会拒绝带 pipe 的子进程（`asyncio.create_subprocess_exec` 直接 WinError 5），`code_runner` 因此统一走文件重定向 + 线程池。
+- **成本统计默认关闭**：只有配置 `AGENT_MODEL_PRICING`（美元/百万 token 的 JSON）后才估算成本，避免内置价目表过期产生错误数字。
 
 ## Feishu/Lark Dedicated Backend
 
