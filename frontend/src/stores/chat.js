@@ -682,6 +682,7 @@ export const useChatStore = defineStore('chat', () => {
     let finalSafety = null
     let finalVerification = null
     let finalRunId = ''
+    let finalUsage = null
 
     // Create abort controller for stop button
     abortController = new AbortController()
@@ -818,6 +819,7 @@ export const useChatStore = defineStore('chat', () => {
               finalSafety = data.safety || null
               finalVerification = data.verification || currentVerification.value
               finalRunId = data.run_id || currentRunId.value
+              finalUsage = data.usage || null
               break
             case 'error':
               currentResponse.value = `**Error:** ${data.error}`
@@ -839,6 +841,7 @@ export const useChatStore = defineStore('chat', () => {
         run_id: finalRunId,
         safety: finalSafety,
         verification: finalVerification,
+        usage: finalUsage,
       })
     } catch (e) {
       if (e.name === 'AbortError') {

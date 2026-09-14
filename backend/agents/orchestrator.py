@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, AsyncGenerator, Callable, Optional
 
 from langchain_core.messages import HumanMessage
@@ -830,20 +831,27 @@ async def _run_agent_loop_events(
                 }}
 
             # Execute the wave in parallel, heart-beating while we wait.
-            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict, int, list[dict]]:
+            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict, int, list[dict], float]:
                 """Run one task, retrying while the result stays unusable.
 
-                Returns ``(task, output, attempts, retry_events)``.  Transient
-                provider failures (429 / timeout / connection) are retried
-                unchanged after a backoff; semantic failures (empty or errored
-                output) are retried with the reason fed back into the prompt.
-                Only the final attempt's output is merged into the state.
+                Returns ``(task, output, attempts, retry_events, duration)``.
+                Transient provider failures (429 / timeout / connection) are
+                retried unchanged after a backoff; semantic failures (empty or
+                errored output) are retried with the reason fed back into the
+                prompt.  Only the final attempt's output is merged into the
+                state.
                 """
                 agent = task.get("agent", "")
+                # Tag model calls made by this task so usage is attributed to it.
+                from backend.observability import set_current_agent
+
+                set_current_agent(agent)
+
                 attempts = 0
                 retry_events: list[dict] = []
                 output: dict = {}
                 current = task
+                started = time.monotonic()
 
                 while True:
                     attempts += 1
@@ -906,7 +914,7 @@ async def _run_agent_loop_events(
                         await asyncio.sleep(delay)
                     current = recovery.retry_task(task, attempts, reason, transient=transient)
 
-                return task, output, attempts, retry_events
+                return task, output, attempts, retry_events, time.monotonic() - started
 
             wave_future = asyncio.gather(*[
                 _run_one(task, fn, state) for task, fn in approved_wave
@@ -921,7 +929,7 @@ async def _run_agent_loop_events(
             results = await wave_future
 
             # Merge and emit agent_done
-            for task, output, attempts, retry_events in results:
+            for task, output, attempts, retry_events, task_duration in results:
                 agent = task.get("agent", "")
 
                 for event in retry_events:
@@ -972,6 +980,25 @@ async def _run_agent_loop_events(
 
                 node_name = agent_map.get(agent, f"{agent}_worker")
                 summary = _summarize_output(agent, output)
+
+                # Record the task in the run trace (usage, timings, failures).
+                try:
+                    from backend.observability import TaskRecord, current_trace
+
+                    trace = current_trace()
+                    if trace is not None:
+                        trace.add_task(TaskRecord(
+                            agent=agent,
+                            task_id=task.get("id", ""),
+                            attempts=attempts,
+                            duration=task_duration,
+                            status="failed" if recovery.is_unusable(output) else "done",
+                            result_key=summary.get("result_key", ""),
+                            count=summary.get("count", 0),
+                        ))
+                except Exception as trace_err:
+                    logger.debug("Task trace skipped: %s", trace_err)
+
                 done_data = {
                     "agent": task.get("id") or node_name,
                     "agent_type": agent,
@@ -980,6 +1007,7 @@ async def _run_agent_loop_events(
                     "slide_index": task.get("slide_index"),
                     "status": "done",
                     "attempts": attempts,
+                    "duration": round(task_duration, 2),
                     **summary,
                 }
                 if output_decision is not None and output_decision.findings:

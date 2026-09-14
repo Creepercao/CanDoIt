@@ -274,15 +274,42 @@ def _build_synth_prompt(user_request: str, state: dict, history: list = None) ->
 
 # ---- Sync run ----
 
+def _finish_trace(trace, state: dict) -> None:
+    """Attach the outcome of a run to its trace before persisting it."""
+    verification = state.get("_verification") or {}
+    safety = state.get("_safety") or {}
+    trace.note(
+        verification=verification,
+        safety={
+            "mode": safety.get("mode", ""),
+            "policy": safety.get("policy", {}),
+            "redactions": safety.get("redactions", 0),
+            "dropped_tasks": safety.get("dropped_tasks", []),
+            "budget": safety.get("budget", {}),
+        },
+        safety_blocks=state.get("safety_blocks", []),
+        stopped_reason=state.get("_stopped_reason", ""),
+        response_chars=len(state.get("final_response", "") or ""),
+    )
+
+
 async def _run_agents(req: ChatRequest) -> dict:
     state = _make_state(req)
+    run_id = state.get("run_id", "")
     try:
-        result = await run_agent_loop(state)
+        from backend.observability import save_run, track_run
+
+        with track_run(run_id, session_id=req.session_id, request=req.message) as trace:
+            result = await run_agent_loop(state)
+            _finish_trace(trace, result)
+            save_run(trace.to_dict())
+
         return {
             "success": True,
             "response": result.get("final_response", ""),
             "tasks": result.get("tasks", []),
             "run_id": result.get("run_id", ""),
+            "usage": trace.to_dict().get("usage", {}),
             "safety": result.get("_safety", {}),
             "verification": result.get("_verification"),
             "dropped_tasks": result.get("dropped_tasks", []),
@@ -304,7 +331,31 @@ async def _run_agents(req: ChatRequest) -> dict:
 # ---- Streaming orchestrator ----
 
 async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
+    """Open a run trace around the whole streaming pipeline.
+
+    The trace context is entered in this outermost generator so every worker
+    task spawned downstream inherits it, and it is always closed — even when
+    the client disconnects mid-stream.
+    """
     state = _make_state(req, skip_synthesizer=True)
+
+    from backend.observability import save_run, track_run
+
+    with track_run(state.get("run_id", ""),
+                   session_id=req.session_id, request=req.message) as trace:
+        try:
+            async for frame in _stream_chat_inner(req, state, trace):
+                yield frame
+        finally:
+            # Persist whatever happened, including aborted runs.
+            try:
+                save_run(trace.to_dict())
+            except Exception as exc:  # never break the response on tracing
+                logger.debug("Run record persist skipped: %s", exc)
+
+
+async def _stream_chat_inner(req: ChatRequest, state: dict,
+                             trace) -> AsyncGenerator[str, None]:
     chat_id = req.chat_model_id or ""
 
     yield _sse("phase", {"phase": "supervisor", "message": "analyzing request..."})
@@ -425,6 +476,13 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
     except Exception as audit_err:  # auditing must never break delivery
         logger.debug("Audit delivery record skipped: %s", audit_err)
 
+    # Attach the outcome to the run trace before the final frame goes out.
+    try:
+        _finish_trace(trace, state)
+        trace.note(response_chars=len(full_response))
+    except Exception as trace_err:
+        logger.debug("Trace finalisation skipped: %s", trace_err)
+
     yield _sse("final", {
         "response": full_response,
         "chart_results": state.get("chart_results", []),
@@ -434,6 +492,7 @@ async def _stream_chat(req: ChatRequest) -> AsyncGenerator[str, None]:
         "safety": safety_info,
         "verification": verification,
         "safety_blocks": safety_blocks,
+        "usage": trace.usage(),
     })
     yield _sse("done", {})
 

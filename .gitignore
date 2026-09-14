@@ -29,6 +29,7 @@ outputs/pptx_frames/
 outputs/audit/
 outputs/safety/
 outputs/sessions/
+outputs/runs/
 
 # Local scratch space
 temp/

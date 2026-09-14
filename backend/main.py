@@ -19,6 +19,7 @@ from backend.api.pptx import router as pptx_router
 from backend.api.mcp import router as mcp_router
 from backend.api.ppt_runs import router as ppt_runs_router
 from backend.api.safety import router as safety_router
+from backend.api.runs import router as runs_router
 
 # Allow up to 200 MB file uploads (skill packages)
 MultiPartParser.max_file_size = 200 * 1024 * 1024
@@ -52,6 +53,7 @@ app.include_router(pptx_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(ppt_runs_router, prefix="/api")
 app.include_router(safety_router, prefix="/api")
+app.include_router(runs_router, prefix="/api")
 
 
 @app.on_event("startup")

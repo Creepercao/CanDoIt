@@ -4,6 +4,19 @@ from backend.config import PROVIDERS, ProviderConfig, get_provider_by_type
 from backend.models.registry import registry
 
 
+def _run_callbacks() -> list:
+    """Attach the usage collector when a run trace is active."""
+    try:
+        from backend.observability.trace import build_usage_callback, current_trace
+
+        if current_trace() is None:
+            return []
+        callback = build_usage_callback()
+        return [callback] if callback is not None else []
+    except Exception:  # tracing must never break model creation
+        return []
+
+
 def create_chat_model(
     model_id: str = "deepseek-ai/DeepSeek-V3",
     temperature: float = 0.7,
@@ -22,6 +35,7 @@ def create_chat_model(
         max_tokens=max_tokens,
         openai_api_key=provider_config.api_key,
         openai_api_base=provider_config.base_url,
+        callbacks=_run_callbacks(),
     )
 
 

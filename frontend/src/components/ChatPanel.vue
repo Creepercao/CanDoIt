@@ -253,7 +253,19 @@ watch(() => store.currentResponse, (val) => {
             </div>
           </div>
 
-          <div class="text-xs text-gray-500 mt-2">{{ formatTime(msg.timestamp) }}</div>
+          <div class="flex items-center gap-2 mt-2 text-xs text-gray-500 flex-wrap">
+            <span>{{ formatTime(msg.timestamp) }}</span>
+            <span v-if="msg.usage?.calls" class="text-[10px]">
+              · 🔢 {{ msg.usage.calls }} 次调用 · 🎫 {{ (msg.usage.total_tokens || 0).toLocaleString('zh-CN') }} tokens
+              <span v-if="msg.usage.cost_usd !== null && msg.usage.cost_usd !== undefined">
+                · 💰 ${{ Number(msg.usage.cost_usd).toFixed(4) }}
+              </span>
+            </span>
+            <span v-if="msg.verification?.status && msg.verification.status !== 'complete'"
+                  class="text-[10px] text-amber-300">
+              · {{ msg.verification.summary }}
+            </span>
+          </div>
         </div>
 
         <div v-if="msg.role === 'user'" class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-sm shrink-0">

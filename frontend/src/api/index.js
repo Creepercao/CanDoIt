@@ -313,3 +313,32 @@ export async function reviewText({ text, stage = 'action', agent = '' }) {
   const { data } = await api.post('/safety/review', { text, stage, agent })
   return data
 }
+
+// ---- Run history / observability ----
+
+export async function fetchRuns({ limit = 100, sessionId = '' } = {}) {
+  const { data } = await api.get('/runs', {
+    params: { limit, ...(sessionId ? { session_id: sessionId } : {}) },
+  })
+  return data
+}
+
+export async function fetchRun(runId) {
+  const { data } = await api.get(`/runs/${encodeURIComponent(runId)}`)
+  return data
+}
+
+export async function fetchRunStats(limit = 200) {
+  const { data } = await api.get('/runs/stats', { params: { limit } })
+  return data
+}
+
+export async function fetchRunPricing() {
+  const { data } = await api.get('/runs/pricing')
+  return data
+}
+
+export async function deleteRun(runId) {
+  const { data } = await api.delete(`/runs/${encodeURIComponent(runId)}`)
+  return data
+}
