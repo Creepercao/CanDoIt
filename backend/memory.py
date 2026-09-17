@@ -79,6 +79,16 @@ def recall_top_k() -> int:
 
 
 def recall_min_score() -> float:
+    """Similarity floor for memory recall.
+
+    Measured `unrelated` sentence pairs top out at 0.281 with
+    bge-large-zh-v1.5 (see ``backend/tools/threshold_calibration.py``), so 0.35
+    sits just above the noise floor and deliberately errs toward recalling
+    *more*: a marginally relevant memory only adds a line to a prompt that the
+    model can ignore, whereas a missing one loses context the user already
+    established.  Unlike the research cache — where a wrong hit silently
+    replaces the work — breadth is the right bias here.
+    """
     return _env_float("AGENT_MEMORY_MIN_SCORE", 0.35)
 
 

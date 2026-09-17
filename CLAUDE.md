@@ -47,6 +47,17 @@ npm run preview    # 预览生产构建
 python -m pytest backend/tests -q
 ```
 
+语义相似度阈值是**量出来的**，换嵌入模型或 provider 后需重跑标定：
+
+```bash
+python -m backend.tools.threshold_calibration          # 对比加/不加 BGE 查询前缀
+```
+
+实测结论（bge-large-zh-v1.5，每组 12 对）：paraphrase 中位 0.796、same_topic 中位 0.770、
+unrelated 上界 0.281——**同义改写与「同话题另一问题」的分布几乎完全重合**，余弦相似度无法
+区分二者，因此研究缓存必须两段式判定，不能只靠阈值。BGE 查询指令前缀实测无改善
+（间隔 -0.474 vs -0.472），故不加。
+
 后端暂无 linter 配置。
 
 ## 架构
@@ -213,7 +224,7 @@ backend/
 
 **方案 A — 语义查询缓存**：
 - 先尝试精确哈希匹配（基于 HTTP 缓存头 `ETag` / `Last-Modified`）
-- 未命中时，通过 embedding 向量做语义相似度匹配（阈值 0.85）
+- 未命中时走两段式相似度判定（实测见下）：`≥0.92` 视为近重复直接复用；`0.40~0.92` 属于「相关但不确定」，需模型确认两个查询是同一信息需求，确认失败或模型不可用一律按未命中（fail-closed）
 - TTL 默认 86400 秒（24 小时），可通过 `RESEARCH_CACHE_TTL` 环境变量配置
 
 **方案 B — ChromaDB 知识库**：

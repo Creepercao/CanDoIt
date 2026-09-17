@@ -353,6 +353,25 @@ providers:
 
 `providers.yaml`、`API.json` 和 `mcp_servers.json` 均包含敏感信息，已加入 `.gitignore`。生产环境应使用 Secret 管理或只读挂载，不要写入镜像。
 
+### 3.9 语义阈值是量出来的，不是猜的
+
+研究缓存原先用 `0.85`，但这个数字没有依据（无注释、无测试、引入它的提交也没提）。用真实 provider 标定后（`python -m backend.tools.threshold_calibration`，SiliconFlow / `BAAI/bge-large-zh-v1.5`，每组 12 对）：
+
+| 组 | min | p25 | 中位 | p75 | max |
+|----|-----|-----|------|-----|-----|
+| paraphrase（应命中） | 0.433 | 0.743 | 0.796 | 0.843 | 0.918 |
+| same_topic（必须拒绝） | 0.574 | 0.659 | 0.770 | 0.820 | **0.904** |
+| unrelated（必须拒绝） | 0.050 | 0.156 | 0.207 | 0.229 | 0.281 |
+
+结论是**余弦相似度区分不了"同一个问题换个说法"和"同一话题另一个问题"**——最危险的负样本（「Python 读取大文件」↔「写入大文件」）得 0.904，比 75% 的真同义对还高；两组分布几乎完全重合。因此：
+
+- **不能**靠调阈值解决。高相似度只当作"相关"的证据，不当作"同题"的证明
+- 缓存改为两段式：`≥0.92` 近重复直接复用；`0.40 ~ 0.92` 先让模型判定是否为同一信息需求，**确认失败或判定不可用一律按未命中处理**（fail-closed），绝不静默返回另一个问题的答案
+- 知识库检索与记忆召回只把候选**呈现**出来（人能看见、模型能忽略），误命中代价低，因此下限取在 unrelated 上界（0.281）之上：0.40 与 0.35
+- 另外实测否掉了一个常见说法：给查询侧加 BGE 指令前缀**没有改善**（间隔 -0.474 vs -0.472），因此不加
+
+标定结果会写入 `outputs/calibration/embedding-thresholds.json`；**换嵌入模型或换 provider 后应当重跑**——阈值是模型相关的属性，不是常数。
+
 ### 4.3 本地开发部署
 
 后端：
@@ -624,7 +643,10 @@ SKILL = Skill(
 | `REDIS_URL` | Redis 连接地址 | `redis://redis:6379/0` |
 | `TAVILY_API_KEY` | Tavily 搜索 API 密钥（可选） | 空（使用 Bing） |
 | `RESEARCH_CACHE_TTL` | 研究缓存 TTL（秒） | `86400`（24h） |
-| `RESEARCH_CACHE_THRESHOLD` | 语义匹配相似度阈值 | `0.85` |
+| `RESEARCH_CACHE_THRESHOLD` | 近重复命中阈值（高于该值直接复用缓存） | `0.92` |
+| `RESEARCH_CACHE_SIMILARITY_FLOOR` | 候选下限（该值到命中阈值之间需模型确认同题） | `0.40` |
+| `RESEARCH_CACHE_CONFIRM` | 是否启用同题确认（关闭后只有近重复命中） | `true` |
+| `RETRIEVAL_SIMILARITY_THRESHOLD` | 知识库检索的相似度下限 | `0.40` |
 | `EMBEDDING_MODEL` | 嵌入模型 ID | `BAAI/bge-large-zh-v1.5` |
 | `SAFETY_MODE` | 安全审查模式：`off` / `monitor` / `enforce` | `enforce` |
 | `SAFETY_AUTO_APPROVE` | 跳过人工审批直接放行（仅记录审计） | `false` |

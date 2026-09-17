@@ -6,7 +6,11 @@ import logging
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from backend.research_cache import get_knowledge_base, get_research_cache
+from backend.research_cache import (
+    RETRIEVAL_SIMILARITY_DEFAULT,
+    get_knowledge_base,
+    get_research_cache,
+)
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 logger = logging.getLogger("api.knowledge")
@@ -18,7 +22,7 @@ logger = logging.getLogger("api.knowledge")
 async def search_knowledge(
     q: str = Query(..., description="Search query"),
     top_k: int = Query(5, ge=1, le=20),
-    threshold: float = Query(0.7, ge=0.0, le=1.0),
+    threshold: float = Query(RETRIEVAL_SIMILARITY_DEFAULT, ge=0.0, le=1.0),
 ):
     """Search the knowledge base for similar past research results."""
     kb = get_knowledge_base()

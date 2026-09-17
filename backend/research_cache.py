@@ -32,13 +32,60 @@ from backend.embedding import (
 logger = logging.getLogger("research_cache")
 
 # ── Configuration ──────────────────────────────────────────────────────
+#
+# The thresholds below come from an actual calibration run against the provider
+# in use (SiliconFlow / BAAI/bge-large-zh-v1.5, 1024-dim), re-runnable with:
+#
+#     python -m backend.tools.threshold_calibration
+#
+# Measured cosine similarity over 12 pairs per group:
+#
+#     paraphrase (should hit)      min 0.433  p25 0.743  median 0.796  max 0.918
+#     same_topic (must NOT hit)    min 0.574  p25 0.659  median 0.770  max 0.904
+#     unrelated  (must NOT hit)    min 0.050  p25 0.156  median 0.207  max 0.281
+#
+# The paraphrase and same_topic distributions **overlap almost completely**, so
+# no single cosine threshold can separate "same question reworded" from "same
+# topic, different question" — the worst negative scored 0.904
+# ("读取大文件" vs "写入大文件"), higher than 75% of the true positives.
+# Adding BGE's query instruction prefix was measured too and did not help
+# (separation -0.474 vs -0.472).
+#
+# Therefore a high similarity is treated as *evidence of relatedness*, never as
+# proof of equivalence:
+#
+#     >= HIT   (0.92)  near-duplicate → serve directly
+#     >= FLOOR (0.40)  related but ambiguous → ask a model whether the two
+#                      queries share one information need; only then serve
+#     <  FLOOR         miss
+#
+# If the confirmation model is unavailable the candidate is rejected, so the
+# cache can never silently answer a different question.
 
 RESEARCH_CACHE_TTL = int(os.environ.get("RESEARCH_CACHE_TTL", "86400"))  # 24 h
+
+# Near-duplicate: served without confirmation.  Above every measured negative.
 RESEARCH_CACHE_THRESHOLD = float(
-    os.environ.get("RESEARCH_CACHE_THRESHOLD", "0.85")
+    os.environ.get("RESEARCH_CACHE_THRESHOLD", "0.92")
+)
+# Related-but-ambiguous floor: the boundary where measured `unrelated` pairs stop
+# (max 0.281) with margin.  Candidates in [FLOOR, HIT) need confirmation.
+RESEARCH_CACHE_SIMILARITY_FLOOR = float(
+    os.environ.get("RESEARCH_CACHE_SIMILARITY_FLOOR", "0.40")
 )
 RESEARCH_CACHE_MAX_ENTRIES = int(
     os.environ.get("RESEARCH_CACHE_MAX_ENTRIES", "500")
+)
+# Set to 0 to disable the confirmation step (then only near-duplicates hit).
+RESEARCH_CACHE_CONFIRM = os.environ.get(
+    "RESEARCH_CACHE_CONFIRM", "1"
+).strip().lower() not in ("0", "false", "no", "off")
+
+# Knowledge-base / memory retrieval only *surfaces* candidates (a human sees the
+# list, or a model can ignore an item), so the cost of a marginal hit is low and
+# the floor sits just above the measured `unrelated` ceiling.
+RETRIEVAL_SIMILARITY_DEFAULT = float(
+    os.environ.get("RETRIEVAL_SIMILARITY_THRESHOLD", "0.40")
 )
 
 # ChromaDB persistence directory (under project root outputs/)
@@ -69,10 +116,16 @@ class ResearchCache:
         similarity_threshold: float = RESEARCH_CACHE_THRESHOLD,
         ttl: int = RESEARCH_CACHE_TTL,
         max_entries: int = RESEARCH_CACHE_MAX_ENTRIES,
+        similarity_floor: float = RESEARCH_CACHE_SIMILARITY_FLOOR,
+        confirm: bool = RESEARCH_CACHE_CONFIRM,
+        model_id: str = "",
     ):
         self._threshold = similarity_threshold
+        self._floor = min(similarity_floor, similarity_threshold)
         self._ttl = ttl
         self._max_entries = max_entries
+        self._confirm = confirm
+        self._model_id = model_id
         self._embeddings_key = "research:embeddings"
 
     # ── Public API ──────────────────────────────────────────────────
@@ -80,7 +133,10 @@ class ResearchCache:
     async def get_similar(self, query: str) -> Optional[dict]:
         """Return a cached research result if a similar query was seen before.
 
-        Returns the full result dict on hit, ``None`` on miss.
+        Layer 2 is **two-stage** because the calibration shows cosine similarity
+        cannot tell "same question reworded" from "same topic, different
+        question": a near-duplicate is served directly, anything merely related
+        must be confirmed by a model first.  Returns the result dict on hit.
         """
         if not query:
             return None
@@ -103,6 +159,7 @@ class ResearchCache:
 
         best_score = 0.0
         best_key = ""
+        best_query = ""
 
         for entry in stored:
             if not isinstance(entry, dict):
@@ -114,17 +171,88 @@ class ResearchCache:
             if sim > best_score:
                 best_score = sim
                 best_key = entry.get("key", "")
+                best_query = entry.get("query", "") or entry.get("text", "")
 
-        if best_score >= self._threshold and best_key:
+        if not best_key:
+            logger.info(f"Research cache MISS (no candidates): {query[:60]}...")
+            return None
+
+        # Stage 1 — near-duplicate: safe to serve as-is.
+        if best_score >= self._threshold:
             cached = await cache.get(best_key)
             if cached:
                 logger.info(
-                    f"Research cache HIT (semantic, sim={best_score:.3f}): "
+                    f"Research cache HIT (near-duplicate sim={best_score:.3f}): "
                     f"{query[:60]}..."
                 )
                 return cached
+            return None
 
+        # Stage 2 — related but ambiguous: confirm the information need matches.
+        if best_score >= self._floor and self._confirm:
+            if await self._same_information_need(query, best_query):
+                cached = await cache.get(best_key)
+                if cached:
+                    logger.info(
+                        f"Research cache HIT (confirmed sim={best_score:.3f}): "
+                        f"{query[:60]}..."
+                    )
+                    return cached
+            else:
+                logger.info(
+                    f"Research cache REJECTED (sim={best_score:.3f} but a "
+                    f"different question): {query[:60]}... vs {best_query[:60]}..."
+                )
+                return None
+
+        # Miss — but report the best score so the threshold stays observable.
+        logger.info(
+            f"Research cache MISS (best sim={best_score:.3f} < "
+            f"floor {self._floor:.2f}): {query[:60]}..."
+        )
         return None
+
+    async def _same_information_need(self, query: str, candidate: str) -> bool:
+        """Ask a model whether two queries want the same facts.
+
+        Fails **closed**: any error means "not the same", so an unavailable
+        judge can never turn into a silently wrong cache hit.
+        """
+        if not candidate or candidate.strip() == query.strip():
+            return bool(candidate)
+        from backend.prompts import CACHE_EQUIVALENCE_PROMPT
+
+        try:
+            import asyncio
+            import json
+            import re
+
+            from langchain_core.messages import HumanMessage
+
+            from backend.models.provider import create_chat_model
+
+            llm = create_chat_model(
+                model_id=self._model_id or "deepseek-ai/DeepSeek-V3",
+                temperature=0.0, max_tokens=200,
+            )
+            response = await asyncio.wait_for(
+                llm.ainvoke([HumanMessage(content=CACHE_EQUIVALENCE_PROMPT.format(
+                    a=query[:400], b=candidate[:400]))]),
+                timeout=20.0,
+            )
+        except Exception as exc:
+            logger.debug("Cache equivalence check unavailable: %s", exc)
+            return False
+
+        content = response.content if hasattr(response, "content") else str(response)
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not match:
+            return False
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            return False
+        return bool(isinstance(data, dict) and data.get("same"))
 
     async def store(self, query: str, result: dict) -> None:
         """Store a research result for future reuse."""
@@ -299,7 +427,7 @@ class KnowledgeBase:
         self,
         query: str,
         top_k: int = 5,
-        threshold: float = 0.7,
+        threshold: float = RETRIEVAL_SIMILARITY_DEFAULT,
     ) -> list[dict]:
         """Search the knowledge base for similar past research results."""
         await self._ensure_init()

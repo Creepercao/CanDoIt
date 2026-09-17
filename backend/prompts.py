@@ -366,3 +366,19 @@ MEMORY_EXTRACTION_PROMPT = """从这次对话中提取值得跨会话记住的�
 [
     {{"kind": "preference" | "fact" | "conclusion", "text": "一句话", "confidence": 0.0-1.0}}
 ]"""
+
+# ── Research cache: two-stage equivalence gate ────────────────────────
+
+CACHE_EQUIVALENCE_PROMPT = """判断下面两个查询是不是**同一个信息需求**（换了个说法），还是只是话题相近但问的是不同的事。
+
+查询 A: {a}
+
+查询 B: {b}
+
+判定标准：
+- 同一个信息需求 = 需要的是同一批事实/数据/结论（措辞、语序、详略不同都算）
+- 不算 = 话题相同但问的是不同的东西
+  （例如「读取大文件」vs「写入大文件」、「销量」vs「销量预测」、「财报」vs「股价」）
+
+只输出 JSON：
+{{"same": true | false, "reason": "一句话中文理由"}}"""
