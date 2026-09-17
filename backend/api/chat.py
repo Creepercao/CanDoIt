@@ -464,6 +464,11 @@ async def _stream_chat_inner(req: ChatRequest, state: dict,
     synth_prompt = _build_synth_prompt(req.message, state, req.history)
     full_response = ""
 
+    synth_span = None
+    if trace is not None:
+        from backend.observability import KIND_SYNTH
+
+        synth_span = trace.chain.start(KIND_SYNTH, "synthesizer 综合汇总")
     try:
         llm = create_chat_model(
             model_id=chat_id or "deepseek-ai/DeepSeek-V3",
@@ -474,7 +479,11 @@ async def _stream_chat_inner(req: ChatRequest, state: dict,
             if text:
                 full_response += text
                 yield _sse("token", {"text": text})
+        if trace is not None:
+            trace.chain.finish(synth_span, chars=len(full_response))
     except Exception as e:
+        if trace is not None:
+            trace.chain.finish(synth_span, status="failed", error=e)
         logger.error(f"Synthesizer streaming error: {e}")
         yield _sse("error", {"error": f"Synthesis failed: {e}"})
         yield _sse("done", {})
@@ -507,7 +516,16 @@ async def _stream_chat_inner(req: ChatRequest, state: dict,
     except Exception as trace_err:
         logger.debug("Trace finalisation skipped: %s", trace_err)
 
-    memory = await _remember(req, {**state, "final_response": full_response})
+    if trace is not None:
+        from backend.observability import KIND_MEMORY
+
+        with trace.chain.span(KIND_MEMORY, "抽取长期记忆") as mem_span:
+            memory = await _remember(req, {**state, "final_response": full_response})
+            mem_span.set(stored=len(memory.get("stored", [])),
+                         pending=len(memory.get("pending", [])),
+                         skipped=memory.get("skipped", ""))
+    else:
+        memory = await _remember(req, {**state, "final_response": full_response})
 
     yield _sse("final", {
         "response": full_response,

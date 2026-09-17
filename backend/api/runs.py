@@ -47,6 +47,58 @@ async def runs_list(limit: int = 100, session_id: str = ""):
     return {"runs": records, "count": len(records)}
 
 
+@router.get("/runs/{run_id}/chain")
+async def run_chain(run_id: str, format: str = "json"):
+    """Execution chain for one run — the ordered span tree of every step.
+
+    ``format=text`` returns a plain-text tree, which is what you want to paste
+    into an issue or a log.
+    """
+    record = get_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"未找到运行记录 {run_id}")
+
+    chain = record.get("chain")
+    if not chain or not chain.get("spans"):
+        raise HTTPException(status_code=404, detail=f"运行 {run_id} 没有链路记录")
+
+    if format == "text":
+        return _render_chain_text(chain)
+    return chain
+
+
+def _render_chain_text(chain: dict) -> dict:
+    """Rebuild the tree rendering from the stored span list."""
+    from backend.observability.chain import RunChain
+
+    rebuilt = RunChain(run_id=chain.get("run_id", ""))
+    for raw in chain.get("spans") or []:
+        if not isinstance(raw, dict):
+            continue
+        # Attributes were merged into the stored dict; strip the reserved keys
+        # so they cannot collide with the explicit arguments.
+        attributes = dict(raw.get("attributes") or {})
+        for reserved in ("kind", "name", "agent", "status", "error", "parent_id"):
+            attributes.pop(reserved, None)
+
+        span = rebuilt.add(
+            raw.get("kind", "step"),
+            raw.get("name", ""),
+            agent=raw.get("agent", ""),
+            parent_id=raw.get("parent_id", ""),
+            duration=float(raw.get("duration") or 0.0),
+            status=raw.get("status", "ok"),
+            error=raw.get("error", ""),
+            **attributes,
+        )
+        span.span_id = raw.get("span_id", span.span_id)
+    return {
+        "run_id": chain.get("run_id", ""),
+        "text": rebuilt.render_text(),
+        "summary": chain.get("summary", {}),
+    }
+
+
 @router.get("/runs/{run_id}")
 async def run_detail(run_id: str):
     record = get_run(run_id)

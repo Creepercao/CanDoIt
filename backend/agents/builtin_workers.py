@@ -986,7 +986,38 @@ async def _verify_generated_code(state: dict, llm: Any, task_prompt: str, code: 
 
     for attempt in range(attempts):
         used = attempt + 1
+        exec_span = None
+        try:
+            from backend.observability import current_trace
+            from backend.observability.chain import KIND_EXECUTE
+
+            _trace = current_trace()
+            if _trace is not None:
+                exec_span = _trace.chain.start(
+                    KIND_EXECUTE, f"沙箱执行 第 {used} 次", agent="code",
+                )
+        except Exception:
+            exec_span = None
+
         result = await code_runner.run_python(current)
+
+        if exec_span is not None:
+            try:
+                from backend.observability import current_trace
+
+                _trace = current_trace()
+                if _trace is not None:
+                    _trace.chain.finish(
+                        exec_span,
+                        status="ok" if result.ok else "failed",
+                        error=result.summary() if not result.ok else "",
+                        exit_code=result.exit_code,
+                        seconds=round(result.duration, 2),
+                        refused=result.refused,
+                    )
+            except Exception:
+                pass
+
         _audit_code_execution(state, task_prompt, result, used)
 
         if result.ok or result.refused:

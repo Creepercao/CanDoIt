@@ -26,6 +26,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from backend.observability.chain import RunChain
+
 logger = logging.getLogger("observability.trace")
 
 _trace: ContextVar[Optional["RunTrace"]] = contextvars.ContextVar("dsh_run_trace", default=None)
@@ -93,6 +95,12 @@ class RunTrace:
     tasks: list[TaskRecord] = field(default_factory=list)
     calls: list[ModelCall] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
+    chain: "RunChain" = field(default_factory=RunChain)
+
+    def __post_init__(self) -> None:
+        # Keep the chain self-describing when the record is persisted.
+        if not self.chain.run_id:
+            self.chain.run_id = self.run_id
 
     # ── collection ─────────────────────────────────────────────────────
 
@@ -167,6 +175,7 @@ class RunTrace:
             "duration_seconds": round(self.duration, 2),
             "tasks": [t.to_dict() for t in self.tasks],
             "task_stats": self.task_stats(),
+            "chain": self.chain.to_dict(),
             "model_calls": [c.to_dict() for c in self.calls],
             "usage": self.usage(),
             **self.extra,

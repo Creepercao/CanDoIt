@@ -333,6 +333,13 @@ export async function fetchRunStats(limit = 200) {
   return data
 }
 
+export async function fetchRunChain(runId, format = 'json') {
+  const { data } = await api.get(`/runs/${encodeURIComponent(runId)}/chain`, {
+    params: format === 'text' ? { format: 'text' } : {},
+  })
+  return data
+}
+
 export async function fetchRunPricing() {
   const { data } = await api.get('/runs/pricing')
   return data

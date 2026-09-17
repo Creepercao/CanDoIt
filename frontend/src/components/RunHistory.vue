@@ -1,7 +1,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useChatStore } from '../stores/chat.js'
-import { fetchRuns, fetchRun, fetchRunStats, fetchRunPricing, deleteRun } from '../api/index.js'
+import {
+  fetchRuns, fetchRun, fetchRunStats, fetchRunPricing, deleteRun, fetchRunChain,
+} from '../api/index.js'
 
 const store = useChatStore()
 
@@ -13,6 +15,8 @@ const loading = ref(false)
 const onlyCurrentSession = ref(false)
 const expanded = ref({})            // run_id -> bool (inline detail)
 const details = ref({})             // run_id -> full record
+const chains = ref({})              // run_id -> { text, summary }
+const copied = ref('')              // run_id just copied
 
 const STATUS_STYLE = {
   complete: 'bg-green-500/15 text-green-300 border-green-500/30',
@@ -77,12 +81,26 @@ async function toggle(run) {
     return
   }
   expanded.value[id] = true
+  const jobs = []
   if (!details.value[id]) {
-    try {
-      details.value[id] = await fetchRun(id)
-    } catch (e) {
-      console.error('Failed to load run detail:', e)
-    }
+    jobs.push(fetchRun(id).then(r => { details.value[id] = r })
+      .catch(e => console.error('Failed to load run detail:', e)))
+  }
+  if (!chains.value[id]) {
+    jobs.push(fetchRunChain(id, 'text').then(c => { chains.value[id] = c })
+      .catch(() => { chains.value[id] = { text: '(本次运行没有链路记录)' } }))
+  }
+  await Promise.all(jobs)
+}
+
+async function copyChain(runId) {
+  const text = chains.value[runId]?.text || ''
+  try {
+    await navigator.clipboard.writeText(text)
+    copied.value = runId
+    setTimeout(() => { copied.value = '' }, 1500)
+  } catch (e) {
+    console.error('Clipboard unavailable:', e)
   }
 }
 
@@ -250,6 +268,27 @@ onMounted(refresh)
                     <span class="text-gray-600">（入 {{ fmtNumber(item.input_tokens) }} / 出 {{ fmtNumber(item.output_tokens) }}，{{ item.calls }} 次）</span>
                   </div>
                 </div>
+              </div>
+
+              <!-- Execution chain -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-medium text-gray-300">
+                    🧩 执行链路
+                    <span v-if="chains[run.run_id]?.summary" class="text-[10px] font-normal text-gray-500">
+                      （{{ chains[run.run_id].summary.spans }} 个环节
+                      <span v-if="chains[run.run_id].summary.failed">
+                        · {{ chains[run.run_id].summary.failed }} 失败</span>
+                      <span v-if="chains[run.run_id].summary.blocked">
+                        · {{ chains[run.run_id].summary.blocked }} 拦截</span>）
+                    </span>
+                  </span>
+                  <button @click="copyChain(run.run_id)"
+                          class="text-[10px] text-gray-400 hover:text-slate-900 px-2 py-0.5 rounded hover:bg-surface-700 transition-colors">
+                    {{ copied === run.run_id ? '已复制' : '复制' }}
+                  </button>
+                </div>
+                <pre class="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-all rounded-lg border border-gray-700/40 bg-surface-800 p-2 max-h-72 overflow-y-auto text-gray-300">{{ chains[run.run_id]?.text || '加载中…' }}</pre>
               </div>
 
               <!-- Safety -->

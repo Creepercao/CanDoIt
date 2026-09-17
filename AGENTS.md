@@ -88,6 +88,7 @@ backend/
 │
 ├── observability/       # 运行可观测性
 │   ├── trace.py         # 按 run 采集 token 用量与任务耗时（LangChain callback）
+│   ├── chain.py         # 执行链路：每个环节一个 span，自动嵌套 + 文本树渲染
 │   └── store.py         # 运行记录持久化 outputs/runs/ 与聚合统计
 │
 ├── api/                 # 模块化 API 路由
@@ -175,6 +176,7 @@ backend/
 4. **代码自测闭环** — code agent 生成的 Python 在受限子进程中真实运行，失败则把 traceback 回灌修复；执行走文件重定向而非管道，环境变量白名单化，执行前先按注入规则筛查源码
 5. **跨会话记忆** — 计划阶段按请求召回记忆注入 supervisor 提示词；运行结束后抽取记忆，偏好/事实自动生效，研究结论先进 `pending` 待人工确认
 6. **运行可观测** — 每次运行采集 token 用量（按 agent 归属）、任务耗时、重试与失败，落盘 `outputs/runs/`，可经 `/api/runs` 查询
+7. **执行链路** — 每个环节记录为一个 span（run → plan → review → task → attempt/review → verify → remediate，以及 memory 召回/抽取与 code 沙箱执行），带父子关系、耗时、状态与属性；span 用 `ContextVar` 定位当前父节点，因此并行波次不会串父；`GET /api/runs/{id}/chain?format=text` 返回可直接粘贴的文本树
 
 **状态结构**：`messages`、`user_request`、`tasks`、`plan_steps`、`research_results`、`analyst_results`、`chart_results`、`image_results`、`video_results`、`code_results`、`skill_outputs`、`final_response`，以及模型 ID 选择字段。安全层额外写入 `run_id`、`safety_blocks`、`dropped_tasks`、`_verification`、`_safety`。
 
@@ -336,6 +338,7 @@ frontend/src/
 - **代码执行不是容器级隔离**：临时目录 + 环境变量白名单（provider 凭据不可见）+ `python -I` + 超时 + 输出上限 + 执行前源码筛查。若担心模型产出的代码，用 `AGENT_CODE_EXEC=0` 关闭，或把后端跑在容器里。
 - **子进程不要用管道**：部分加固/沙箱环境会拒绝带 pipe 的子进程（`asyncio.create_subprocess_exec` 直接 WinError 5），`code_runner` 因此统一走文件重定向 + 线程池。
 - **成本统计默认关闭**：只有配置 `AGENT_MODEL_PRICING`（美元/百万 token 的 JSON）后才估算成本，避免内置价目表过期产生错误数字。
+- **链路里的 `set()` 会特殊处理 `status` 与 `error`**：写 `span.set(error="...")` 不会静默变成"成功"的 span。新增环节时优先用 span 而不是日志——链路是唯一能看见"某一步被 except 静默吞掉"的地方（跨会话记忆召回就曾因此长期失效）。
 
 ## Feishu/Lark Dedicated Backend
 

@@ -305,6 +305,7 @@ Agent 安全层是编排循环的旁路守卫，不改变 Wave 调度语义：
 | GET | `/api/runs` | 运行记录列表（可按会话过滤） |
 | GET | `/api/runs/stats` | 聚合统计：次数、调用数、token、平均耗时、失败与重试 |
 | GET/DELETE | `/api/runs/{run_id}` | 单次运行详情 / 删除 |
+| GET | `/api/runs/{run_id}/chain` | 执行链路 span 树（`?format=text` 返回可粘贴的文本树） |
 | GET | `/api/runs/pricing` | 是否已配置模型价格 |
 | GET | `/api/memory` | 记忆列表（按状态、类型筛选） |
 | GET | `/api/memory/stats` | 记忆计数（生效 / 待确认 / 已否决） |
@@ -313,6 +314,32 @@ Agent 安全层是编排循环的旁路守卫，不改变 Wave 调度语义：
 | POST | `/api/memory/{id}/confirm` | 确认一条待确认结论 |
 | POST | `/api/memory/{id}/reject` | 否决一条记忆 |
 | DELETE | `/api/memory/{id}` | 删除一条记忆 |
+
+### 3.10 可追踪的 skill 执行链路
+
+审计日志记录**决策**、运行记录记录**总量**，但都回答不了「这次运行按什么顺序做了什么、时间花在哪」。执行链路补上这一层：每个环节是一个 span。
+
+```text
+✓ run:整个运行 [0.02s] request=搜索最新销量数据并画一个柱状图 tasks=3
+├─ ✓ memory:召回长期记忆 [0.00s] recalled=2
+├─ ✓ plan:supervisor 规划 [0.00s] steps=3
+├─ ✓ review:计划审查 [0.00s] decision=allow risk=low
+├─ ✓ task:research [1.9s] attempts=1
+│  ├─ ✓ attempt:第 1 次尝试 [1.9s] ok=True
+│  └─ ✓ review:输出审查 [0.00s] decision=allow
+├─ 🔁 task:chart [0.4s] attempts=2
+│  ├─ ✗ attempt:第 1 次尝试 [0.1s]  ⚠ HTTP 429 Too Many Requests
+│  └─ ✓ attempt:第 2 次尝试 [0.3s] ok=True
+└─ ✓ verify:目标完成确认 [0.1s] verdict=complete score=1.0
+```
+
+- 覆盖环节：run / plan / review（计划与输出）/ task / attempt（每次重试）/ verify / remediate / memory（召回与抽取）/ synth / 代码沙箱执行 / 预算
+- 父子关系用 `ContextVar` 维护，**并行波次不会互相串父**（有并发隔离测试）
+- 状态如实标注：被审查拒绝的运行，根 span 是 `blocked`，不会伪装成成功
+- 查看：`GET /api/runs/{run_id}/chain`，或在前端「📈 运行」展开某次运行后直接查看并一键复制
+- 链路随运行记录落盘（`outputs/runs/<run_id>.json` 的 `chain` 字段），有 span 上限保护
+
+链路的价值不只是调试——它是唯一能看见「某一步被 `except` 静默吞掉」的地方：跨会话记忆召回因为引用了一个尚未赋值的变量而长期失效，单元测试与日志都没发现，第一次渲染链路就暴露了。
 
 ## 4. 部署步骤说明
 

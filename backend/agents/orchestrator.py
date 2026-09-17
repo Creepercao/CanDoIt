@@ -38,6 +38,18 @@ from backend.skills.registry import skill_registry
 from backend.agents import recovery
 from backend.agents.builtin_workers import synthesizer_node
 from backend.prompts import SUPERVISOR_PROMPT_TEMPLATE
+from backend.observability import RunChain, current_trace
+from backend.observability.chain import (
+    KIND_ATTEMPT,
+    KIND_BUDGET,
+    KIND_MEMORY,
+    KIND_PLAN,
+    KIND_REMEDIATE,
+    KIND_REVIEW,
+    KIND_RUN,
+    KIND_TASK,
+    KIND_VERIFY,
+)
 from backend.safety import RunBudget, SafetyReviewer, new_run_id
 from backend.safety.policy import PolicyDecision
 
@@ -480,6 +492,34 @@ def _budget_note(reviewer: SafetyReviewer) -> str:
     return "；".join(reasons) if reasons else "执行预算已用尽"
 
 
+def _chain():
+    """Return the active run chain, or a chain that records nothing.
+
+    Tracing is best-effort: a failure here must never affect a run.
+    """
+    trace = current_trace()
+    return trace.chain if trace is not None else RunChain.disabled()
+
+
+def _chain_status(state: dict) -> str:
+    """Map a finished run onto a span status."""
+    from backend.observability.chain import _BLOCKED, _FAILED, _OK, _RETRIED
+
+    # A refusal by review is not a success — say so in the chain.
+    if state.get("_refused"):
+        return _BLOCKED
+    verdict = (state.get("_verification") or {}).get("status", "")
+    if verdict == "complete":
+        return _OK
+    if verdict in ("partial", "incomplete"):
+        return _RETRIED
+    if verdict == "failed":
+        return _FAILED
+    if state.get("safety_blocks") or state.get("_stopped_reason"):
+        return _RETRIED
+    return _OK
+
+
 async def _propose_recovery(
     user_request: str,
     tasks: list[dict],
@@ -550,6 +590,7 @@ async def _run_agent_loop_events(
     ``_agent_loop_done`` carrying the final state.
     """
     state = dict(initial_state)
+    user_request = state.get("user_request", "")
     reviewer = SafetyReviewer(
         state.get("run_id") or new_run_id(),
         session_id=state.get("session_id", ""),
@@ -561,6 +602,13 @@ async def _run_agent_loop_events(
     reviewer.record(
         "run.start", stage="start", message="开始执行",
         details={"request": (state.get("user_request") or "")[:500]},
+    )
+
+    # Execution chain — every step of this run becomes a span under this root.
+    chain = _chain()
+    run_span = chain.start(
+        KIND_RUN, "整个运行",
+        request=(state.get("user_request") or "")[:120],
     )
 
     # ── event builders ─────────────────────────────────────────────────
@@ -594,6 +642,15 @@ async def _run_agent_loop_events(
         # Attach the summary on every exit path (refusals included) so the
         # non-streaming caller always finds it.
         state["_safety"] = reviewer.summary()
+        # Every exit path funnels through here, so the root span always closes.
+        chain.finish(
+            run_span,
+            status=_chain_status(state),
+            error=state.get("_stopped_reason", ""),
+            verification=(state.get("_verification") or {}).get("status", ""),
+            tasks=len(state.get("tasks") or []),
+            blocks=len(state.get("safety_blocks") or []),
+        )
         return {"event": "_agent_loop_done", "data": {
             "state": state,
             "accumulated": accumulated,
@@ -642,27 +699,39 @@ async def _run_agent_loop_events(
     yield {"event": "phase", "data": {"phase": "supervisor", "message": "analyzing request..."}}
 
     # Recall cross-session memories so planning respects standing preferences.
-    try:
-        from backend.memory import get_memory_store, memory_enabled
+    with chain.span(KIND_MEMORY, "召回长期记忆",
+                    parent_id=run_span.span_id) as mem_span:
+        try:
+            from backend.memory import get_memory_store, memory_enabled
 
-        if memory_enabled():
-            block, recalled = await get_memory_store().recall_for_prompt(user_request)
-            if block:
-                state["_memories"] = block
-                state["_recalled_memories"] = recalled
-                yield {"event": "memory", "data": {
-                    "run_id": reviewer.run_id,
-                    "count": len(recalled),
-                    "items": [
-                        {"kind": item["kind"], "text": item["text"],
-                         "score": item.get("score")}
-                        for item in recalled
-                    ],
-                }}
-    except Exception as memory_err:
-        logger.debug("Memory recall skipped: %s", memory_err)
+            if memory_enabled():
+                block, recalled = await get_memory_store().recall_for_prompt(user_request)
+                mem_span.set(recalled=len(recalled))
+                if block:
+                    state["_memories"] = block
+                    state["_recalled_memories"] = recalled
+                    yield {"event": "memory", "data": {
+                        "run_id": reviewer.run_id,
+                        "count": len(recalled),
+                        "items": [
+                            {"kind": item["kind"], "text": item["text"],
+                             "score": item.get("score")}
+                            for item in recalled
+                        ],
+                    }}
+            else:
+                mem_span.set(status="skipped", reason="AGENT_MEMORY=0")
+        except Exception as memory_err:
+            logger.debug("Memory recall skipped: %s", memory_err)
+            mem_span.set(status="skipped", error=memory_err)
 
-    sup_result = await supervisor_node(state)
+    with chain.span(KIND_PLAN, "supervisor 规划",
+                    parent_id=run_span.span_id) as plan_span:
+        sup_result = await supervisor_node(state)
+        plan_span.set(
+            steps=len(sup_result.get("tasks") or []),
+            direct=bool(sup_result.get("final_response")),
+        )
     merge_worker_results(state, [sup_result])
 
     if state.get("final_response"):
@@ -680,8 +749,6 @@ async def _run_agent_loop_events(
         yield {"event": "done", "data": {}}
         yield state_event()
         return
-
-    user_request = state.get("user_request", "")
 
     # ── 2. Validate, screen & publish the plan ─────────────────────────
 
@@ -716,6 +783,7 @@ async def _run_agent_loop_events(
     }}
 
     if not tasks:
+        state["_stopped_reason"] = "计划中没有可执行的步骤（代理未注册）"
         yield finish_event(
             "计划中的步骤都引用了当前未注册的代理，无法执行。请检查技能是否已启用。"
         )
@@ -726,9 +794,13 @@ async def _run_agent_loop_events(
     # ── 3. Safety checkpoint 1: plan review ────────────────────────────
 
     yield {"event": "phase", "data": {"phase": "review", "message": "执行审查中..."}}
-    plan_decision = reviewer.review_plan(user_request, tasks)
-    plan_decision = await reviewer.enrich_plan_review(user_request, tasks, plan_decision)
-    reviewer.record_decision(plan_decision, target="plan")
+    with chain.span(KIND_REVIEW, "计划审查",
+                    parent_id=run_span.span_id) as review_span:
+        plan_decision = reviewer.review_plan(user_request, tasks)
+        plan_decision = await reviewer.enrich_plan_review(user_request, tasks, plan_decision)
+        reviewer.record_decision(plan_decision, target="plan")
+        review_span.set(decision=plan_decision.decision, risk=plan_decision.risk,
+                        findings=len(plan_decision.findings))
     yield safety_review_event(plan_decision, "plan")
 
     gate_events, allowed, note = await resolve_gate(
@@ -737,6 +809,8 @@ async def _run_agent_loop_events(
     for event in gate_events:
         yield event
     if not allowed:
+        state["_refused"] = True
+        state["_stopped_reason"] = f"计划审查未通过（{note or plan_decision.summary}）"
         yield finish_event(_refusal_text(plan_decision, note if note != "被安全策略拦截" else ""))
         yield {"event": "done", "data": {}}
         yield state_event()
@@ -786,6 +860,9 @@ async def _run_agent_loop_events(
                     severity="warning", message=stopped_reason,
                     details=reviewer.budget.snapshot(),
                 )
+                chain.add(KIND_BUDGET, "执行预算用尽", status="blocked",
+                          parent_id=run_span.span_id, error=stopped_reason,
+                          **reviewer.budget.snapshot())
                 yield {"event": "budget_exceeded", "data": {
                     "run_id": reviewer.run_id,
                     "reason": stopped_reason,
@@ -810,6 +887,11 @@ async def _run_agent_loop_events(
                 if not allowed:
                     agent = task.get("agent", "")
                     node_name = agent_map.get(agent, f"{agent}_worker")
+                    chain.add(
+                        KIND_TASK, agent, agent=agent, status="blocked",
+                        parent_id=run_span.span_id, error=note,
+                        task_id=task.get("id", ""), risk=decision.risk,
+                    )
                     state.setdefault("safety_blocks", []).append(
                         _block_record(task, decision, "action", note)
                     )
@@ -858,7 +940,7 @@ async def _run_agent_loop_events(
                 }}
 
             # Execute the wave in parallel, heart-beating while we wait.
-            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict, int, list[dict], float]:
+            async def _run_one(task: dict, fn: Callable, st: dict) -> tuple[dict, dict, int, list[dict], float, str]:
                 """Run one task, retrying while the result stays unusable.
 
                 Returns ``(task, output, attempts, retry_events, duration)``.
@@ -880,68 +962,94 @@ async def _run_agent_loop_events(
                 current = task
                 started = time.monotonic()
 
-                while True:
-                    attempts += 1
-                    try:
-                        timeout = _task_timeout_seconds(agent)
-                        output = await asyncio.wait_for(
-                            fn(_state_for_task(st, current)), timeout=timeout
+                with chain.span(KIND_TASK, agent, agent=agent,
+                                parent_id=run_span.span_id,
+                                task_id=task.get("id", ""),
+                                prompt=(task.get("prompt") or "")[:100]) as task_span:
+                    while True:
+                        attempts += 1
+                        attempt_span = None
+                        try:
+                            attempt_span = chain.start(
+                                KIND_ATTEMPT, f"第 {attempts} 次尝试", agent=agent,
+                            )
+                            timeout = _task_timeout_seconds(agent)
+                            output = await asyncio.wait_for(
+                                fn(_state_for_task(st, current)), timeout=timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                "Agent Loop: '%s' timed out after %.0fs",
+                                task.get("id"),
+                                _task_timeout_seconds(agent),
+                            )
+                            output = {f"{agent}_results": [{"error": "task timed out"}]}
+                        except Exception as e:
+                            logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
+                            output = {f"{agent}_results": [{"error": str(e)}]}
+
+                        if not isinstance(output, dict):
+                            output = {f"{agent}_results": [{"error": "worker returned a non-dict result"}]}
+
+                        usable = not recovery.is_unusable(output)
+                        if attempt_span is not None:
+                            if usable:
+                                chain.finish(attempt_span, ok=True)
+                            else:
+                                chain.finish(attempt_span, status="failed",
+                                             error=recovery.failure_reason(output))
+
+                        if usable:
+                            break
+
+                        reason = recovery.failure_reason(output)
+                        if attempts >= recovery.max_attempts():
+                            break
+                        if not reviewer.budget.allow_retry():
+                            logger.warning(
+                                "Agent Loop: '%s' retry budget exhausted (%s)",
+                                task.get("id"), reason,
+                            )
+                            break
+
+                        transient = recovery.classify_failure(reason) == recovery.TRANSIENT
+                        reviewer.budget.consume_retry()
+                        delay = recovery.backoff_seconds(attempts) if transient else 0.0
+                        retry_events.append({"event": "agent_retry", "data": {
+                            "run_id": reviewer.run_id,
+                            "agent": agent,
+                            "task_id": task.get("id", ""),
+                            "label": agent_labels.get(agent_map.get(agent, ""), agent),
+                            "attempt": attempts + 1,
+                            "max_attempts": recovery.max_attempts(),
+                            "kind": recovery.TRANSIENT if transient else recovery.SEMANTIC,
+                            "reason": reason,
+                            "backoff_seconds": round(delay, 1),
+                        }})
+                        reviewer.record(
+                            "agent.retry", stage="wave", target=task.get("id", ""),
+                            decision="allow",
+                            risk="medium" if not transient else "low",
+                            severity="warning",
+                            message=f"{agent} 第 {attempts + 1} 次尝试：{reason}",
+                            details={"kind": "transient" if transient else "semantic",
+                                     "delay": delay},
                         )
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            "Agent Loop: '%s' timed out after %.0fs",
-                            task.get("id"),
-                            _task_timeout_seconds(agent),
+                        task_span.set(status="retried", attempts=attempts)
+                        if delay:
+                            await asyncio.sleep(delay)
+                        current = recovery.retry_task(
+                            task, attempts, reason, transient=transient
                         )
-                        output = {f"{agent}_results": [{"error": "task timed out"}]}
-                    except Exception as e:
-                        logger.error(f"Agent Loop: '{task.get('id')}' error: {e}")
-                        output = {f"{agent}_results": [{"error": str(e)}]}
 
-                    if not isinstance(output, dict):
-                        output = {f"{agent}_results": [{"error": "worker returned a non-dict result"}]}
+                    if recovery.is_unusable(output):
+                        task_span.fail(recovery.failure_reason(output), attempts=attempts)
+                    else:
+                        task_span.set(attempts=attempts)
 
-                    if not recovery.is_unusable(output):
-                        break
-
-                    reason = recovery.failure_reason(output)
-                    if attempts >= recovery.max_attempts():
-                        break
-                    if not reviewer.budget.allow_retry():
-                        logger.warning(
-                            "Agent Loop: '%s' retry budget exhausted (%s)",
-                            task.get("id"), reason,
-                        )
-                        break
-
-                    transient = recovery.classify_failure(reason) == recovery.TRANSIENT
-                    reviewer.budget.consume_retry()
-                    delay = recovery.backoff_seconds(attempts) if transient else 0.0
-                    retry_events.append({"event": "agent_retry", "data": {
-                        "run_id": reviewer.run_id,
-                        "agent": agent,
-                        "task_id": task.get("id", ""),
-                        "label": agent_labels.get(agent_map.get(agent, ""), agent),
-                        "attempt": attempts + 1,
-                        "max_attempts": recovery.max_attempts(),
-                        "kind": recovery.TRANSIENT if transient else recovery.SEMANTIC,
-                        "reason": reason,
-                        "backoff_seconds": round(delay, 1),
-                    }})
-                    reviewer.record(
-                        "agent.retry", stage="wave", target=task.get("id", ""),
-                        decision="allow",
-                        risk="medium" if not transient else "low",
-                        severity="warning",
-                        message=f"{agent} 第 {attempts + 1} 次尝试：{reason}",
-                        details={"kind": "transient" if transient else "semantic",
-                                 "delay": delay},
-                    )
-                    if delay:
-                        await asyncio.sleep(delay)
-                    current = recovery.retry_task(task, attempts, reason, transient=transient)
-
-                return task, output, attempts, retry_events, time.monotonic() - started
+                duration = time.monotonic() - started
+                return (task, output, attempts, retry_events, duration,
+                        task_span.span_id)
 
             wave_future = asyncio.gather(*[
                 _run_one(task, fn, state) for task, fn in approved_wave
@@ -956,7 +1064,8 @@ async def _run_agent_loop_events(
             results = await wave_future
 
             # Merge and emit agent_done
-            for task, output, attempts, retry_events, task_duration in results:
+            for (task, output, attempts, retry_events, task_duration,
+                 task_span_id) in results:
                 agent = task.get("agent", "")
 
                 for event in retry_events:
@@ -965,11 +1074,20 @@ async def _run_agent_loop_events(
                 # ── Safety checkpoint 3: output review + redaction ──
                 output_decision = None
                 if isinstance(output, dict):
-                    output_decision = reviewer.review_output(task, output)
-                    reviewer.record_decision(output_decision, target=task.get("id", ""))
+                    with chain.span(KIND_REVIEW, "输出审查", agent=agent,
+                                    parent_id=task_span_id or run_span.span_id) as out_span:
+                        output_decision = reviewer.review_output(task, output)
+                        reviewer.record_decision(output_decision, target=task.get("id", ""))
+                        out_span.set(decision=output_decision.decision,
+                                     risk=output_decision.risk,
+                                     findings=len(output_decision.findings))
                     if output_decision.findings or output_decision.decision != "allow":
                         yield safety_review_event(output_decision, "output")
-                    output, _ = reviewer.scrub_output(output)
+                    output, redacted = reviewer.scrub_output(output)
+                    if redacted:
+                        chain.add(KIND_REVIEW, "凭据脱敏", agent=agent,
+                                  parent_id=task_span_id or run_span.span_id,
+                                  status="retried", redacted=redacted)
 
                 merge_worker_results(state, [output])
                 completed.add(task.get("id", ""))
@@ -1047,7 +1165,17 @@ async def _run_agent_loop_events(
         # ── Safety checkpoint 4: goal completion confirmation ──
         tasks = _normalize_tasks(state.get("tasks", []))
         yield {"event": "phase", "data": {"phase": "verify", "message": "确认目标完成情况..."}}
-        verdict = await reviewer.verify(user_request, tasks, state)
+        with chain.span(KIND_VERIFY, "目标完成确认",
+                        parent_id=run_span.span_id) as verify_span:
+            verdict = await reviewer.verify(user_request, tasks, state)
+            verify_span.set(
+                status={"complete": "ok", "partial": "retried",
+                        "incomplete": "retried", "failed": "failed"}.get(
+                            verdict.get("status", ""), "ok"),
+                verdict=verdict.get("status", ""),
+                score=verdict.get("score"),
+                unmet=len(verdict.get("unmet") or []),
+            )
         state["_verification"] = verdict
         yield {"event": "verification", "data": verdict}
 
@@ -1069,6 +1197,10 @@ async def _run_agent_loop_events(
             details={"strategy": strategy, "reason": reason,
                      "tasks": [t.get("agent") for t in remediation]},
         )
+        chain.add(KIND_REMEDIATE, "补救回合", parent_id=run_span.span_id,
+                  status="retried", strategy=strategy, reason=reason,
+                  round=reviewer.budget.replans,
+                  agents=",".join(t.get("agent", "") for t in remediation))
         state["tasks"] = _normalize_tasks(tasks + remediation)
         yield {"event": "remediation", "data": {
             "run_id": reviewer.run_id,

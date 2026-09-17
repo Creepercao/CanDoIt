@@ -6,6 +6,20 @@
 
 from __future__ import annotations
 
+from backend.observability.chain import (
+    KIND_ATTEMPT,
+    KIND_EXECUTE,
+    KIND_MEMORY,
+    KIND_PLAN,
+    KIND_REMEDIATE,
+    KIND_REVIEW,
+    KIND_RUN,
+    KIND_SYNTH,
+    KIND_TASK,
+    KIND_VERIFY,
+    RunChain,
+    Span,
+)
 from backend.observability.store import (
     delete_run,
     get_run,
@@ -27,6 +41,18 @@ from backend.observability.trace import (
 )
 
 __all__ = [
+    "KIND_ATTEMPT",
+    "KIND_EXECUTE",
+    "KIND_MEMORY",
+    "KIND_PLAN",
+    "KIND_REMEDIATE",
+    "KIND_REVIEW",
+    "KIND_RUN",
+    "KIND_SYNTH",
+    "KIND_TASK",
+    "KIND_VERIFY",
+    "RunChain",
+    "Span",
     "ModelCall",
     "RunTrace",
     "TaskRecord",
