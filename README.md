@@ -1,6 +1,6 @@
 # CanDoIt — 多智能体协作平台
 
-一个基于 **Agent Loop** 编排模式的多智能体协作 Web 应用。监督者 LLM 将用户请求拆解为分步执行计划，按波次并行分派给专业 Worker 智能体（研究员、分析师、图表师、画师、视频师、程序员、PPT 流水线），并实时流式展示智能体工作进度。
+一个基于 **LangGraph 主干图**编排的多智能体协作 Web 应用。监督者 LLM 将用户请求拆解为分步执行计划，按波次并行分派给专业 Worker 智能体（研究员、分析师、图表师、画师、视频师、程序员、PPT 流水线），并实时流式展示智能体工作进度。
 
 ## 功能特性
 
@@ -67,7 +67,9 @@ CanDoIt 采用“控制平面 + 执行平面 + 产物平面”的分层设计：
 
 核心原则：
 
-- **显式 Agent Loop**：`backend/agents/orchestrator.py` 是唯一调度核心，不依赖 LangGraph 图拓扑决定执行顺序。
+- **LangGraph 主干图**：`backend/agents/graph_flow.py` 定义节点与条件边（`plan` → `review_plan` → `gate` ⇄ `execute` → `verify` → `remediate`），`backend/agents/runner.py` 驱动执行。审批中断（`interrupt()`）只发生在 `gate` 节点，每次只处理一个待审批任务，因此恢复时不会重放正在执行的一波。
+- **状态可恢复**：每个节点边界都由 checkpointer 持久化（默认 SQLite，`outputs/checkpoints/graph.sqlite`），进程重启后用同一 `thread_id` 即可继续。
+- **长任务不绑连接**：`POST /api/runs` 立即返回 `run_id` 并派发执行，`GET /api/runs/{run_id}/events?last_id=` 断线续传；`MQ_BACKEND=celery` 时由 RabbitMQ + Celery worker 执行，默认 `inline` 无需任何 broker。
 - **声明式注册**：内置 Agent 由 `agents.yaml` 描述，Skill 和 MCP Tool 最终都注册到统一的 `SkillRegistry`。
 - **依赖驱动并行**：调度器根据 `depends_on` 计算可运行任务，同一 wave 用 `asyncio.gather` 并发执行。
 - **共享状态归并**：普通结果采用列表追加语义，`skill_outputs` 采用按 Skill 名称合并语义，动态任务通过 `_add_tasks` 注入。
@@ -81,7 +83,7 @@ CanDoIt 采用“控制平面 + 执行平面 + 产物平面”的分层设计：
 2. Supervisor 使用低温度模型输出结构化 Plan JSON：`step / agent / prompt / depends_on / reason`。
 3. `validate_and_complete_plan()` 校验计划，并补齐必要的研究、PPT 等上下游任务。
 4. **执行前审查**：丢弃引用未注册代理的步骤，按策略检查破坏性/凭据外传/注入意图；命中高风险时暂停等待人工审批。
-5. Agent Loop 根据显式依赖和 Agent 的静态依赖计算 wave。
+5. `gate` 节点根据显式依赖和 Agent 的静态依赖计算本轮 wave。
 6. 每个任务执行前再过一道动作门禁；同一 wave 内并行执行，每个任务有超时、异常隔离和可选降级策略。
 7. Worker 结果先做输出审查与凭据脱敏，再合并回共享 state；PPT planner 等 Worker 还可以动态注入后续任务。
 8. **目标完成确认**：核对每个步骤产出与用户明确要求的交付物是否真实存在；未完成时按预算追加补救步骤。
@@ -206,7 +208,7 @@ PPT HTML 遵循 16:9、单文件、无外部脚本依赖、逐层缓入、键盘
 
 1. **平台内部函数调用**
 
-   Supervisor 输出结构化任务，Agent Loop 根据 `agent` 查找已注册 Worker，然后直接调用异步 Python 函数。搜索、图表、图片、视频、PPT 等属于平台可观测、可超时控制的服务调用。
+   Supervisor 输出结构化任务，编排器根据 `agent` 查找已注册 Worker，然后直接调用异步 Python 函数。搜索、图表、图片、视频、PPT 等属于平台可观测、可超时控制的服务调用。
 
 2. **MCP Tool Calling**
 
@@ -214,7 +216,7 @@ PPT HTML 遵循 16:9、单文件、无外部脚本依赖、逐层缓入、键盘
 
 3. **Provider 原生 Function Calling 的定位**
 
-   当前核心编排不依赖特定 Provider 的 `tool_calls` 字段，因此兼容只实现基础 Chat Completions 的服务。未来可以在单个 Worker 内使用原生 function calling，但不应绕过 Agent Loop 的权限、超时、状态归并和事件追踪。
+   当前核心编排不依赖特定 Provider 的 `tool_calls` 字段，因此兼容只实现基础 Chat Completions 的服务。未来可以在单个 Worker 内使用原生 function calling，但不应绕过编排器的权限、超时、状态归并和事件追踪。
 
 4. **结构化输出与容错**
 
@@ -223,7 +225,7 @@ PPT HTML 遵循 16:9、单文件、无外部脚本依赖、逐层缓入、键盘
 ### 3.4 并发、缓存与上下文控制
 
 - 同一 wave 用 `asyncio.gather` 并发；PPT 单页生成额外使用 Semaphore，避免模型限流。
-- 每个 Agent 类型可配置独立超时，外层 Agent Loop 再提供硬超时保护。
+- 每个 Agent 类型可配置独立超时，外层编排器再提供硬超时保护。
 - 研究请求先查精确缓存，再做 embedding 相似度匹配，最后访问网络。
 - 研究综合结果写入 ChromaDB，可跨会话召回。
 - Worker 只接收当前任务和所需共享状态，避免把全部历史无差别塞入每次模型调用。
@@ -446,7 +448,11 @@ Compose 会启动：
 
 - `frontend`：Nginx 静态站点，端口 `3000`
 - `backend`：FastAPI/Uvicorn，端口 `8000`
-- `redis`：缓存服务，端口 `6379`
+- `worker`：Celery worker，执行被派发的运行（`--pool=threads`）
+- `rabbitmq`：任务 broker，端口 `5672`，管理界面 `http://localhost:15672`（guest/guest）
+- `redis`：缓存 + 运行事件总线 + Celery 结果后端，端口 `6379`
+
+`backend` 与 `worker` 共享 `./outputs` 卷，因此共用同一份 SQLite checkpoint。想跳过 broker、让后端自己跑图，设 `MQ_BACKEND=inline` 即可：
 
 `./outputs`、Skill 包目录和 Provider 配置会挂载进容器。升级时可执行：
 
@@ -511,11 +517,21 @@ CanDoIt/
 │   ├── sessions.py           # 会话管理
 │   │
 │   ├── agents/
-│   │   ├── orchestrator.py   # Agent Loop 核心编排器（分波次并行执行）
+│   │   ├── graph_flow.py     # LangGraph 主干图（节点、条件边、审批中断）
+│   │   ├── runner.py         # 图驱动（事件发布、审批恢复）
+│   │   ├── checkpoint.py     # checkpointer 工厂（sqlite/memory/none）
+│   │   ├── orchestrator.py   # 共享辅助（规划、波次调度、结果合并、重试）
 │   │   ├── builtin_workers.py# 内置 Worker 函数
 │   │   ├── graph.py          # 兼容性包装器
 │   │   ├── agent_loader.py   # 从 agents.yaml 加载代理
 │   │   └── agents.yaml       # 声明式代理配置
+│   │
+│   ├── mq/
+│   │   ├── bus.py            # 运行事件总线（Redis Streams + 内存降级）
+│   │   ├── decisions.py      # 跨进程审批决定存储
+│   │   ├── dispatch.py       # inline / celery 派发
+│   │   ├── celery_app.py     # Celery 应用（RabbitMQ broker）
+│   │   └── worker.py         # worker 侧驱动与终帧
 │   │
 │   ├── api/                  # 模块化 API 路由
 │   │   ├── chat.py           # 聊天 SSE 流式
@@ -652,7 +668,7 @@ SKILL = Skill(
 
 | 层级 | 技术 |
 |------|------|
-| 智能体编排 | Agent Loop (asyncio wave 并行)，LangChain |
+| 智能体编排 | LangGraph 主干图（波次内 asyncio 并行）、LangChain |
 | 后端 | FastAPI, Pydantic |
 | 前端 | Vue 3, Pinia, TailwindCSS, Vite |
 | 图表 | matplotlib（思源黑体中文支持） |
