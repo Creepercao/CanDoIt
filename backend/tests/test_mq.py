@@ -327,3 +327,49 @@ def test_celery_task_drives_a_run_eagerly(monkeypatch, safety_env, fake_skills):
 async def _collect_events(bus, run_id):
     return [e async for e in bus.stream(run_id)]
 
+
+def test_worker_does_not_double_emit_terminal_frames(
+    monkeypatch, safety_env, fake_skills
+):
+    """A direct reply is published by the graph itself; the worker must not repeat it."""
+    import sys
+
+    import backend.mq.bus as bus_mod
+    from backend.mq.bus import RunEventBus
+
+    bus = RunEventBus(redis_url="")
+    original_bus = bus_mod._bus
+    bus_mod._bus = bus
+
+    monkeypatch.setenv("AGENT_CHECKPOINT_BACKEND", "memory")
+    sys.modules.pop("backend.mq.celery_app", None)
+
+    from backend.agents import orchestrator
+
+    async def _supervisor(state):
+        return {"final_response": "直接回答", "tasks": [], "plan_steps": []}
+
+    monkeypatch.setattr(orchestrator, "supervisor_node", _supervisor)
+
+    import backend.mq.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "bootstrap", lambda: None)
+
+    try:
+        from backend.mq import celery_app as ca
+
+        ca.app.conf.update(task_always_eager=True, task_eager_propagates=True)
+
+        state = orchestrator.make_initial_state(user_request="你好", chat_model_id="m")
+        run_id = state["run_id"]
+
+        result = ca.execute_run.apply(args=[run_id, state]).get()
+
+        assert result["terminal"] == "graph"
+        kinds = [e["event"] for e in _run(_collect_events(bus, run_id))]
+        assert kinds.count("final") == 1, kinds
+        assert kinds.count("done") == 1, kinds
+    finally:
+        bus_mod._bus = original_bus
+        sys.modules.pop("backend.mq.celery_app", None)
+

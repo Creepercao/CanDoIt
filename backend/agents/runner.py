@@ -211,8 +211,11 @@ async def _pump(
     final_state.setdefault("_safety", summary)
 
     # Closing phase frame — the SSE layer uses it to switch the UI into
-    # "synthesizing" mode before the final answer streams in.
-    await bus.publish(run_id, "phase", {"phase": "synthesize", "message": "synthesizing..."})
+    # "synthesizing" mode before the final answer streams in. A direct reply
+    # already published its own terminal frames, so this would announce a
+    # phase that never happens.
+    if not final_state.get("_terminal_emitted"):
+        await bus.publish(run_id, "phase", {"phase": "synthesize", "message": "synthesizing..."})
 
     queue.put_nowait({
         "event": "_agent_loop_done",

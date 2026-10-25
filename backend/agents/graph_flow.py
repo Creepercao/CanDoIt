@@ -82,6 +82,7 @@ class AgentState(TypedDict, total=False):
     dropped_tasks: list
     _skip_synthesizer: bool
     _refused: bool
+    _terminal_emitted: bool
     _stopped_reason: str
     _verification: dict
     _safety: dict
@@ -302,7 +303,14 @@ async def plan_node(state: dict) -> dict:
             "safety": reviewer.summary(),
         })
         await _emit(state, "done", {})
-        return {"final_response": text, **_budget_field(state)}
+        # The graph published its own terminal frames. Callers that would also
+        # emit them (the Celery worker) must skip, or the client sees the
+        # answer twice.
+        return {
+            "final_response": text,
+            "_terminal_emitted": True,
+            **_budget_field(state),
+        }
 
     tasks = orch._normalize_tasks(merged.get("tasks") or [])
     tasks = orch._normalize_tasks(

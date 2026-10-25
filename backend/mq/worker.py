@@ -53,6 +53,12 @@ async def run_in_worker(payload: dict) -> dict:
 
     response = final_state.get("final_response") or ""
 
+    # Direct replies already published ``final``/``done`` inside the graph.
+    # Publishing again would make the client render the answer twice.
+    if final_state.get("_terminal_emitted"):
+        await bus.mark(run_id, "done")
+        return {"run_id": run_id, "response_chars": len(response), "terminal": "graph"}
+
     if not response and not final_state.get("_skip_synthesizer"):
         response = await _synthesize(final_state, bus, run_id)
 
