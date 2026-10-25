@@ -1226,24 +1226,26 @@ async def run_agent_loop_stream(
     agent_labels: dict[str, str],
     agent_map: dict[str, str],
 ) -> AsyncGenerator[dict, None]:
-    """Streaming entry point — forwards every core event to the SSE layer."""
-    async for event in _run_agent_loop_events(
-        initial_state, agent_labels, agent_map, streaming=True
-    ):
+    """Streaming entry point — drives the LangGraph backbone.
+
+    ``agent_map`` is accepted for backward compatibility; the graph resolves
+    workers from the skill registry directly.
+    """
+    from backend.agents.runner import stream_run
+
+    async for event in stream_run(initial_state, agent_labels):
         yield event
 
 
 async def run_agent_loop(initial_state: dict) -> dict:
     """Non-streaming entry point used by ``/api/chat/sync``.
 
-    Drains the shared core and keeps only the final state, then runs the
-    synthesizer unless the caller asked to skip it.
+    Runs the same graph, then applies the synthesizer unless the caller asked
+    to skip it.
     """
-    state = dict(initial_state)
+    from backend.agents.runner import run_graph
 
-    async for event in _run_agent_loop_events(state, {}, {}, streaming=False):
-        if event.get("event") == "_agent_loop_done":
-            state = event["data"]["state"]
+    state = await run_graph(initial_state, {})
 
     if not state.get("_skip_synthesizer") and not state.get("final_response"):
         logger.info("Agent Loop: running synthesizer...")
