@@ -711,4 +711,4 @@ SKILL = Skill(
 - **安全审查默认开启（`SAFETY_MODE=enforce`）**：只有「高风险」动作会被暂停等待审批；确认可信任的环境可用 `SAFETY_AUTO_APPROVE=true` 放行，或先切 `monitor` 观察一段时间
 - **审计日志写入 `outputs/audit/`**，属于运行期数据，已加入 `.gitignore`，请按需做轮转与归档
 - `outputs/safety/settings.json` 保存运行期开关覆盖值；删除该文件即恢复环境变量默认值
-- **前端为明亮主题**：`frontend/tailwind.config.js` 把 `gray-*` / `surface-*` 两套 token 反转成浅色，因此大数字号代表更浅的表面、`text-gray-100` 代表最深文本；新增样式请沿用同一套 token，细节见 `AGENTS.md` 的「主题约定」
+- **前端为明亮主题**：`frontend/tailwind.config.js` 把 `gray-*` / `surface-*` 两套 token 反转成浅色，因此大数字号代表更浅的表面、`text-gray-100` 代表最深文本；新增样式请沿用同一套 token（`bg-surface-*` / `text-gray-*` / `border-gray-*`），不要写死颜色。
