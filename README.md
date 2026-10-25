@@ -452,7 +452,11 @@ Compose 会启动：
 - `rabbitmq`：任务 broker，端口 `5672`，管理界面 `http://localhost:15672`（guest/guest）
 - `redis`：缓存 + 运行事件总线 + Celery 结果后端，端口 `6379`
 
-`backend` 与 `worker` 共享 `./outputs` 卷，因此共用同一份 SQLite checkpoint。想跳过 broker、让后端自己跑图，设 `MQ_BACKEND=inline` 即可：
+`backend` 与 `worker` 共享 `./outputs` 卷，因此共用同一份 SQLite checkpoint。
+
+> `MQ_BACKEND=celery` 依赖 **共享的 `REDIS_URL`**：worker 发布事件、API 进程订阅事件，两者必须是同一个 Redis。没配 `REDIS_URL` 时本条运行会自动退回 inline（否则表现为「提交后一直没有反应」）。
+
+想跳过 broker、让后端自己跑图，设 `MQ_BACKEND=inline` 即可：
 
 `./outputs`、Skill 包目录和 Provider 配置会挂载进容器。升级时可执行：
 

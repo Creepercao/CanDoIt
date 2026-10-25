@@ -158,6 +158,35 @@ def test_unknown_mq_backend_falls_back_to_inline(monkeypatch):
     assert dispatch.mq_backend() == "inline"
 
 
+def test_celery_without_a_shared_bus_runs_inline(monkeypatch):
+    """Dispatching with no shared event bus would silently hang the client."""
+    from backend.mq import dispatch
+
+    monkeypatch.setenv("MQ_BACKEND", "celery")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    assert dispatch._shared_bus_available() is False
+    assert _run(dispatch.dispatch_run("run_no_bus", {})) is None
+
+
+def test_celery_dispatch_calls_the_task_when_the_bus_exists(monkeypatch):
+    import backend.mq.celery_app as ca
+    from backend.mq import dispatch
+
+    monkeypatch.setenv("MQ_BACKEND", "celery")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+
+    class _FakeTask:
+        id = "task-123"
+
+        def delay(self, run_id, payload):
+            return self
+
+    monkeypatch.setattr(ca, "execute_run", _FakeTask())
+
+    assert _run(dispatch.dispatch_run("run_bus", {})) == "task-123"
+
+
 # ── HTTP surface ───────────────────────────────────────────────────────
 
 

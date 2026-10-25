@@ -46,6 +46,16 @@ def result_backend() -> str:
     return os.environ.get("CELERY_RESULT_BACKEND", os.environ.get("REDIS_URL", ""))
 
 
+def _shared_bus_available() -> bool:
+    """Whether the worker and the API can see the same event stream.
+
+    In Celery mode the worker publishes events and the API process subscribes.
+    Without a shared Redis those are two different in-memory buses, so the run
+    would execute fine while the client saw nothing — it looks like a hang.
+    """
+    return bool(os.environ.get("REDIS_URL", "").strip())
+
+
 async def dispatch_run(run_id: str, payload: dict[str, Any]) -> str | None:
     """Hand a run to the Celery worker.
 
@@ -53,6 +63,14 @@ async def dispatch_run(run_id: str, payload: dict[str, Any]) -> str | None:
     then responsible for driving the graph).
     """
     if mq_backend() != "celery":
+        return None
+
+    if not _shared_bus_available():
+        logger.error(
+            "MQ_BACKEND=celery needs REDIS_URL so the worker's events reach the "
+            "API; running run %s inline instead",
+            run_id,
+        )
         return None
 
     try:
