@@ -13,6 +13,26 @@ services:
       timeout: 3s
       retries: 5
 
+  # Message broker for MQ_BACKEND=celery.  Not required when the backend runs
+  # with MQ_BACKEND=inline (the default for local development).
+  rabbitmq:
+    image: docker.1ms.run/library/rabbitmq:3-management-alpine
+    container_name: multiagent-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI (guest/guest)
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -23,8 +43,47 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      # Dispatch runs to the worker; set to "inline" to run everything here.
+      - MQ_BACKEND=${MQ_BACKEND:-celery}
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Run state survives a container restart (shared ./outputs volume).
+      - AGENT_CHECKPOINT_BACKEND=sqlite
+      - AGENT_CHECKPOINT_PATH=/app/outputs/checkpoints/graph.sqlite
     depends_on:
       redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./providers.yaml:/app/providers.yaml:ro
+      - ./outputs:/app/outputs
+      - ./backend/skills/packages:/app/backend/skills/packages
+      - ./skills_packages.json:/app/skills_packages.json
+
+  # Celery worker — drives runs that the backend dispatched.  threads pool
+  # because prefork is unavailable on Windows hosts running this compose file.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: multiagent-worker
+    restart: unless-stopped
+    command: >
+      celery -A backend.mq.celery_app worker
+      --loglevel=info --concurrency=2 --pool=threads
+      --hostname=worker@%h
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MQ_BACKEND=celery
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - AGENT_CHECKPOINT_BACKEND=sqlite
+      - AGENT_CHECKPOINT_PATH=/app/outputs/checkpoints/graph.sqlite
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     volumes:
       - ./providers.yaml:/app/providers.yaml:ro
@@ -45,3 +104,4 @@ services:
 
 volumes:
   redis_data:
+  rabbitmq_data:
