@@ -373,3 +373,32 @@ def test_worker_does_not_double_emit_terminal_frames(
         bus_mod._bus = original_bus
         sys.modules.pop("backend.mq.celery_app", None)
 
+
+def test_legacy_approval_endpoint_feeds_the_run_decision_store(client):
+    """Answering through the old safety endpoint must also wake a graph interrupt.
+
+    The graph waits in the run-decisions store, which is separate from the
+    legacy approval registry the endpoint used to write to. Without this bridge
+    an approval would never resume the run.
+    """
+    from backend.mq import decisions as decisions_mod
+
+    store = ApprovalStore(redis_url="")
+    original = decisions_mod._store
+    decisions_mod._store = store
+    try:
+        response = client.post(
+            "/api/safety/approvals/appr_graph",
+            json={"approved": True, "decided_by": "tester"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+        decision = _run(store.get("appr_graph"))
+        assert decision is not None, "the graph's waiter would never wake up"
+        assert decision["approved"] is True
+        assert decision["decided_by"] == "tester"
+    finally:
+        decisions_mod._store = original
+

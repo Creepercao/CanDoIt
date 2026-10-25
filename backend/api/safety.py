@@ -195,10 +195,29 @@ async def decide_approval(approval_id: str, payload: ApprovalDecision):
     """Approve or reject a stopped action. The waiting run resumes immediately."""
     store = get_approval_store()
     request = store.get(approval_id)
+
+    # The LangGraph backbone parks on ``interrupt()`` and waits for its answer
+    # in the run-decisions store, which is a different registry from this
+    # legacy one. Write both, otherwise answering here never resumes the run
+    # and the graph sits until its approval timeout expires.
+    try:
+        from backend.mq.decisions import get_approval_store as get_run_decisions
+
+        await get_run_decisions().put(approval_id, {
+            "approved": bool(payload.approved),
+            "decided_by": payload.decided_by or "user",
+            "note": payload.note,
+            "run_id": request.run_id if request else "",
+        })
+    except Exception as exc:  # no shared store configured — legacy path only
+        logger.debug("Run decision store unavailable: %s", exc)
+
     if request is None:
         existing = store.find(approval_id)
         if existing is None:
-            raise HTTPException(status_code=404, detail="审批请求不存在或已过期")
+            # Not in the legacy registry: it is a graph interrupt, which only
+            # lives in the run-decisions store written above.
+            return {"ok": True, "resumed": True, "request": None}
         return {"ok": False, "already_decided": True, "request": existing.to_dict()}
 
     resolved = await store.decide(
