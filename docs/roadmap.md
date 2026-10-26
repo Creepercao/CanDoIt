@@ -124,7 +124,9 @@ query → 先检章节摘要（粗，定位候选文档）→ 再检段落 chunk
 
 ## C. RAG 缺陷级问题（建议优先修，成本低）
 
-### C1. top_k 截断发生在阈值过滤之前 ★
+> **状态：C1 与 C2 已完成并提交。** 见 `backend/tests/test_knowledge_base.py`。
+
+### C1. top_k 截断发生在阈值过滤之前 ★ ✅ 已修
 
 `backend/research_cache.py:438`：`n_results = min(top_k, 20)`
 过滤在 `:464`：`if similarity < threshold: continue`
@@ -133,11 +135,15 @@ query → 先检章节摘要（粗，定位候选文档）→ 再检段落 chunk
 
 修法：先多召回（如 50 条）→ 过滤 → 再截断。一行改动，纯收益。
 
-### C2. 知识库没有去重
+**已实现**：`n_results = min(max(top_k * 10, 50), 200)`，过滤后 `return entries[:top_k]`。
+
+### C2. 知识库没有去重 ✅ 已修
 
 `:388` `entry_id = cache.hash_key(f"{query}:{_now_iso()}")` — id 带时间戳，同一问题跑两次就是两条独立记录。
 
 修法：用 query 的 hash 做 id，或写入前先查相似度。
+
+**已实现**：`entry_id = cache.hash_key(query)`（去掉时间戳），写入改用 `collection.upsert()`，同一问题重跑会覆盖而不是新增。
 
 ### C3. 嵌入与存储文本不一致
 

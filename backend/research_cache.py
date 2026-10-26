@@ -385,7 +385,9 @@ class KnowledgeBase:
         if not synthesis or len(synthesis) < 50:
             return None
 
-        entry_id = cache.hash_key(f"{query}:{_now_iso()}")
+        # Stable id per query: re-researching the same question must overwrite
+        # its entry instead of piling up near-duplicates in the knowledge base.
+        entry_id = cache.hash_key(query)
 
         metadata = {
             "query": query[:300],
@@ -400,7 +402,7 @@ class KnowledgeBase:
         if embedding is None:
             logger.debug("No embedding available — storing document-only")
             try:
-                self._collection.add(
+                self._collection.upsert(
                     documents=[synthesis[:4000]],
                     metadatas=[metadata],
                     ids=[entry_id],
@@ -411,7 +413,7 @@ class KnowledgeBase:
                 return None
 
         try:
-            self._collection.add(
+            self._collection.upsert(
                 documents=[synthesis[:4000]],
                 embeddings=[embedding],
                 metadatas=[metadata],
@@ -435,7 +437,10 @@ class KnowledgeBase:
             return []
 
         embedding = await get_embedding(query[:500])
-        n_results = min(top_k, 20)
+        # Over-fetch, then filter by threshold, then trim. Fetching only top_k
+        # candidates first would silently drop good hits that rank just below
+        # the cut-off, leaving an empty result even when the base has a match.
+        n_results = min(max(top_k * 10, 50), 200)
 
         try:
             if embedding is not None:
@@ -470,7 +475,7 @@ class KnowledgeBase:
                 "similarity": round(similarity, 4),
             })
 
-        return entries
+        return entries[:top_k]
 
     async def list_entries(
         self, page: int = 1, page_size: int = 20
