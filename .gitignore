@@ -36,6 +36,7 @@ outputs/calibration/
 
 # Local scratch space
 temp/
+docs/
 
 # Local demo artifacts (generated during development, not product source)
 /arknights_presentation.html
