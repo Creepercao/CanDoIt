@@ -29,6 +29,10 @@ from backend.mq.dispatch import dispatch_run
 
 logger = logging.getLogger("api.runs_async")
 
+# asyncio keeps only a weak reference to tasks, so a fire-and-forget inline run
+# can be garbage collected mid-flight. Hold a strong reference until it ends.
+_BACKGROUND_TASKS: set = set()
+
 router = APIRouter()
 
 
@@ -87,10 +91,12 @@ async def create_run(req: AsyncRunRequest):
 
         from backend.mq.worker import run_in_worker
 
-        asyncio.create_task(
+        task = asyncio.create_task(
             _run_inline(run_id, state),
             name=f"inline-run:{run_id}",
         )
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
         logger.info("Run %s started inline", run_id)
 
     return {"run_id": run_id, "task_id": task_id, "mode": mq_backend()}

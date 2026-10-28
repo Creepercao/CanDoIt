@@ -203,11 +203,11 @@ query → 先检章节摘要（粗，定位候选文档）→ 再检段落 chunk
 | 项 | 说明 |
 |---|---|
 | 前端接异步接口 | `/api/runs` + SSE 续传已做好但前端仍在用旧的长连接接口，断线续传能力没兑现 |
-| requirements 版本漂移 | 写 `redis==5.2.1`，实际环境是 8.1.0（被 langgraph-checkpoint-redis 拉高） |
-| inline 模式 `create_task` 未持引用 | Python 要求保存 Task 引用，理论上可能被 GC |
+| requirements 版本漂移 ✅ | 已对齐为 `redis==8.1.0`，与 celery[redis] 及实际环境一致 |
+| inline 模式 `create_task` 未持引用 ✅ | 已用模块级集合 `_BACKGROUND_TASKS` 持强引用，任务完成后自动移除 |
 | `GET /safety/approvals` 不含图中的中断 | 刷新页面后待审批列表会空 |
 | `backend/agents/graph.py` 33 行空桩 | 挪走 `rebuild_graph` 即可删 |
-| Celery 每个任务都 `bootstrap()` | 重复 discover 技能，纯开销 |
+| Celery 每个任务都 `bootstrap()` ✅ | 已用 `lru_cache` 保证每个 worker 进程只发现一次 |
 | 多 worker 抢同一 run 无分布式锁 | 目前靠 `thread_id` 隔离，生产需 run 级锁 |
 
 ---

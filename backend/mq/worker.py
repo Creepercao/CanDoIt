@@ -12,6 +12,7 @@ the README for the exact command.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 
 logger = logging.getLogger("mq.worker")
@@ -120,6 +121,16 @@ async def _synthesize(state: dict, bus, run_id: str) -> str:
 
 
 def run_sync(payload: dict) -> dict:
-    """Blocking wrapper for Celery tasks."""
-    bootstrap()
+    """Blocking wrapper for Celery tasks.
+
+    Skill discovery is per-process work, so it runs once per worker rather than
+    on every task.
+    """
+    _ensure_bootstrap()
     return asyncio.run(run_in_worker(payload))
+
+
+@functools.lru_cache(maxsize=1)
+def _ensure_bootstrap() -> bool:
+    bootstrap()
+    return True

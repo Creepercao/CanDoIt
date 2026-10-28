@@ -16,7 +16,9 @@ httpx==0.28.1
 sse-starlette==2.2.1
 python-multipart==0.0.19
 aiofiles==24.1.0
-redis==5.2.1
+# `redis` is pinned to what celery[redis] and the event bus actually resolve to;
+# the previous 5.2.1 pin disagreed with the installed tree.
+redis==8.1.0
 matplotlib==3.10.0
 beautifulsoup4==4.12.3
 lxml==5.3.0
