@@ -81,6 +81,11 @@ RESEARCH_CACHE_CONFIRM = os.environ.get(
     "RESEARCH_CACHE_CONFIRM", "1"
 ).strip().lower() not in ("0", "false", "no", "off")
 
+# One slice for both indexing and storage.  Embedding a shorter prefix than what
+# gets stored means the tail of every document is invisible to retrieval; using
+# the same slice at least keeps "what was indexed" and "what is served" identical.
+KNOWLEDGE_DOC_LIMIT = int(os.environ.get("RESEARCH_DOC_LIMIT", "4000"))
+
 # Knowledge-base / memory retrieval only *surfaces* candidates (a human sees the
 # list, or a model can ignore an item), so the cost of a marginal hit is low and
 # the floor sits just above the measured `unrelated` ceiling.
@@ -398,12 +403,12 @@ class KnowledgeBase:
         }
 
         # Generate embedding
-        embedding = await get_embedding(synthesis[:2000])
+        embedding = await get_embedding(synthesis[:KNOWLEDGE_DOC_LIMIT])
         if embedding is None:
             logger.debug("No embedding available — storing document-only")
             try:
                 self._collection.upsert(
-                    documents=[synthesis[:4000]],
+                    documents=[synthesis[:KNOWLEDGE_DOC_LIMIT]],
                     metadatas=[metadata],
                     ids=[entry_id],
                 )
@@ -414,7 +419,7 @@ class KnowledgeBase:
 
         try:
             self._collection.upsert(
-                documents=[synthesis[:4000]],
+                documents=[synthesis[:KNOWLEDGE_DOC_LIMIT]],
                 embeddings=[embedding],
                 metadatas=[metadata],
                 ids=[entry_id],

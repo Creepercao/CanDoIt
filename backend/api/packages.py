@@ -2,7 +2,6 @@
 import logging
 from fastapi import APIRouter, UploadFile, File
 from backend.skills.registry import skill_registry
-from backend.agents.graph import rebuild_graph
 from backend.skills.package_installer import (
     install_from_zip, uninstall_package, _load_packages_json, get_readme as _get_readme,
 )
@@ -22,8 +21,7 @@ async def install_skill_package(file: UploadFile = File(...)):
     if len(zip_bytes) > 200 * 1024 * 1024:
         return {"error": "File too large (max 200 MB)"}
     result = install_from_zip(zip_bytes, skill_registry)
-    if result["installed"]:
-        rebuild_graph()
+    # The graph compiles per run from the live registry, so nothing to rebuild.
     return result
 
 
@@ -36,8 +34,7 @@ async def uninstall_skill_package(name: str):
         return {"error": f"'{name}' is not a package skill and cannot be uninstalled"}
     ok = uninstall_package(name, skill_registry)
     if ok:
-        rebuild_graph()
-        return {"name": name, "uninstalled": True, "graph_rebuilt": True}
+        return {"name": name, "uninstalled": True}
     return {"error": f"Failed to uninstall '{name}'"}
 
 
