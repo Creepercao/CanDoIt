@@ -402,3 +402,39 @@ def test_legacy_approval_endpoint_feeds_the_run_decision_store(client):
     finally:
         decisions_mod._store = original
 
+
+# ── outstanding interrupts ─────────────────────────────────────────────
+
+
+def test_pending_interrupts_are_listed_until_resolved():
+    store = ApprovalStore(redis_url="")
+
+    _run(store.register("appr_p1", {"approval_id": "appr_p1", "run_id": "run_p"}))
+    pending = _run(store.pending())
+    assert [item["approval_id"] for item in pending] == ["appr_p1"]
+
+    _run(store.resolve("appr_p1"))
+    assert _run(store.pending()) == [], "a resolved interrupt must drop out"
+
+
+def test_approvals_endpoint_lists_outstanding_graph_interrupts(client):
+    """After a page reload the client must still see what is waiting on it."""
+    from backend.mq import decisions as decisions_mod
+
+    store = ApprovalStore(redis_url="")
+    original = decisions_mod._store
+    decisions_mod._store = store
+    try:
+        _run(store.register("appr_ep", {"approval_id": "appr_ep", "run_id": "run_ep"}))
+
+        response = client.get("/api/safety/approvals")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "run_pending" in body
+        assert any(
+            item.get("approval_id") == "appr_ep" for item in body["run_pending"]
+        )
+    finally:
+        decisions_mod._store = original
+

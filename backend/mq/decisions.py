@@ -38,6 +38,13 @@ def _key(approval_id: str) -> str:
     return f"run:approval:{approval_id}"
 
 
+PENDING_PREFIX = "run:pending:"
+
+
+def _pending_key(approval_id: str) -> str:
+    return f"{PENDING_PREFIX}{approval_id}"
+
+
 class ApprovalStore:
     """Stores human decisions keyed by approval id."""
 
@@ -45,6 +52,7 @@ class ApprovalStore:
         self._redis = None
         self._memory: dict[str, dict[str, Any]] = {}
         self._events: dict[str, asyncio.Event] = {}
+        self._pending: dict[str, dict[str, Any]] = {}
 
         url = redis_url or os.environ.get("REDIS_URL", "")
         if REDIS_AVAILABLE and url:
@@ -114,11 +122,61 @@ class ApprovalStore:
     async def forget(self, approval_id: str) -> None:
         if self._redis is not None:
             try:
-                await self._redis.delete(_key(approval_id))
+                await self._redis.delete(_key(approval_id), _pending_key(approval_id))
             except Exception:  # pragma: no cover
                 pass
         self._memory.pop(approval_id, None)
         self._events.pop(approval_id, None)
+        self._pending.pop(approval_id, None)
+
+    # ── pending interrupts ──────────────────────────────────────────
+
+    async def register(self, approval_id: str, meta: dict) -> None:
+        """Record an interrupt that is waiting for a human *right now*.
+
+        Decisions are written by the answerer, so without this registry a
+        client that reloads its page has no way to discover an approval that is
+        still outstanding — the run just looks stuck.
+        """
+        payload = json.dumps(meta, ensure_ascii=False, default=str)
+        if self._redis is not None:
+            try:
+                await self._redis.setex(
+                    _pending_key(approval_id), DECISION_TTL_SECONDS, payload
+                )
+                return
+            except Exception as exc:
+                logger.warning("Approval register failed, using memory: %s", exc)
+        self._pending[approval_id] = dict(meta)
+
+    async def resolve(self, approval_id: str) -> None:
+        """Drop a pending interrupt once its decision has been delivered."""
+        if self._redis is not None:
+            try:
+                await self._redis.delete(_pending_key(approval_id))
+            except Exception:  # pragma: no cover
+                pass
+        self._pending.pop(approval_id, None)
+
+    async def pending(self) -> list[dict]:
+        """Interrupts still waiting for an answer (oldest key order aside)."""
+        if self._redis is not None:
+            try:
+                items: list[dict] = []
+                async for key in self._redis.scan_iter(match=f"{PENDING_PREFIX}*"):
+                    raw = await self._redis.get(key)
+                    if not raw:
+                        continue
+                    try:
+                        item = json.loads(raw)
+                    except ValueError:
+                        continue
+                    item.setdefault("approval_id", key[len(PENDING_PREFIX):])
+                    items.append(item)
+                return items
+            except Exception as exc:
+                logger.warning("Approval pending scan failed, using memory: %s", exc)
+        return [dict(item) for item in self._pending.values()]
 
 
 _store = ApprovalStore()

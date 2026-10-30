@@ -175,8 +175,20 @@ async def get_run_audit(run_id: str, limit: int = 500):
 @router.get("/safety/approvals")
 async def list_approvals(limit: int = 50):
     store = get_approval_store()
+
+    # Graph interrupts live in a separate store: they are not requests in this
+    # legacy registry, so listing only `pending` would hide them after a reload.
+    run_pending: list[dict] = []
+    try:
+        from backend.mq.decisions import get_approval_store as get_run_decisions
+
+        run_pending = await get_run_decisions().pending()
+    except Exception as exc:  # pragma: no cover - store optional
+        logger.debug("Run decision store unavailable: %s", exc)
+
     return {
         "pending": [r.to_dict() for r in store.pending()],
+        "run_pending": run_pending,
         "history": [r.to_dict() for r in store.history(limit=max(1, min(limit, 200)))],
         "stats": store.stats(),
     }

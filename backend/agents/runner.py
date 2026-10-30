@@ -109,10 +109,6 @@ async def _pump(
                 )
             except Exception as exc:
                 logger.debug("run.start audit skipped: %s", exc)
-            logger.warning(
-                "DEBUG compiled channels: %s",
-                [k for k in getattr(graph, "channels", {}) if "results" in k],
-            )
             config = {
                 "configurable": {"thread_id": run_id},
                 "recursion_limit": recursion_limit(),
@@ -124,20 +120,6 @@ async def _pump(
                 async for chunk in graph.astream(
                     payload, config, stream_mode="updates"
                 ):
-                    if isinstance(chunk, dict):
-                        logger.warning("DEBUG chunk keys: %s", list(chunk.keys()))
-                        for _n, _u in chunk.items():
-                            if isinstance(_u, dict):
-                                logger.warning(
-                                    "DEBUG   %s -> %s", _n,
-                                    {k: _u[k] for k in _u if k.endswith("_results")},
-                                )
-                        if "execute" in chunk:
-                            _snap = await graph.aget_state(config)
-                            logger.warning(
-                                "DEBUG after execute, state flaky=%r",
-                                (_snap.values or {}).get("flaky_results"),
-                            )
                     if isinstance(chunk, dict) and "__interrupt__" in chunk:
                         interrupts = chunk["__interrupt__"] or ()
                         interrupted = interrupts[0] if interrupts else None
@@ -150,8 +132,20 @@ async def _pump(
                     value = {"detail": str(value)}
                 approval_id = value.get("approval_id", "")
 
+                # Announce it as outstanding so a client that reloads (or a
+                # second operator) can still find and answer it.
+                await store.register(approval_id, {
+                    "approval_id": approval_id,
+                    "run_id": run_id,
+                    "stage": value.get("stage", ""),
+                    "agent": value.get("agent", ""),
+                    "summary": value.get("summary", ""),
+                    "risk": value.get("risk", ""),
+                    "requested_at": time.time(),
+                })
                 await bus.publish(run_id, "approval_required", value)
                 decision = await store.wait(approval_id, timeout=_approval_timeout())
+                await store.resolve(approval_id)
                 if decision is None:
                     # fail-closed: an unanswered approval is a rejection
                     decision = {"approved": False, "decided_by": "timeout"}
