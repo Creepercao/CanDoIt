@@ -24,6 +24,14 @@ def test_mrr_uses_full_ranking():
                         "ranked_ids": ["x", "a"]}], k=1)
     assert result["recall@1"] == 0
     assert result["mrr"] == 0.5
+    assert result["hit_rate@1"] == 0
+
+
+def test_hit_rate_differs_from_recall_for_multiple_labels():
+    result = evaluate([{"query": "a", "relevant_ids": ["a", "b"],
+                        "ranked_ids": ["a"]}])
+    assert result["hit_rate@5"] == 1
+    assert result["recall@5"] == 0.5
 
 
 @pytest.mark.parametrize("rows,k", [([], 5), ([{}], 5),

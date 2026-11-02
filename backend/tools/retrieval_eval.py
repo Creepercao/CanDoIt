@@ -34,8 +34,10 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
             (1 / rank for rank, item in enumerate(ranked, 1) if item in relevant), 0.0
         )
         details.append({"query": row["query"], "recall": recall,
+                        "hit": bool(relevant.intersection(ranked[:k])),
                         "reciprocal_rank": reciprocal_rank})
     return {"queries": len(details), "k": k,
+            f"hit_rate@{k}": sum(item["hit"] for item in details) / len(details),
             f"recall@{k}": sum(item["recall"] for item in details) / len(details),
             "mrr": sum(item["reciprocal_rank"] for item in details) / len(details),
             "details": details}
