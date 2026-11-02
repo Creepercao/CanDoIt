@@ -1,6 +1,17 @@
 import pytest
 
 from backend.tools.retrieval_eval import evaluate
+from backend.tools.retrieval_eval import compare
+
+
+def test_compare_scores_and_rejects_different_labels():
+    before = [{"query": "a", "relevant_ids": ["a"], "ranked_ids": []}]
+    after = [{"query": "a", "relevant_ids": ["a"], "ranked_ids": ["a"]}]
+    assert compare(before, after)["delta"]["mrr"] == 1
+    with pytest.raises(ValueError):
+        compare(before, [{**after[0], "relevant_ids": ["b"]}])
+    with pytest.raises(ValueError):
+        compare(before * 2, after * 2)
 
 
 @pytest.mark.parametrize("rows,k", [("bad", 5), ([None], 5), ([{}], 1.5), ([{}], True)])

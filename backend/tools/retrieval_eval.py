@@ -43,6 +43,21 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
             "details": details}
 
 
+def compare(baseline, candidate, k=5):
+    """Compare identical labeled query sets, regardless of row order."""
+    before, after = evaluate(baseline, k), evaluate(candidate, k)
+    def labels(rows):
+        result = {row["query"]: set(row["relevant_ids"]) for row in rows}
+        if len(result) != len(rows):
+            raise ValueError("comparison requires unique queries")
+        return result
+    if labels(baseline) != labels(candidate):
+        raise ValueError("comparison requires identical queries and relevance labels")
+    return {"baseline": before, "candidate": after,
+            "delta": {key: after[key] - before[key]
+                      for key in (f"recall@{k}", f"hit_rate@{k}", "mrr")}}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="UTF-8 JSON array of labeled rankings")
