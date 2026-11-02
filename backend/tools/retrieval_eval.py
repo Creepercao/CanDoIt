@@ -11,8 +11,10 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
     Each row contains query, relevant_ids and ranked_ids (best first).
     Duplicate retrieved IDs count once and do not consume extra ranks.
     """
-    if k < 1 or not rows:
+    if type(k) is not int or k < 1 or not rows:
         raise ValueError("k must be positive and evaluation rows must not be empty")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("input must be an array of objects")
     details = []
     for row in rows:
         if not isinstance(row.get("query"), str) or not row["query"].strip():

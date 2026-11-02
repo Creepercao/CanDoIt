@@ -3,6 +3,12 @@ import pytest
 from backend.tools.retrieval_eval import evaluate
 
 
+@pytest.mark.parametrize("rows,k", [("bad", 5), ([None], 5), ([{}], 1.5), ([{}], True)])
+def test_public_api_rejects_wrong_types(rows, k):
+    with pytest.raises(ValueError):
+        evaluate(rows, k)
+
+
 def test_metrics_include_misses_multiple_labels_and_deduplicate():
     result = evaluate([
         {"query": "a", "relevant_ids": ["a", "b"],
