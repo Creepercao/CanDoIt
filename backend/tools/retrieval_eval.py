@@ -62,12 +62,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="UTF-8 JSON array of labeled rankings")
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument("--baseline", type=Path, help="Compare against saved baseline rankings")
     args = parser.parse_args()
     try:
         rows = json.loads(args.input.read_text(encoding="utf-8"))
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError("input must be an array of objects")
         result = evaluate(rows, args.k)
+        if args.baseline:
+            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+            result = compare(baseline, rows, args.k)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     print(json.dumps(result, ensure_ascii=False, indent=2))

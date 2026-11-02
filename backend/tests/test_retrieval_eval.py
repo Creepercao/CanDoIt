@@ -14,6 +14,18 @@ def test_compare_scores_and_rejects_different_labels():
         compare(before * 2, after * 2)
 
 
+def test_comparison_cli(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.tools.retrieval_eval import main
+
+    rows = [{"query": "a", "relevant_ids": ["a"], "ranked_ids": ["a"]}]
+    path = tmp_path / "rankings.json"
+    path.write_text(json.dumps(rows), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["retrieval_eval", str(path), "--baseline", str(path)])
+    main()
+    assert json.loads(capsys.readouterr().out)["delta"]["mrr"] == 0
+
+
 @pytest.mark.parametrize("rows,k", [("bad", 5), ([None], 5), ([{}], 1.5), ([{}], True)])
 def test_public_api_rejects_wrong_types(rows, k):
     with pytest.raises(ValueError):
