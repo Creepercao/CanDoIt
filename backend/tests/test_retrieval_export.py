@@ -23,7 +23,8 @@ def test_export_preserves_labels_order_and_scores():
     assert "ranked_ids" not in labels[0]
 
 
-@pytest.mark.parametrize("depth,threshold", [(0, .3), (201, .3), (5, float("nan"))])
+@pytest.mark.parametrize("depth,threshold", [(0, .3), (201, .3), (5, float("nan")),
+                                           (1.5, .3), (True, .3)])
 def test_invalid_configuration_makes_no_calls(depth, threshold):
     async def search(*args, **kwargs):
         pytest.fail("must validate before retrieval")

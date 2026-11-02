@@ -14,7 +14,7 @@ from backend.tools.retrieval_eval import evaluate
 
 
 async def export_rankings(labels, search, depth=20, threshold=0.3):
-    if depth < 1 or depth > 200:
+    if type(depth) is not int or depth < 1 or depth > 200:
         raise ValueError("depth must be between 1 and 200")
     if not math.isfinite(threshold) or not -1 <= threshold <= 1:
         raise ValueError("threshold must be finite and between -1 and 1")
