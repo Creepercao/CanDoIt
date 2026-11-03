@@ -21,3 +21,23 @@ def replay(rows, alpha=1.0):
             "warning": "Descriptive replay only; unchosen agents have no observed reward. "
                        "Agreement and matched rewards do not prove policy improvement.",
             "details": details}
+
+
+def main():
+    import argparse
+    import json
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="Chronologically ordered normalized observations")
+    parser.add_argument("--alpha", type=float, default=1.0)
+    args = parser.parse_args()
+    try:
+        result = replay(json.loads(args.input.read_text(encoding="utf-8")), args.alpha)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
