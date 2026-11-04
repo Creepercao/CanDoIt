@@ -2,6 +2,38 @@
 from backend.tools.policy_samples import samples
 
 
+def convert_runs(records, annotations):
+    """Order runs by start timestamp; retain recorded task order within a run."""
+    from datetime import datetime
+    ordered = []
+    seen = set()
+    for record in records:
+        run_id = record.get("run_id")
+        if not run_id or run_id in seen:
+            raise ValueError("unique run IDs required")
+        seen.add(run_id)
+        try:
+            started = datetime.fromisoformat(record["started_at"])
+            if started.tzinfo is None:
+                raise ValueError("timezone required")
+        except (KeyError, TypeError) as exc:
+            raise ValueError("valid started_at required") from exc
+        ordered.append((started, run_id, record))
+    if set(annotations) != seen:
+        raise ValueError("annotations must match run IDs")
+    rows = []
+    for _, run_id, record in sorted(ordered, key=lambda item: (item[0], item[1])):
+        # Annotation object ordering must not reorder the recorded tasks.
+        labels = annotations[run_id]
+        ordered_labels = {task["task_id"]: labels[task["task_id"]]
+                          for task in record["tasks"] if task["task_id"] in labels}
+        if set(ordered_labels) != set(labels):
+            raise ValueError("unknown annotated task")
+        rows.extend(convert(record, ordered_labels))
+    samples(rows)
+    return rows
+
+
 def convert(record, annotations):
     if not isinstance(record, dict) or not record.get("run_id"):
         raise ValueError("run_id required")

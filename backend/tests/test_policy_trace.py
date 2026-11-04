@@ -1,6 +1,19 @@
 import pytest
 from backend.tools.policy_trace import convert
 from backend.tools.policy_trace import annotation_template
+from backend.tools.policy_trace import convert_runs
+
+
+def test_multiple_runs_sort_and_reject_duplicates():
+    def record(run, date):
+        return {"run_id": run, "started_at": date, "tasks": [
+            {"task_id": "t", "agent": "a", "attempts": 1, "duration": 1}]}
+    early = record("early", "2026-01-01T00:00:00+00:00")
+    late = record("late", "2026-01-02T00:00:00+00:00")
+    labels = {run: {"t": {"candidates": ["a"], "score": 1}} for run in ("early", "late")}
+    assert [row["run_id"] for row in convert_runs([late, early], labels)] == ["early", "late"]
+    with pytest.raises(ValueError):
+        convert_runs([early, early], labels)
 
 
 def test_template_requires_explicit_labels():
