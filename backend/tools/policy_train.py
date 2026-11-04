@@ -39,9 +39,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Chronologically ordered normalized observations")
     parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--save-model", type=Path, help="Save fitted model to a new JSON file")
     args = parser.parse_args()
     try:
-        result = replay(json.loads(args.input.read_text(encoding="utf-8")), args.alpha)
+        rows = json.loads(args.input.read_text(encoding="utf-8"))
+        result = replay(rows, args.alpha)
+        if args.save_model:
+            from backend.agents.policy_store import save
+            save(fit(rows, args.alpha), args.save_model)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     print(json.dumps(result, ensure_ascii=False, indent=2))
