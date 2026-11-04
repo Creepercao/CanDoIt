@@ -23,3 +23,14 @@ def convert(record, annotations):
         rows.append(row)
     samples(rows)
     return rows
+
+
+def annotation_template(record):
+    tasks = record.get("tasks", [])
+    result = {}
+    for task in tasks:
+        task_id = task.get("task_id")
+        if not task_id or task_id in result:
+            raise ValueError("unique task IDs required")
+        result[task_id] = {"candidates": [], "score": None}
+    return result

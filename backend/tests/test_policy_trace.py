@@ -1,5 +1,11 @@
 import pytest
 from backend.tools.policy_trace import convert
+from backend.tools.policy_trace import annotation_template
+
+
+def test_template_requires_explicit_labels():
+    assert annotation_template({"tasks": [{"task_id": "t"}]}) == {
+        "t": {"candidates": [], "score": None}}
 
 
 def test_join_preserves_recorded_costs_and_provenance():
