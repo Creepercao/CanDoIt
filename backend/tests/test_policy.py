@@ -12,6 +12,13 @@ def test_reward_rejects_non_numeric_scores(score):
         reward(score, 1, 0)
 
 
+@pytest.mark.parametrize("depth", [True, "1", None])
+def test_features_reject_invalid_numbers(depth):
+    from backend.agents.policy_features import features
+    with pytest.raises(ValueError):
+        features(depth=depth)
+
+
 def test_fit_learns_logged_arm():
     model = fit([dict(agent="b", candidates=["a", "b"], score=1, attempts=1, duration=0)], alpha=0)
     assert model.recommend(["a", "b"], [1, 0, 0, 1]) == "b"
