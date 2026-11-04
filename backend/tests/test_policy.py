@@ -5,6 +5,13 @@ from backend.tools.policy_train import replay
 from backend.tools.policy_train import fit
 
 
+@pytest.mark.parametrize("score", [True, "1", None, float("nan")])
+def test_reward_rejects_non_numeric_scores(score):
+    from backend.agents.policy_reward import reward
+    with pytest.raises(ValueError):
+        reward(score, 1, 0)
+
+
 def test_fit_learns_logged_arm():
     model = fit([dict(agent="b", candidates=["a", "b"], score=1, attempts=1, duration=0)], alpha=0)
     assert model.recommend(["a", "b"], [1, 0, 0, 1]) == "b"
