@@ -2,6 +2,12 @@ import pytest
 
 from backend.agents.policy import LinUCB
 from backend.tools.policy_train import replay
+from backend.tools.policy_train import fit
+
+
+def test_fit_learns_logged_arm():
+    model = fit([dict(agent="b", candidates=["a", "b"], score=1, attempts=1, duration=0)], alpha=0)
+    assert model.recommend(["a", "b"], [1, 0, 0, 1]) == "b"
 
 
 def test_ridge_solution_and_arm_isolation():

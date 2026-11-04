@@ -3,6 +3,14 @@ from backend.agents.policy import LinUCB
 from backend.tools.policy_samples import samples
 
 
+def fit(rows, alpha=1.0):
+    observations = samples(rows)
+    model = LinUCB(alpha=alpha)
+    for agent, _, x, reward in observations:
+        model.update(agent, x, reward)
+    return model
+
+
 def replay(rows, alpha=1.0):
     observations = samples(rows)
     model = LinUCB(alpha=alpha)
