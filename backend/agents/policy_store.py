@@ -1,6 +1,8 @@
 """Versioned JSON snapshots for offline policy experiments."""
 from copy import deepcopy
 import math
+import json
+from pathlib import Path
 from backend.agents.policy import LinUCB
 from backend.agents.policy_features import FEATURE_NAMES
 
@@ -45,3 +47,15 @@ def restore(data):
         return model
     except (KeyError, TypeError, OverflowError) as exc:
         raise ValueError("invalid policy state") from exc
+
+
+def save(model, path):
+    data = snapshot(model)
+    restore(data)
+    payload = json.dumps(data, ensure_ascii=False, allow_nan=False, indent=2)
+    with Path(path).open("x", encoding="utf-8") as handle:
+        handle.write(payload)
+
+
+def load(path):
+    return restore(json.loads(Path(path).read_text(encoding="utf-8")))
