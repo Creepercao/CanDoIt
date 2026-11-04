@@ -34,3 +34,30 @@ def annotation_template(record):
             raise ValueError("unique task IDs required")
         result[task_id] = {"candidates": [], "score": None}
     return result
+
+
+def main():
+    import argparse
+    import json
+    from pathlib import Path
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("record", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--annotations", type=Path,
+                        help="Omit to generate an unfilled annotation template")
+    args = parser.parse_args()
+    try:
+        record = json.loads(args.record.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            raise ValueError("record must be an object")
+        result = (convert(record, json.loads(args.annotations.read_text(encoding="utf-8")))
+                  if args.annotations else annotation_template(record))
+        payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)
+        with args.output.open("x", encoding="utf-8") as handle:
+            handle.write(payload)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    main()

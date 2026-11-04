@@ -8,6 +8,18 @@ def test_template_requires_explicit_labels():
         "t": {"candidates": [], "score": None}}
 
 
+def test_template_cli(tmp_path, monkeypatch):
+    import json
+    from backend.tools.policy_trace import main
+    record, output = tmp_path / "run.json", tmp_path / "labels.json"
+    record.write_text(json.dumps({"tasks": [{"task_id": "t"}]}))
+    monkeypatch.setattr("sys.argv", ["policy_trace", str(record), str(output)])
+    main()
+    assert json.loads(output.read_text())["t"]["score"] is None
+    with pytest.raises(SystemExit):
+        main()
+
+
 def test_join_preserves_recorded_costs_and_provenance():
     record = {"run_id": "r", "tasks": [{"task_id": "t", "agent": "a", "attempts": 2, "duration": 9}]}
     rows = convert(record, {"t": {"candidates": ["a", "b"], "score": .8, "duration": 0}})
