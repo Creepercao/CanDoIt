@@ -74,8 +74,11 @@ def test_cli(tmp_path, monkeypatch, capsys):
     path.write_text(json.dumps([dict(agent="a", candidates=["a"], score=1,
                                     attempts=1, duration=0)]))
     model_path = tmp_path / "model.json"
-    monkeypatch.setattr("sys.argv", ["policy_train", str(path), "--save-model", str(model_path)])
+    report_path = tmp_path / "report.json"
+    monkeypatch.setattr("sys.argv", ["policy_train", str(path), "--save-model", str(model_path),
+                                    "--report", str(report_path)])
     main()
     assert json.loads(capsys.readouterr().out)["observations"] == 1
     from backend.agents.policy_store import load
     assert "a" in load(model_path).arms
+    assert json.loads(report_path.read_text())["coverage"]["observations"] == 1

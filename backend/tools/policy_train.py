@@ -40,10 +40,16 @@ def main():
     parser.add_argument("input", type=Path, help="Chronologically ordered normalized observations")
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--save-model", type=Path, help="Save fitted model to a new JSON file")
+    parser.add_argument("--report", type=Path, help="Save report to a new JSON file")
     args = parser.parse_args()
     try:
         rows = json.loads(args.input.read_text(encoding="utf-8"))
         result = replay(rows, args.alpha)
+        from backend.tools.policy_summary import summarize
+        result["coverage"] = summarize(rows)
+        if args.report:
+            with args.report.open("x", encoding="utf-8") as handle:
+                json.dump(result, handle, ensure_ascii=False, allow_nan=False, indent=2)
         if args.save_model:
             from backend.agents.policy_store import save
             save(fit(rows, args.alpha), args.save_model)
