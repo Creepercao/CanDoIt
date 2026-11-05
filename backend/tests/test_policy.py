@@ -12,6 +12,12 @@ def test_training_rejects_duplicate_provenance():
         fit([row, row])
 
 
+@pytest.mark.parametrize("attempts", [True, 1.5, 0])
+def test_training_requires_integral_attempts(attempts):
+    with pytest.raises(ValueError):
+        fit([dict(agent="a", candidates=["a"], score=1, attempts=attempts, duration=0)])
+
+
 @pytest.mark.parametrize("score", [True, "1", None, float("nan")])
 def test_reward_rejects_non_numeric_scores(score):
     from backend.agents.policy_reward import reward

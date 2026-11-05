@@ -21,6 +21,8 @@ def samples(rows):
                 raise ValueError("unique run_id/task_id pairs required")
             seen.add(key)
         agent, candidates = row.get("agent"), row.get("candidates")
+        if type(row.get("attempts")) is not int or row["attempts"] < 1:
+            raise ValueError("attempts must be a positive integer")
         if (not isinstance(candidates, list) or not candidates or
             any(not isinstance(a, str) or not a.strip() for a in candidates) or
             agent not in candidates):
