@@ -5,6 +5,13 @@ from backend.tools.policy_train import replay
 from backend.tools.policy_train import fit
 
 
+def test_training_rejects_duplicate_provenance():
+    row = dict(agent="a", candidates=["a"], score=1, attempts=1, duration=0,
+               run_id="r", task_id="t")
+    with pytest.raises(ValueError):
+        fit([row, row])
+
+
 @pytest.mark.parametrize("score", [True, "1", None, float("nan")])
 def test_reward_rejects_non_numeric_scores(score):
     from backend.agents.policy_reward import reward
