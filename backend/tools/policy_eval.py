@@ -14,6 +14,8 @@ def validate_split(training, evaluation):
 
 
 def evaluate(model, rows):
+    from copy import deepcopy
+    model = deepcopy(model)
     observations = samples(rows)
     details = []
     for agent, candidates, x, reward in observations:
