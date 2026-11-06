@@ -20,6 +20,10 @@ def test_frozen_evaluation_does_not_learn_rewards():
     result = evaluate(model, [row, row])
     assert result["agreement"] == 0
     assert snapshot(model) == initial
+    repeated = evaluate(model, [row, row])
+    assert repeated["model_sha256"] == result["model_sha256"]
+    assert repeated["samples_sha256"] == result["samples_sha256"]
+    assert evaluate(model, [row])["samples_sha256"] != result["samples_sha256"]
     state = snapshot(model)
     evaluate(model, [row])
     assert snapshot(model) == state

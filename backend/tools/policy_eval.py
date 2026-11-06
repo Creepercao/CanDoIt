@@ -15,6 +15,13 @@ def validate_split(training, evaluation):
 
 def evaluate(model, rows):
     from copy import deepcopy
+    import hashlib
+    import json
+    from backend.agents.policy_store import snapshot
+    def fingerprint(value):
+        payload = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    model_hash = fingerprint(snapshot(model))
     model = deepcopy(model)
     observations = samples(rows)
     details = []
@@ -23,6 +30,7 @@ def evaluate(model, rows):
         details.append({"logged_agent": agent, "suggested_agent": suggested,
                         "matched": agent == suggested, "observed_reward": reward})
     return {"observations": len(details),
+            "model_sha256": model_hash, "samples_sha256": fingerprint(rows),
             "agreement": sum(row["matched"] for row in details) / len(details),
             "warning": "Descriptive agreement only; no counterfactual reward estimate.",
             "details": details}
