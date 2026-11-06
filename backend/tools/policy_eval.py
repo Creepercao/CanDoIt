@@ -24,3 +24,27 @@ def evaluate(model, rows):
             "agreement": sum(row["matched"] for row in details) / len(details),
             "warning": "Descriptive agreement only; no counterfactual reward estimate.",
             "details": details}
+
+
+def main():
+    import argparse
+    import json
+    from pathlib import Path
+    from backend.agents.policy_store import load
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model", type=Path)
+    parser.add_argument("input", type=Path)
+    parser.add_argument("--training", type=Path, help="Optional source-overlap check against training rows")
+    args = parser.parse_args()
+    try:
+        rows = json.loads(args.input.read_text(encoding="utf-8"))
+        if args.training:
+            validate_split(json.loads(args.training.read_text(encoding="utf-8")), rows)
+        result = evaluate(load(args.model), rows)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
