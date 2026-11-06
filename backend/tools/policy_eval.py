@@ -2,6 +2,17 @@
 from backend.tools.policy_samples import samples
 
 
+def validate_split(training, evaluation):
+    samples(training)
+    samples(evaluation)
+    def runs(rows):
+        if any(not isinstance(row.get("run_id"), str) or not row["run_id"].strip() for row in rows):
+            raise ValueError("run provenance required for split validation")
+        return {row["run_id"] for row in rows}
+    if runs(training) & runs(evaluation):
+        raise ValueError("training and evaluation must use disjoint runs")
+
+
 def evaluate(model, rows):
     observations = samples(rows)
     details = []
