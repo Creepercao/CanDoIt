@@ -3,6 +3,9 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import asyncio
+import logging
+import os
 
 from backend.agents.policy_context import plan_contexts
 from backend.agents.policy_store import snapshot
@@ -35,3 +38,25 @@ def observe_plan(model, tasks, dependencies, candidates, budget_fraction):
     return {"advisory_only": True, "model_sha256": digest,
             "candidate_scope": "registered_workers_not_capability_filtered",
             "stage": "initial_plan", "tasks": rows}
+
+
+async def observe_runtime(tasks, budget):
+    """Opt-in telemetry: failures must never affect execution or approvals."""
+    if os.environ.get("AGENT_POLICY_OBSERVE", "0") != "1":
+        return {}
+    try:
+        path = os.environ.get("AGENT_POLICY_MODEL", "")
+        if not path:
+            raise ValueError("AGENT_POLICY_MODEL required")
+        from backend.agents import orchestrator as orch
+        from backend.agents.policy_store import load
+
+        dependencies = {task["id"]: orch._task_deps(task, tasks) for task in tasks}
+        candidates = sorted(orch._get_worker_registry())
+        remaining = max(0., min(1., (budget.max_steps - budget.steps) / budget.max_steps)) if budget.max_steps > 0 else 0.
+        return await asyncio.to_thread(
+            lambda: observe_plan(load(path), tasks, dependencies, candidates, remaining)
+        )
+    except Exception as exc:
+        logging.getLogger("agents.policy").warning("Policy observation skipped: %s", type(exc).__name__)
+        return {"advisory_only": True, "status": "skipped", "reason": type(exc).__name__}
