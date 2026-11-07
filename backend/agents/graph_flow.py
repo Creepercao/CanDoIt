@@ -353,8 +353,9 @@ async def plan_node(state: dict) -> dict:
             **_budget_field(state),
         }
 
-    from backend.agents.policy_observer import observe_runtime
+    from backend.agents.policy_observer import observe_runtime, record_observation
     observation = await observe_runtime(tasks, reviewer.budget)
+    record_observation(run_id, observation)
 
     return {
         "tasks": tasks,

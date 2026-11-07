@@ -172,6 +172,8 @@ async def _pump(
         final_state = dict(initial_state)
         final_state["final_response"] = ""
     finally:
+        from backend.agents.policy_observer import record_observation
+        record_observation(run_id, (final_state or state).get("_policy_observation"))
         # The run summary must be attached before the reviewer is released —
         # every exit path (refusal included) is expected to carry ``_safety``.
         try:

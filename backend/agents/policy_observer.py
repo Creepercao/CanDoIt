@@ -60,3 +60,16 @@ async def observe_runtime(tasks, budget):
     except Exception as exc:
         logging.getLogger("agents.policy").warning("Policy observation skipped: %s", type(exc).__name__)
         return {"advisory_only": True, "status": "skipped", "reason": type(exc).__name__}
+
+
+def record_observation(run_id, observation):
+    """Attach to the existing run trace; repeated calls replace, never append."""
+    if not observation:
+        return
+    try:
+        from backend.observability import current_trace
+        trace = current_trace()
+        if trace is not None and trace.run_id == run_id:
+            trace.note(policy_observation=deepcopy(observation))
+    except Exception as exc:
+        logging.getLogger("agents.policy").debug("Policy trace skipped: %s", type(exc).__name__)

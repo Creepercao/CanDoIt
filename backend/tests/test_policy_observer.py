@@ -6,6 +6,23 @@ from backend.agents.policy_observer import observe_runtime
 import asyncio
 
 
+def test_observation_persists_through_existing_run_store(tmp_path, monkeypatch):
+    from backend.agents.policy_observer import record_observation
+    from backend.observability import track_run
+    from backend.observability import store
+    monkeypatch.setattr(store, "runs_dir", lambda: tmp_path)
+    observation = {"advisory_only": True, "tasks": [{"task_id": "t"}]}
+    with track_run("r") as trace:
+        record_observation("other", observation)
+        assert "policy_observation" not in trace.extra
+        record_observation("r", observation)
+        record_observation("r", observation)
+        observation["tasks"].clear()
+        store.save_run(trace.to_dict())
+    saved = store.get_run("r")["policy_observation"]
+    assert saved["tasks"] == [{"task_id": "t"}]
+
+
 def test_runtime_is_disabled_by_default_and_missing_model_is_nonfatal(monkeypatch):
     monkeypatch.delenv("AGENT_POLICY_OBSERVE", raising=False)
     assert asyncio.run(observe_runtime(None, None)) == {}
