@@ -99,6 +99,7 @@ class AgentState(TypedDict, total=False):
     _collected_html: list
     _streaming: bool
     _agent_labels: dict
+    _policy_observation: dict
 
 
 # ── run-scoped reviewer registry ───────────────────────────────────────
@@ -352,10 +353,14 @@ async def plan_node(state: dict) -> dict:
             **_budget_field(state),
         }
 
+    from backend.agents.policy_observer import observe_runtime
+    observation = await observe_runtime(tasks, reviewer.budget)
+
     return {
         "tasks": tasks,
         "plan_steps": plan_steps,
         "dropped_tasks": dropped,
+        "_policy_observation": observation,
         **_budget_field(state),
     }
 
