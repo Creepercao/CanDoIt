@@ -35,7 +35,7 @@ def observe_plan(model, tasks, dependencies, candidates, budget_fraction):
         rows.append({"task_id": task["id"], "agent": task["agent"],
                      "suggested_agent": suggestion, "matched": suggestion == task["agent"],
                      "candidates": sorted(scores), "scores": scores, **context})
-    return {"advisory_only": True, "model_sha256": digest,
+    return {"version": 1, "advisory_only": True, "model_sha256": digest,
             "candidate_scope": "registered_workers_not_capability_filtered",
             "stage": "initial_plan", "tasks": rows}
 
