@@ -104,3 +104,27 @@ def training_rows(record, scores):
     from backend.tools.policy_samples import samples
     samples(rows)
     return rows
+
+
+def main():
+    import argparse
+    import json
+    from pathlib import Path
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="JSON array of saved run records")
+    parser.add_argument("--output", type=Path, help="Write report to a new file")
+    args = parser.parse_args()
+    try:
+        result = summarize(json.loads(args.input.read_text(encoding="utf-8")))
+        payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)
+        if args.output:
+            with args.output.open("x", encoding="utf-8") as handle:
+                handle.write(payload)
+        else:
+            print(payload)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    main()

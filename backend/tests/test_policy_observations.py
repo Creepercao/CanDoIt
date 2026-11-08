@@ -55,3 +55,17 @@ def test_validates_persisted_scores_and_context():
     saved["policy_observation"]["tasks"][0]["features"] = []
     with pytest.raises(ValueError):
         observation_tasks(saved)
+
+
+def test_report_cli_preserves_previous_report(tmp_path, monkeypatch):
+    import json
+    from backend.tools.policy_observations import main
+    source, output = tmp_path / "runs.json", tmp_path / "report.json"
+    source.write_text(json.dumps([record()]), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["observations", str(source), "--output", str(output)])
+    main()
+    original = output.read_bytes()
+    assert json.loads(original)["runs"] == 1
+    with pytest.raises(SystemExit):
+        main()
+    assert output.read_bytes() == original
