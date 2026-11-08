@@ -72,3 +72,35 @@ def summarize(records):
     return {"runs": len(records), "unavailable_runs": unavailable, "models": models,
             "warning": "Initial-plan agreement only; registered workers are not capability filtered. "
                        "This does not measure execution success or policy improvement."}
+
+
+def training_rows(record, scores):
+    """Join initial-plan context with terminal task costs and explicit scores."""
+    observed = {row["task_id"]: row for row in observation_tasks(record)}
+    if not record.get("ended_at") or not isinstance(scores, dict) or not scores:
+        raise ValueError("finished run and non-empty explicit score mapping required")
+    outcomes = record.get("tasks")
+    if not isinstance(outcomes, list):
+        raise ValueError("recorded task outcomes required")
+    indexed = {}
+    for task in outcomes:
+        if not isinstance(task, dict) or not isinstance(task.get("task_id"), str):
+            raise ValueError("invalid recorded task")
+        if task["task_id"] in indexed:
+            raise ValueError("ambiguous repeated task outcome")
+        indexed[task["task_id"]] = task
+    rows = []
+    for task_id, score in scores.items():
+        if task_id not in observed or task_id not in indexed:
+            raise ValueError("score must reference an observed and executed task")
+        context, task = observed[task_id], indexed[task_id]
+        if task.get("status") not in ("done", "failed") or task.get("agent") != context["agent"]:
+            raise ValueError("terminal task agent must match observed plan")
+        rows.append({"run_id": record["run_id"], "task_id": task_id,
+                     "agent": task["agent"], "attempts": task.get("attempts"),
+                     "duration": task.get("duration"), "score": score,
+                     **{key: context[key] for key in ("depth", "upstream", "budget_fraction", "candidates")},
+                     "observation_model_sha256": record["policy_observation"]["model_sha256"]})
+    from backend.tools.policy_samples import samples
+    samples(rows)
+    return rows
