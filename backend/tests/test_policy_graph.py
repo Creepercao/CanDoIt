@@ -84,3 +84,50 @@ def test_real_model_observation_survives_sqlite_checkpoint(
                 assert observation["status"] == "skipped"
     finally:
         gf.release_reviewer(run_id)
+
+
+def test_runtime_history_can_feed_labeled_offline_training(
+    tmp_path, monkeypatch, safety_env, fake_skills
+):
+    from backend.agents import graph_flow as gf, orchestrator as orch
+    from backend.agents.policy import LinUCB
+    from backend.agents.policy_store import save, load
+    from backend.observability import track_run, store
+    from backend.tools.policy_observations import training_rows, summarize
+    from backend.tools.policy_train import fit
+
+    path = tmp_path / "source_model.json"
+    save(LinUCB(alpha=0), path)
+    monkeypatch.setenv("AGENT_POLICY_OBSERVE", "1")
+    monkeypatch.setenv("AGENT_POLICY_MODEL", str(path))
+    monkeypatch.setenv("AGENT_MEMORY", "0")
+    monkeypatch.setenv("SAFETY_AUTO_REMEDIATE", "0")
+    monkeypatch.setattr(store, "runs_dir", lambda: tmp_path / "runs")
+
+    async def supervisor(state):
+        return {"tasks": [{"id": "t", "agent": "research", "prompt": "research a topic"}]}
+
+    monkeypatch.setattr(orch, "supervisor_node", supervisor)
+    monkeypatch.setattr(orch, "validate_and_complete_plan", lambda tasks, request: tasks)
+
+    async def execute():
+        state = orch.make_initial_state(user_request="research a topic", chat_model_id="m")
+        state["run_id"] = "policy_roundtrip"
+        with track_run(state["run_id"]) as trace:
+            result = await gf.compile_graph().ainvoke(state)
+        store.save_run(trace.to_dict())
+        return result
+
+    try:
+        result = asyncio.run(execute())
+        assert result["tasks"][0]["agent"] == "research"
+        record = store.get_run("policy_roundtrip")
+        assert summarize([record])["unavailable_runs"] == 0
+        rows = training_rows(record, {"t": 1})
+        assert rows[0]["duration"] == record["tasks"][0]["duration"]
+        assert rows[0]["budget_fraction"] == record["policy_observation"]["tasks"][0]["budget_fraction"]
+        trained_path = tmp_path / "trained.json"
+        save(fit(rows, alpha=0), trained_path)
+        assert load(trained_path).recommend(rows[0]["candidates"], [1, 0, 0, 1]) == "research"
+    finally:
+        gf.release_reviewer("policy_roundtrip")

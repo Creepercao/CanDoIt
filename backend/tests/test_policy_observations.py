@@ -83,3 +83,12 @@ def test_sample_export_cli(tmp_path, monkeypatch, capsys):
     rows = json.loads(capsys.readouterr().out)
     assert rows[0]["run_id"] == "r"
     assert "b" in fit(rows).arms
+
+
+@pytest.mark.parametrize("field,value", [("version", 99), ("stage", "remediate"),
+    ("candidate_scope", "unknown"), ("model_sha256", "bad")])
+def test_unknown_observation_contract_rejected(field, value):
+    saved = record()
+    saved["policy_observation"][field] = value
+    with pytest.raises(ValueError):
+        observation_tasks(saved)

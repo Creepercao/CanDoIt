@@ -14,6 +14,9 @@ def observation_tasks(record):
     # Records produced before versioning are schema 1.
     if observation.get("version", 1) != 1 or observation.get("advisory_only") is not True:
         raise ValueError("unsupported observation schema")
+    if (observation.get("stage") != "initial_plan" or observation.get("candidate_scope") !=
+            "registered_workers_not_capability_filtered"):
+        raise ValueError("unsupported observation stage or candidate scope")
     digest = observation.get("model_sha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("model fingerprint required")
