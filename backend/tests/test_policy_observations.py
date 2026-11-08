@@ -69,3 +69,17 @@ def test_report_cli_preserves_previous_report(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         main()
     assert output.read_bytes() == original
+
+
+def test_sample_export_cli(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.tools.policy_observations import main
+    from backend.tools.policy_train import fit
+    source, labels = tmp_path / "run.json", tmp_path / "scores.json"
+    source.write_text(json.dumps(finished_record()), encoding="utf-8")
+    labels.write_text(json.dumps({"t": .8}), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["observations", str(source), "--scores", str(labels)])
+    main()
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["run_id"] == "r"
+    assert "b" in fit(rows).arms

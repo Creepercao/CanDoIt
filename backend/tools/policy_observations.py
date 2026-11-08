@@ -90,7 +90,12 @@ def training_rows(record, scores):
             raise ValueError("ambiguous repeated task outcome")
         indexed[task["task_id"]] = task
     rows = []
-    for task_id, score in scores.items():
+    if set(scores) - set(observed):
+        raise ValueError("unknown observed task score")
+    for task_id in observed:
+        if task_id not in scores:
+            continue
+        score = scores[task_id]
         if task_id not in observed or task_id not in indexed:
             raise ValueError("score must reference an observed and executed task")
         context, task = observed[task_id], indexed[task_id]
@@ -113,9 +118,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="JSON array of saved run records")
     parser.add_argument("--output", type=Path, help="Write report to a new file")
+    parser.add_argument("--scores", type=Path,
+                        help="Export samples from one run using an explicit task-ID to score object")
     args = parser.parse_args()
     try:
-        result = summarize(json.loads(args.input.read_text(encoding="utf-8")))
+        source = json.loads(args.input.read_text(encoding="utf-8"))
+        result = (training_rows(source, json.loads(args.scores.read_text(encoding="utf-8")))
+                  if args.scores else summarize(source))
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)
         if args.output:
             with args.output.open("x", encoding="utf-8") as handle:
