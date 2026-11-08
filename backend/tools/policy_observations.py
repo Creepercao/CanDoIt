@@ -46,3 +46,29 @@ def observation_tasks(record):
         except KeyError as exc:
             raise ValueError("observed context required") from exc
     return rows
+
+
+def summarize(records):
+    if not isinstance(records, list) or not records:
+        raise ValueError("non-empty run record array required")
+    seen, models = set(), {}
+    unavailable = 0
+    for record in records:
+        run_id = record.get("run_id") if isinstance(record, dict) else None
+        if not isinstance(run_id, str) or not run_id.strip() or run_id in seen:
+            raise ValueError("unique run IDs required")
+        seen.add(run_id)
+        observation = record.get("policy_observation")
+        if not observation or (isinstance(observation, dict) and observation.get("status") == "skipped"):
+            unavailable += 1
+            continue
+        rows = observation_tasks(record)
+        bucket = models.setdefault(observation["model_sha256"], {"runs": 0, "tasks": 0, "matched": 0})
+        bucket["runs"] += 1
+        bucket["tasks"] += len(rows)
+        bucket["matched"] += sum(row["matched"] for row in rows)
+    for bucket in models.values():
+        bucket["agreement"] = bucket["matched"] / bucket["tasks"]
+    return {"runs": len(records), "unavailable_runs": unavailable, "models": models,
+            "warning": "Initial-plan agreement only; registered workers are not capability filtered. "
+                       "This does not measure execution success or policy improvement."}

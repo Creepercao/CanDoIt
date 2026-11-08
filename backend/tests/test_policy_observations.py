@@ -3,6 +3,16 @@ import pytest
 from backend.agents.policy import LinUCB
 from backend.agents.policy_observer import observe_plan
 from backend.tools.policy_observations import observation_tasks
+from backend.tools.policy_observations import summarize
+
+
+def test_summary_keeps_missing_observations_out_of_agreement():
+    result = summarize([record(), {"run_id": "disabled"},
+                        {"run_id": "skipped", "policy_observation": {"status": "skipped"}}])
+    assert result["unavailable_runs"] == 2
+    assert next(iter(result["models"].values()))["agreement"] == 0
+    with pytest.raises(ValueError):
+        summarize([record(), record()])
 
 
 def record():
