@@ -1,6 +1,8 @@
 """Analyze persisted advisory observations, with explicit labels for training."""
+import json
 import math
 import re
+from pathlib import Path
 
 from backend.agents.policy_features import features
 
@@ -114,18 +116,36 @@ def training_rows(record, scores):
     return rows
 
 
+def read_history(path):
+    """Read a JSON input or the immediate run JSON files in an archive directory."""
+    def read_file(source):
+        try:
+            return json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"cannot read {source}: {exc}") from exc
+
+    if not path.is_dir():
+        return read_file(path)
+    records = []
+    for source in sorted(path.glob("*.json")):
+        if source.is_file():
+            record = read_file(source)
+            if not isinstance(record, dict):
+                raise ValueError(f"{source}: expected one run record")
+            records.append(record)
+    return records
+
+
 def main():
     import argparse
-    import json
-    from pathlib import Path
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="JSON array of saved run records")
+    parser.add_argument("input", type=Path, help="Saved run JSON array or directory of run JSON files")
     parser.add_argument("--output", type=Path, help="Write report to a new file")
     parser.add_argument("--scores", type=Path,
                         help="Export samples from one run using an explicit task-ID to score object")
     args = parser.parse_args()
     try:
-        source = json.loads(args.input.read_text(encoding="utf-8"))
+        source = read_history(args.input)
         result = (training_rows(source, json.loads(args.scores.read_text(encoding="utf-8")))
                   if args.scores else summarize(source))
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)

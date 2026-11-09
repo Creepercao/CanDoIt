@@ -7,6 +7,22 @@ from backend.tools.policy_observations import summarize
 from backend.tools.policy_observations import training_rows
 
 
+def test_report_reads_run_archive_directory(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.tools.policy_observations import main
+
+    (tmp_path / "r.json").write_text(json.dumps(record()), encoding="utf-8")
+    (tmp_path / "partial.json.tmp").write_text("partial", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["observations", str(tmp_path)])
+    main()
+    assert json.loads(capsys.readouterr().out)["runs"] == 1
+
+    (tmp_path / "broken.json").write_text("partial", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main()
+    assert "broken.json" in capsys.readouterr().err
+
+
 def finished_record():
     saved = record()
     saved.update(ended_at="2026-11-08T00:00:00+00:00", tasks=[
