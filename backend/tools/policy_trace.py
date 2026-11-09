@@ -2,14 +2,14 @@
 from backend.tools.policy_samples import samples
 
 
-def convert_runs(records, annotations):
-    """Order runs by start timestamp; retain recorded task order within a run."""
+def chronological_runs(records):
+    """Order runs by start timestamp, with run ID as a deterministic tiebreak."""
     from datetime import datetime
     ordered = []
     seen = set()
     for record in records:
         run_id = record.get("run_id")
-        if not run_id or run_id in seen:
+        if not isinstance(run_id, str) or not run_id.strip() or run_id in seen:
             raise ValueError("unique run IDs required")
         seen.add(run_id)
         try:
@@ -19,10 +19,17 @@ def convert_runs(records, annotations):
         except (KeyError, TypeError) as exc:
             raise ValueError("valid started_at required") from exc
         ordered.append((started, run_id, record))
-    if set(annotations) != seen:
+    return [record for _, _, record in sorted(ordered, key=lambda item: (item[0], item[1]))]
+
+
+def convert_runs(records, annotations):
+    """Order runs by start timestamp; retain recorded task order within a run."""
+    ordered = chronological_runs(records)
+    if set(annotations) != {record["run_id"] for record in ordered}:
         raise ValueError("annotations must match run IDs")
     rows = []
-    for _, run_id, record in sorted(ordered, key=lambda item: (item[0], item[1])):
+    for record in ordered:
+        run_id = record["run_id"]
         # Annotation object ordering must not reorder the recorded tasks.
         labels = annotations[run_id]
         ordered_labels = {task["task_id"]: labels[task["task_id"]]

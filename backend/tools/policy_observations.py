@@ -53,16 +53,22 @@ def observation_tasks(record):
     return rows
 
 
-def summarize(records):
+def _index_runs(records):
     if not isinstance(records, list) or not records:
         raise ValueError("non-empty run record array required")
-    seen, models = set(), {}
-    unavailable = 0
+    indexed = {}
     for record in records:
         run_id = record.get("run_id") if isinstance(record, dict) else None
-        if not isinstance(run_id, str) or not run_id.strip() or run_id in seen:
+        if not isinstance(run_id, str) or not run_id.strip() or run_id in indexed:
             raise ValueError("unique run IDs required")
-        seen.add(run_id)
+        indexed[run_id] = record
+    return indexed
+
+
+def summarize(records):
+    models = {}
+    unavailable = 0
+    for record in _index_runs(records).values():
         observation = record.get("policy_observation")
         if not observation or (isinstance(observation, dict) and observation.get("status") == "skipped"):
             unavailable += 1
@@ -150,6 +156,24 @@ def read_history(path):
     return records
 
 
+def batch_training_rows(records, scores):
+    """Export the explicitly scored subset in chronological run order."""
+    from backend.tools.policy_trace import chronological_runs
+
+    indexed = _index_runs(records)
+    if not isinstance(scores, dict) or not scores or set(scores) - set(indexed):
+        raise ValueError("scores must identify runs present in the history")
+    ordered = chronological_runs(indexed[run_id] for run_id in scores)
+    rows = []
+    for record in ordered:
+        run_id = record["run_id"]
+        try:
+            rows.extend(training_rows(record, scores[run_id]))
+        except ValueError as exc:
+            raise ValueError(f"run {run_id}: {exc}") from exc
+    return rows
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -158,14 +182,16 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--score-template", action="store_true", help="List scoreable tasks from one run")
     mode.add_argument("--scores", type=Path,
-                        help="Export samples from one run using an explicit task-ID to score object")
+                        help="Task-ID to score object for one run, nested by run ID for a batch")
     args = parser.parse_args()
     try:
         source = read_history(args.input)
         if args.score_template:
             result = score_template(source)
         elif args.scores:
-            result = training_rows(source, json.loads(args.scores.read_text(encoding="utf-8")))
+            scores = json.loads(args.scores.read_text(encoding="utf-8"))
+            exporter = batch_training_rows if isinstance(source, list) else training_rows
+            result = exporter(source, scores)
         else:
             result = summarize(source)
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)

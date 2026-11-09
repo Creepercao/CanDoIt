@@ -113,6 +113,18 @@ def test_sample_export_cli(tmp_path, monkeypatch, capsys):
     assert "b" in fit(rows).arms
 
 
+def test_batch_orders_scored_runs_by_instant_and_skips_unscored_runs():
+    from backend.tools.policy_observations import batch_training_rows
+
+    first = dict(finished_record(), run_id="z", started_at="2026-11-07T23:30:00-01:00")
+    second = dict(finished_record(), run_id="a", started_at="2026-11-08T02:00:00+01:00")
+    history = [second, {"run_id": "unscored"}, first]
+    rows = batch_training_rows(history, {"a": {"t": .9}, "z": {"t": .4}})
+    assert [(row["run_id"], row["score"]) for row in rows] == [("z", .4), ("a", .9)]
+    with pytest.raises(ValueError, match="present in the history"):
+        batch_training_rows(history, {"unknown": {"t": 1}})
+
+
 @pytest.mark.parametrize("field,value", [("version", 99), ("stage", "remediate"),
     ("candidate_scope", "unknown"), ("model_sha256", "bad")])
 def test_unknown_observation_contract_rejected(field, value):
