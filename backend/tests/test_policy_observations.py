@@ -138,6 +138,36 @@ def test_duplicate_score_keys_cannot_silently_overwrite_a_label(tmp_path, source
         read_scores(labels)
 
 
+def test_archived_runs_can_be_labeled_and_exported_as_valid_samples(tmp_path, monkeypatch):
+    import json
+    from backend.tools.policy_observations import main
+    from backend.tools.policy_samples import samples
+
+    history = tmp_path / "history"
+    history.mkdir()
+    first = dict(finished_record(), run_id="z", started_at="2026-11-07T22:00:00+00:00")
+    second = dict(finished_record(), run_id="a", started_at="2026-11-07T23:00:00+00:00")
+    for run in (first, second):
+        (history / f"{run['run_id']}.json").write_text(json.dumps(run), encoding="utf-8")
+
+    template = tmp_path / "template.json"
+    monkeypatch.setattr("sys.argv", ["observations", str(history / "z.json"),
+                                    "--score-template", "--output", str(template)])
+    main()
+    assert json.loads(template.read_text(encoding="utf-8")) == {"t": None}
+
+    scores = tmp_path / "scores.json"
+    scores.write_text(json.dumps({"a": {"t": .8}, "z": {"t": .6}}), encoding="utf-8")
+    samples_path = tmp_path / "samples.json"
+    monkeypatch.setattr("sys.argv", ["observations", str(history), "--scores", str(scores),
+                                    "--output", str(samples_path)])
+    main()
+    rows = json.loads(samples_path.read_text(encoding="utf-8"))
+    assert [(row["run_id"], row["task_id"]) for row in rows] == [("z", "t"), ("a", "t")]
+
+    assert [agent for agent, *_ in samples(rows)] == ["b", "b"]
+
+
 @pytest.mark.parametrize("field,value", [("version", 99), ("stage", "remediate"),
     ("candidate_scope", "unknown"), ("model_sha256", "bad")])
 def test_unknown_observation_contract_rejected(field, value):
