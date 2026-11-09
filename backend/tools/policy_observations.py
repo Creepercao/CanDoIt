@@ -1,4 +1,5 @@
 """Analyze persisted advisory observations, with explicit labels for training."""
+from collections import Counter
 import json
 import math
 import re
@@ -67,20 +68,33 @@ def _index_runs(records):
 
 def summarize(records):
     models = {}
-    unavailable = 0
+    disagreements = {}
+    missing = skipped = 0
     for record in _index_runs(records).values():
         observation = record.get("policy_observation")
-        if not observation or (isinstance(observation, dict) and observation.get("status") == "skipped"):
-            unavailable += 1
+        if observation is None or observation == {}:
+            missing += 1
+            continue
+        if isinstance(observation, dict) and observation.get("status") == "skipped":
+            skipped += 1
             continue
         rows = observation_tasks(record)
-        bucket = models.setdefault(observation["model_sha256"], {"runs": 0, "tasks": 0, "matched": 0})
+        digest = observation["model_sha256"]
+        bucket = models.setdefault(digest, {"runs": 0, "tasks": 0, "matched": 0})
         bucket["runs"] += 1
         bucket["tasks"] += len(rows)
         bucket["matched"] += sum(row["matched"] for row in rows)
-    for bucket in models.values():
+        disagreements.setdefault(digest, Counter()).update(
+            (row["agent"], row["suggested_agent"]) for row in rows if not row["matched"]
+        )
+    for digest, bucket in models.items():
         bucket["agreement"] = bucket["matched"] / bucket["tasks"]
-    return {"runs": len(records), "unavailable_runs": unavailable, "models": models,
+        bucket["disagreements"] = [
+            {"logged_agent": logged, "suggested_agent": suggested, "tasks": count}
+            for (logged, suggested), count in sorted(disagreements[digest].items())
+        ]
+    return {"runs": len(records), "unavailable_runs": missing + skipped,
+            "missing_runs": missing, "skipped_runs": skipped, "models": models,
             "warning": "Initial-plan agreement only; registered workers are not capability filtered. "
                        "This does not measure execution success or policy improvement."}
 

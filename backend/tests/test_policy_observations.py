@@ -63,7 +63,10 @@ def test_summary_keeps_missing_observations_out_of_agreement():
     result = summarize([record(), {"run_id": "disabled"},
                         {"run_id": "skipped", "policy_observation": {"status": "skipped"}}])
     assert result["unavailable_runs"] == 2
-    assert next(iter(result["models"].values()))["agreement"] == 0
+    assert result["missing_runs"] == result["skipped_runs"] == 1
+    bucket = next(iter(result["models"].values()))
+    assert bucket["agreement"] == 0
+    assert bucket["disagreements"] == [{"logged_agent": "b", "suggested_agent": "a", "tasks": 1}]
     with pytest.raises(ValueError):
         summarize([record(), record()])
 
