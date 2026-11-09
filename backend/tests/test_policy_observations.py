@@ -41,6 +41,18 @@ def test_training_joins_observed_features_and_real_costs():
         training_rows(saved, {"t": .8})
 
 
+def test_template_only_includes_observed_tasks_with_matching_terminal_outcomes():
+    from backend.tools.policy_observations import score_template
+
+    saved = finished_record()
+    saved["tasks"].append({**saved["tasks"][0], "task_id": "remedial"})
+    observed_task = saved["policy_observation"]["tasks"][0]
+    saved["policy_observation"]["tasks"].append({**observed_task, "task_id": "never_executed"})
+    assert score_template(saved) == {"t": None}
+    saved["tasks"][0]["agent"] = "a"
+    assert score_template(saved) == {}
+
+
 @pytest.mark.parametrize("scores", [{}, {"missing": 1}, {"t": None}, {"t": True}])
 def test_training_requires_explicit_valid_score(scores):
     with pytest.raises(ValueError):

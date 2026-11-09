@@ -79,11 +79,9 @@ def summarize(records):
                        "This does not measure execution success or policy improvement."}
 
 
-def training_rows(record, scores):
-    """Join initial-plan context with terminal task costs and explicit scores."""
-    observed = {row["task_id"]: row for row in observation_tasks(record)}
-    if not record.get("ended_at") or not isinstance(scores, dict) or not scores:
-        raise ValueError("finished run and non-empty explicit score mapping required")
+def _executed_tasks(record, observed):
+    if not record.get("ended_at"):
+        raise ValueError("finished run required")
     outcomes = record.get("tasks")
     if not isinstance(outcomes, list):
         raise ValueError("recorded task outcomes required")
@@ -94,6 +92,24 @@ def training_rows(record, scores):
         if task["task_id"] in indexed:
             raise ValueError("ambiguous repeated task outcome")
         indexed[task["task_id"]] = task
+    return {task_id: task for task_id, task in indexed.items()
+            if task_id in observed and task.get("status") in ("done", "failed")
+            and task.get("agent") == observed[task_id]["agent"]}
+
+
+def score_template(record):
+    """Return unfilled labels for initial tasks with matching terminal outcomes."""
+    observed = {row["task_id"]: row for row in observation_tasks(record)}
+    executed = _executed_tasks(record, observed)
+    return {task_id: None for task_id in observed if task_id in executed}
+
+
+def training_rows(record, scores):
+    """Join initial-plan context with terminal task costs and explicit scores."""
+    observed = {row["task_id"]: row for row in observation_tasks(record)}
+    executed = _executed_tasks(record, observed)
+    if not isinstance(scores, dict) or not scores:
+        raise ValueError("non-empty explicit score mapping required")
     rows = []
     if set(scores) - set(observed):
         raise ValueError("unknown observed task score")
@@ -101,11 +117,9 @@ def training_rows(record, scores):
         if task_id not in scores:
             continue
         score = scores[task_id]
-        if task_id not in observed or task_id not in indexed:
-            raise ValueError("score must reference an observed and executed task")
-        context, task = observed[task_id], indexed[task_id]
-        if task.get("status") not in ("done", "failed") or task.get("agent") != context["agent"]:
-            raise ValueError("terminal task agent must match observed plan")
+        if task_id not in executed:
+            raise ValueError("score must reference a terminal outcome matching the observed agent")
+        context, task = observed[task_id], executed[task_id]
         rows.append({"run_id": record["run_id"], "task_id": task_id,
                      "agent": task["agent"], "attempts": task.get("attempts"),
                      "duration": task.get("duration"), "score": score,
@@ -140,14 +154,20 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Saved run JSON array or directory of run JSON files")
-    parser.add_argument("--output", type=Path, help="Write report to a new file")
-    parser.add_argument("--scores", type=Path,
+    parser.add_argument("--output", type=Path, help="Write JSON result to a new file")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--score-template", action="store_true", help="List scoreable tasks from one run")
+    mode.add_argument("--scores", type=Path,
                         help="Export samples from one run using an explicit task-ID to score object")
     args = parser.parse_args()
     try:
         source = read_history(args.input)
-        result = (training_rows(source, json.loads(args.scores.read_text(encoding="utf-8")))
-                  if args.scores else summarize(source))
+        if args.score_template:
+            result = score_template(source)
+        elif args.scores:
+            result = training_rows(source, json.loads(args.scores.read_text(encoding="utf-8")))
+        else:
+            result = summarize(source)
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)
         if args.output:
             with args.output.open("x", encoding="utf-8") as handle:
