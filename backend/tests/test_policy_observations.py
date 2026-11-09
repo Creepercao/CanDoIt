@@ -128,6 +128,16 @@ def test_batch_orders_scored_runs_by_instant_and_skips_unscored_runs():
         batch_training_rows(history, {"unknown": {"t": 1}})
 
 
+@pytest.mark.parametrize("source", ['{"t": 1, "t": 0}', '{"r": {"t": 1}, "r": {"t": 0}}'])
+def test_duplicate_score_keys_cannot_silently_overwrite_a_label(tmp_path, source):
+    from backend.tools.policy_observations import read_scores
+
+    labels = tmp_path / "scores.json"
+    labels.write_text(source, encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate score key"):
+        read_scores(labels)
+
+
 @pytest.mark.parametrize("field,value", [("version", 99), ("stage", "remediate"),
     ("candidate_scope", "unknown"), ("model_sha256", "bad")])
 def test_unknown_observation_contract_rejected(field, value):

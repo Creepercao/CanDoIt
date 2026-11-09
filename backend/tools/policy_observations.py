@@ -188,6 +188,21 @@ def batch_training_rows(records, scores):
     return rows
 
 
+def read_scores(path):
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate score key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read scores from {path}: {exc}") from exc
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -203,7 +218,7 @@ def main():
         if args.score_template:
             result = score_template(source)
         elif args.scores:
-            scores = json.loads(args.scores.read_text(encoding="utf-8"))
+            scores = read_scores(args.scores)
             exporter = batch_training_rows if isinstance(source, list) else training_rows
             result = exporter(source, scores)
         else:
