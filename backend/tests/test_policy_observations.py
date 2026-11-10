@@ -149,12 +149,20 @@ def test_archived_runs_can_be_labeled_and_exported_as_valid_samples(tmp_path, mo
     second = dict(finished_record(), run_id="a", started_at="2026-11-07T23:00:00+00:00")
     for run in (first, second):
         (history / f"{run['run_id']}.json").write_text(json.dumps(run), encoding="utf-8")
+    (history / "unfinished.json").write_text(json.dumps(dict(record(), run_id="unfinished")), encoding="utf-8")
+    (history / "skipped.json").write_text(json.dumps({"run_id": "skipped", "ended_at": first["ended_at"],
+        "policy_observation": {"status": "skipped"}}), encoding="utf-8")
 
     template = tmp_path / "template.json"
     monkeypatch.setattr("sys.argv", ["observations", str(history / "z.json"),
                                     "--score-template", "--output", str(template)])
     main()
     assert json.loads(template.read_text(encoding="utf-8")) == {"t": None}
+
+    batch_template = tmp_path / "batch-template.json"
+    monkeypatch.setattr("sys.argv", ["observations", str(history), "--score-template", "--output", str(batch_template)])
+    main()
+    assert json.loads(batch_template.read_text(encoding="utf-8")) == {"a": {"t": None}, "z": {"t": None}}
 
     scores = tmp_path / "scores.json"
     scores.write_text(json.dumps({"a": {"t": .8}, "z": {"t": .6}}), encoding="utf-8")

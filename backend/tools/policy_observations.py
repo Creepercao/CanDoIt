@@ -66,16 +66,25 @@ def _index_runs(records):
     return indexed
 
 
+def _observation_status(observation):
+    if observation is None or observation == {}:
+        return "missing"
+    if isinstance(observation, dict) and observation.get("status") == "skipped":
+        return "skipped"
+    return "available"
+
+
 def summarize(records):
     models = {}
     disagreements = {}
     missing = skipped = 0
     for record in _index_runs(records).values():
         observation = record.get("policy_observation")
-        if observation is None or observation == {}:
+        status = _observation_status(observation)
+        if status == "missing":
             missing += 1
             continue
-        if isinstance(observation, dict) and observation.get("status") == "skipped":
+        if status == "skipped":
             skipped += 1
             continue
         rows = observation_tasks(record)
@@ -122,6 +131,21 @@ def score_template(record):
     observed = {row["task_id"]: row for row in observation_tasks(record)}
     executed = _executed_tasks(record, observed)
     return {task_id: None for task_id in observed if task_id in executed}
+
+
+def batch_score_template(records):
+    """Prepare labels only for runs with matching, finished task outcomes."""
+    templates = {}
+    for run_id, record in _index_runs(records).items():
+        if not record.get("ended_at") or _observation_status(record.get("policy_observation")) != "available":
+            continue
+        try:
+            template = score_template(record)
+        except ValueError as exc:
+            raise ValueError(f"run {run_id}: {exc}") from exc
+        if template:
+            templates[run_id] = template
+    return templates
 
 
 def training_rows(record, scores):
@@ -209,14 +233,15 @@ def main():
     parser.add_argument("input", type=Path, help="Saved run JSON array or directory of run JSON files")
     parser.add_argument("--output", type=Path, help="Write JSON result to a new file")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--score-template", action="store_true", help="List scoreable tasks from one run")
+    mode.add_argument("--score-template", action="store_true", help="List scoreable tasks, nested by run ID for a batch")
     mode.add_argument("--scores", type=Path,
                         help="Task-ID to score object for one run, nested by run ID for a batch")
     args = parser.parse_args()
     try:
         source = read_history(args.input)
         if args.score_template:
-            result = score_template(source)
+            template = batch_score_template if isinstance(source, list) else score_template
+            result = template(source)
         elif args.scores:
             scores = read_scores(args.scores)
             exporter = batch_training_rows if isinstance(source, list) else training_rows
