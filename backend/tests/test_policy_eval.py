@@ -5,6 +5,19 @@ from backend.tools.policy_eval import validate_split
 import pytest
 
 
+def test_non_ascii_model_hash_matches_archived_observations():
+    import hashlib
+    import json
+    from backend.agents.policy_observer import observe_plan
+
+    model = LinUCB(alpha=0)
+    model.score("研究", [1, 0, 0, 1])
+    archived = observe_plan(model, [{"id": "t", "agent": "研究"}], {"t": set()}, ["研究"], 1)
+    evaluated = evaluate(model, [dict(agent="研究", candidates=["研究"], score=1, attempts=1, duration=0)])
+    previous_format = json.dumps(snapshot(model), sort_keys=True, allow_nan=False)
+    assert archived["model_sha256"] == evaluated["model_sha256"] == hashlib.sha256(previous_format.encode()).hexdigest()
+
+
 def test_split_rejects_run_leakage():
     row = dict(agent="a", candidates=["a"], score=1, attempts=1, duration=0,
                run_id="r", task_id="t")

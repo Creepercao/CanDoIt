@@ -1,5 +1,6 @@
 """Versioned JSON snapshots for offline policy experiments."""
 from copy import deepcopy
+import hashlib
 import math
 import json
 from pathlib import Path
@@ -12,6 +13,12 @@ def snapshot(model):
         raise ValueError("unsupported feature dimension")
     return deepcopy({"version": 1, "features": list(FEATURE_NAMES),
                      "alpha": model.alpha, "arms": model.arms})
+
+
+def model_fingerprint(model):
+    """Keep the hash encoding used by archived runtime observations."""
+    payload = json.dumps(snapshot(model), sort_keys=True, ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def restore(data):

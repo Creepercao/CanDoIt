@@ -17,11 +17,11 @@ def evaluate(model, rows):
     from copy import deepcopy
     import hashlib
     import json
-    from backend.agents.policy_store import snapshot
+    from backend.agents.policy_store import model_fingerprint
     def fingerprint(value):
         payload = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    model_hash = fingerprint(snapshot(model))
+    model_hash = model_fingerprint(model)
     model = deepcopy(model)
     observations = samples(rows)
     details = []

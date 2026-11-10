@@ -1,14 +1,12 @@
 """Build advisory comparisons without changing tasks or training the model."""
 from copy import deepcopy
-import hashlib
-import json
 import math
 import asyncio
 import logging
 import os
 
 from backend.agents.policy_context import plan_contexts
-from backend.agents.policy_store import snapshot
+from backend.agents.policy_store import model_fingerprint
 
 
 def observe_plan(model, tasks, dependencies, candidates, budget_fraction):
@@ -20,8 +18,7 @@ def observe_plan(model, tasks, dependencies, candidates, budget_fraction):
     if len(set(ids)) != len(ids) or set(ids) != set(dependencies):
         raise ValueError("unique task IDs matching dependency graph required")
     contexts = plan_contexts(dependencies, budget_fraction)
-    digest = hashlib.sha256(json.dumps(snapshot(model), sort_keys=True,
-                            allow_nan=False).encode("utf-8")).hexdigest()
+    digest = model_fingerprint(model)
     model = deepcopy(model)
     rows = []
     for task in tasks:
