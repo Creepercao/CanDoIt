@@ -74,3 +74,20 @@ python -m backend.tools.policy_observations outputs/runs --scores batch-scores.j
 
 批量导出仅处理评分文件引用的运行，按带时区的开始时间排序。每轮内部沿用初始观察顺序。
 相同任务 ID 可以出现在不同运行中，同一评分对象中的重复键会报错。
+
+批量评分模板可以通过把 `--score-template` 的输入改成归档目录来生成。
+工具只为带有效观察、已结束且存在匹配执行结果的运行生成待填分数。
+
+## 按运行时间留出评估集
+
+用同一个截止点先查看切分统计，再分别导出两组 JSON 数组。
+
+```sh
+python -m backend.tools.policy_split samples.json --cutoff 2026-11-10T08:00:00+08:00
+python -m backend.tools.policy_split samples.json --cutoff 2026-11-10T08:00:00+08:00 --partition training --output before.json
+python -m backend.tools.policy_split samples.json --cutoff 2026-11-10T08:00:00+08:00 --partition evaluation --output after.json
+```
+
+截止前结束的运行进入前段，截止时刻或之后开始的运行进入后段，跨界运行列在统计的
+`excluded_run_ids` 中。每轮的任务留在同一段。切分需要运行 ID 和带时区的起止时间，
+旧样本可从有时间记录的归档重新导出。`policy_split` 只处理样本文件。

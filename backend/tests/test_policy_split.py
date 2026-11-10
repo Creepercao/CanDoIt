@@ -29,3 +29,23 @@ def test_temporal_split_rejects_unverifiable_run_provenance():
         split_by_run_time([original, inconsistent], CUTOFF)
     with pytest.raises(ValueError, match="end time is before start time"):
         split_by_run_time([dict(original, run_ended_at="2026-11-09T23:50:00+00:00")], CUTOFF)
+
+
+def test_split_cli_writes_evaluation_array_without_replacing_a_file(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.tools.policy_split import main
+
+    early = row("early", "1", "2026-11-09T23:55:00+00:00", "2026-11-09T23:59:00+00:00")
+    late = row("late", "1", "2026-11-10T00:00:00+00:00", "2026-11-10T00:01:00+00:00")
+    source, target = tmp_path / "samples.json", tmp_path / "evaluation.json"
+    source.write_text(json.dumps([late, early]), encoding="utf-8")
+    args = ["policy_split", str(source), "--cutoff", CUTOFF]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+    assert json.loads(capsys.readouterr().out)["evaluation_rows"] == 1
+    monkeypatch.setattr("sys.argv", args + ["--partition", "evaluation", "--output", str(target)])
+    main()
+    assert json.loads(target.read_text(encoding="utf-8")) == [late]
+    with pytest.raises(SystemExit):
+        main()
+    assert json.loads(target.read_text(encoding="utf-8")) == [late]

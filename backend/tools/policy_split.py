@@ -41,3 +41,42 @@ def split_by_run_time(rows, cutoff):
         else:
             excluded_run_ids.append(run_id)
     return {"training": training, "evaluation": evaluation, "excluded_run_ids": excluded_run_ids}
+
+
+def main():
+    import argparse
+    import json
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="Labeled samples with run timestamps")
+    parser.add_argument("--cutoff", required=True, help="ISO 8601 timestamp with timezone")
+    parser.add_argument("--partition", choices=("summary", "training", "evaluation"), default="summary")
+    parser.add_argument("--output", type=Path, help="Write JSON to a new file instead of stdout")
+    args = parser.parse_args()
+    try:
+        rows = json.loads(args.input.read_text(encoding="utf-8"))
+        split = split_by_run_time(rows, args.cutoff)
+        if args.partition == "summary":
+            result = {
+                "cutoff": args.cutoff,
+                "training_rows": len(split["training"]),
+                "evaluation_rows": len(split["evaluation"]),
+                "excluded_run_ids": split["excluded_run_ids"],
+            }
+        else:
+            if not split["training"] or not split["evaluation"]:
+                raise ValueError("choose a cutoff leaving samples in both partitions")
+            result = split[args.partition]
+        payload = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2)
+        if args.output:
+            with args.output.open("x", encoding="utf-8") as handle:
+                handle.write(payload)
+        else:
+            print(payload)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    main()
