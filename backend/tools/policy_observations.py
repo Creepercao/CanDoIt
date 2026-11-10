@@ -154,6 +154,9 @@ def training_rows(record, scores):
     executed = _executed_tasks(record, observed)
     if not isinstance(scores, dict) or not scores:
         raise ValueError("non-empty explicit score mapping required")
+    # Older archives can lack a start timestamp. Preserve available provenance
+    # so a later temporal split can verify it without guessing from row order.
+    timing = {f"run_{field}": record[field] for field in ("started_at", "ended_at") if field in record}
     rows = []
     if set(scores) - set(observed):
         raise ValueError("unknown observed task score")
@@ -165,6 +168,7 @@ def training_rows(record, scores):
             raise ValueError("score must reference a terminal outcome matching the observed agent")
         context, task = observed[task_id], executed[task_id]
         rows.append({"run_id": record["run_id"], "task_id": task_id,
+                     **timing,
                      "agent": task["agent"], "attempts": task.get("attempts"),
                      "duration": task.get("duration"), "score": score,
                      **{key: context[key] for key in ("depth", "upstream", "budget_fraction", "candidates")},

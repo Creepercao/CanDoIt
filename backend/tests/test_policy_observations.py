@@ -36,6 +36,8 @@ def test_training_joins_observed_features_and_real_costs():
     assert rows[0]["duration"] == 12
     assert rows[0]["budget_fraction"] == .5
     assert rows[0]["candidates"] == ["a", "b"]
+    assert rows[0]["run_ended_at"] == saved["ended_at"]
+    assert "run_started_at" not in rows[0]
     saved["tasks"][0]["agent"] = "a"
     with pytest.raises(ValueError):
         training_rows(saved, {"t": .8})
@@ -172,6 +174,8 @@ def test_archived_runs_can_be_labeled_and_exported_as_valid_samples(tmp_path, mo
     main()
     rows = json.loads(samples_path.read_text(encoding="utf-8"))
     assert [(row["run_id"], row["task_id"]) for row in rows] == [("z", "t"), ("a", "t")]
+    assert [row["run_started_at"] for row in rows] == [first["started_at"], second["started_at"]]
+    assert all(row["run_ended_at"] == first["ended_at"] for row in rows)
 
     assert [agent for agent, *_ in samples(rows)] == ["b", "b"]
 
