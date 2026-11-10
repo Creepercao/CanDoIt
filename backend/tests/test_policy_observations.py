@@ -142,12 +142,15 @@ def test_duplicate_score_keys_cannot_silently_overwrite_a_label(tmp_path, source
 
 def test_archived_runs_can_be_labeled_and_exported_as_valid_samples(tmp_path, monkeypatch):
     import json
+    from backend.tools.policy_eval import evaluate, validate_split
     from backend.tools.policy_observations import main
     from backend.tools.policy_samples import samples
+    from backend.tools.policy_split import split_by_run_time
 
     history = tmp_path / "history"
     history.mkdir()
-    first = dict(finished_record(), run_id="z", started_at="2026-11-07T22:00:00+00:00")
+    first = dict(finished_record(), run_id="z", started_at="2026-11-07T22:00:00+00:00",
+                 ended_at="2026-11-07T22:59:00+00:00")
     second = dict(finished_record(), run_id="a", started_at="2026-11-07T23:00:00+00:00")
     for run in (first, second):
         (history / f"{run['run_id']}.json").write_text(json.dumps(run), encoding="utf-8")
@@ -175,9 +178,14 @@ def test_archived_runs_can_be_labeled_and_exported_as_valid_samples(tmp_path, mo
     rows = json.loads(samples_path.read_text(encoding="utf-8"))
     assert [(row["run_id"], row["task_id"]) for row in rows] == [("z", "t"), ("a", "t")]
     assert [row["run_started_at"] for row in rows] == [first["started_at"], second["started_at"]]
-    assert all(row["run_ended_at"] == first["ended_at"] for row in rows)
+    assert [row["run_ended_at"] for row in rows] == [first["ended_at"], second["ended_at"]]
 
     assert [agent for agent, *_ in samples(rows)] == ["b", "b"]
+    split = split_by_run_time(rows, second["started_at"])
+    validate_split(split["training"], split["evaluation"])
+    report = evaluate(LinUCB(alpha=0), split["evaluation"])
+    detail, = report["details"]
+    assert (detail["run_id"], detail["task_id"], detail["matched"]) == ("a", "t", False)
 
 
 @pytest.mark.parametrize("field,value", [("version", 99), ("stage", "remediate"),

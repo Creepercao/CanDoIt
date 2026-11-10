@@ -25,10 +25,13 @@ def evaluate(model, rows):
     model = deepcopy(model)
     observations = samples(rows)
     details = []
-    for agent, candidates, x, reward in observations:
+    for row, (agent, candidates, x, reward) in zip(rows, observations):
         suggested = model.recommend(candidates, x)
-        details.append({"logged_agent": agent, "suggested_agent": suggested,
-                        "matched": agent == suggested, "observed_reward": reward})
+        detail = {"logged_agent": agent, "suggested_agent": suggested,
+                  "matched": agent == suggested, "observed_reward": reward}
+        if "run_id" in row:
+            detail.update(run_id=row["run_id"], task_id=row["task_id"])
+        details.append(detail)
     return {"observations": len(details),
             "model_sha256": model_hash, "samples_sha256": fingerprint(rows),
             "agreement": sum(row["matched"] for row in details) / len(details),

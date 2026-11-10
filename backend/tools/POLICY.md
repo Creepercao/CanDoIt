@@ -91,3 +91,7 @@ python -m backend.tools.policy_split samples.json --cutoff 2026-11-10T08:00:00+0
 截止前结束的运行进入前段，截止时刻或之后开始的运行进入后段，跨界运行列在统计的
 `excluded_run_ids` 中。每轮的任务留在同一段。切分需要运行 ID 和带时区的起止时间，
 旧样本可从有时间记录的归档重新导出。`policy_split` 只处理样本文件。
+
+已有模型可用 `policy_eval model.json after.json --training before.json` 做只读评估。
+评估明细带有样本中的 `run_id` 和 `task_id`，可直接回查有分歧的归档任务。
+模型指纹沿用运行归档的编码方式。含非 ASCII Agent 名称的旧离线报告可以重新生成以便对照。
