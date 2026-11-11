@@ -4,6 +4,30 @@ from backend.tools.retrieval_eval import evaluate
 from backend.tools.retrieval_eval import compare
 
 
+def test_explicit_no_answer_labels_do_not_dilute_retrieval_recall():
+    result = evaluate([
+        {"query": "known", "relevant_ids": ["a"], "ranked_ids": ["a"]},
+        {"query": "unknown-empty", "answerable": False, "relevant_ids": [], "ranked_ids": []},
+        {"query": "unknown-returned", "answerable": False, "relevant_ids": [], "ranked_ids": ["x"]},
+    ])
+    assert result["recall@5"] == result["mrr"] == 1
+    assert result["answerable_queries"] == 1
+    assert result["no_answer_empty_rate"] == result["no_answer_retrieval_rate"] == .5
+    assert result["details"][1]["recall"] is None
+
+
+def test_all_no_answer_corpus_has_undefined_recall():
+    result = evaluate([{"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": []}])
+    assert result["recall@5"] is result["mrr"] is None
+    assert result["no_answer_empty_rate"] == 1
+
+
+@pytest.mark.parametrize("answerable,ids", [(False, ["a"]), (True, []), ("false", []), (0, [])])
+def test_invalid_answerability_contract_rejected(answerable, ids):
+    with pytest.raises(ValueError):
+        evaluate([{"query": "q", "answerable": answerable, "relevant_ids": ids, "ranked_ids": []}])
+
+
 def test_compare_scores_and_rejects_different_labels():
     before = [{"query": "a", "relevant_ids": ["a"], "ranked_ids": []}]
     after = [{"query": "a", "relevant_ids": ["a"], "ranked_ids": ["a"]}]

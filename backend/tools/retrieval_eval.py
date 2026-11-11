@@ -26,20 +26,29 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
             ):
                 raise ValueError(f"{key} must be a list of non-empty string IDs")
         relevant = set(row["relevant_ids"])
-        if not relevant:
-            raise ValueError("each query needs at least one relevant ID")
+        answerable = row.get("answerable", True)
+        if type(answerable) is not bool or answerable != bool(relevant):
+            raise ValueError("answerable queries need relevant IDs; no-answer queries need answerable=false and no relevant IDs")
         ranked = list(dict.fromkeys(row["ranked_ids"]))
-        recall = len(relevant.intersection(ranked[:k])) / len(relevant)
+        recall = len(relevant.intersection(ranked[:k])) / len(relevant) if answerable else None
         reciprocal_rank = next(
             (1 / rank for rank, item in enumerate(ranked, 1) if item in relevant), 0.0
         )
-        details.append({"query": row["query"], "recall": recall,
+        details.append({"query": row["query"], "answerable": answerable, "recall": recall,
                         "hit": bool(relevant.intersection(ranked[:k])),
-                        "reciprocal_rank": reciprocal_rank})
+                        "retrieved_count": len(ranked),
+                        "reciprocal_rank": reciprocal_rank if answerable else None})
+    supported = [item for item in details if item["answerable"]]
+    unsupported = [item for item in details if not item["answerable"]]
+    empty_rate = (sum(item["retrieved_count"] == 0 for item in unsupported) / len(unsupported)
+                  if unsupported else None)
     return {"queries": len(details), "k": k,
-            f"hit_rate@{k}": sum(item["hit"] for item in details) / len(details),
-            f"recall@{k}": sum(item["recall"] for item in details) / len(details),
-            "mrr": sum(item["reciprocal_rank"] for item in details) / len(details),
+            "answerable_queries": len(supported), "no_answer_queries": len(unsupported),
+            "no_answer_empty_rate": empty_rate,
+            "no_answer_retrieval_rate": 1 - empty_rate if empty_rate is not None else None,
+            f"hit_rate@{k}": sum(item["hit"] for item in supported) / len(supported) if supported else None,
+            f"recall@{k}": sum(item["recall"] for item in supported) / len(supported) if supported else None,
+            "mrr": sum(item["reciprocal_rank"] for item in supported) / len(supported) if supported else None,
             "details": details}
 
 
