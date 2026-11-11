@@ -83,6 +83,41 @@ def test_comparison_cli(tmp_path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["delta"]["mrr"] == 0
 
 
+def test_cli_saves_utf8_report_and_preserves_existing_output(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.tools.retrieval_eval import main
+
+    source = tmp_path / "rankings.json"
+    output = tmp_path / "report.json"
+    source.write_text(json.dumps([
+        {"query": "没有收录的商品", "answerable": False, "relevant_ids": [], "ranked_ids": []}
+    ]), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["retrieval_eval", str(source), "--output", str(output)])
+    main()
+    saved = output.read_text(encoding="utf-8")
+    assert "没有收录的商品" in saved
+    assert json.loads(saved) == json.loads(capsys.readouterr().out)
+    assert json.loads(saved)["mrr"] is None
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert output.read_text(encoding="utf-8") == saved
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_invalid_labels_do_not_create_report(tmp_path, monkeypatch):
+    from backend.tools.retrieval_eval import main
+
+    source = tmp_path / "bad.json"
+    output = tmp_path / "report.json"
+    source.write_text('[{"query":"q","relevant_ids":[],"ranked_ids":[]}]', encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["retrieval_eval", str(source), "--output", str(output)])
+    with pytest.raises(SystemExit):
+        main()
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("rows,k", [("bad", 5), ([None], 5), ([{}], 1.5), ([{}], True)])
 def test_public_api_rejects_wrong_types(rows, k):
     with pytest.raises(ValueError):
