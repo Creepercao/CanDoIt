@@ -16,12 +16,14 @@ from backend.tools.retrieval_eval import evaluate
 async def export_rankings(labels, search, depth=20, threshold=0.3):
     if type(depth) is not int or depth < 1 or depth > 200:
         raise ValueError("depth must be between 1 and 200")
-    if not math.isfinite(threshold) or not -1 <= threshold <= 1:
+    if type(threshold) not in (int, float) or not math.isfinite(threshold) or not -1 <= threshold <= 1:
         raise ValueError("threshold must be finite and between -1 and 1")
     if not isinstance(labels, list) or any(not isinstance(row, dict) for row in labels):
         raise ValueError("labels must be an array of objects")
     rows = [{"query": row.get("query"), "relevant_ids": row.get("relevant_ids"),
-             "ranked_ids": []} for row in labels]
+             "ranked_ids": [],
+             **({"answerable": row["answerable"]} if "answerable" in row else {})}
+            for row in labels]
     evaluate(rows)  # Validate the entire corpus before making any API calls.
     for row in rows:
         results = await search(row["query"], top_k=depth, threshold=threshold)
