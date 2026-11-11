@@ -22,6 +22,20 @@ def test_all_no_answer_corpus_has_undefined_recall():
     assert result["no_answer_empty_rate"] == 1
 
 
+def test_compare_no_answer_metrics_and_null_denominators():
+    baseline = [{"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": ["x"]}]
+    candidate = [{**baseline[0], "ranked_ids": []}]
+    result = compare(baseline, candidate)
+    assert result["delta"]["mrr"] is None
+    assert result["delta"]["no_answer_empty_rate"] == 1
+    assert result["delta"]["no_answer_retrieval_rate"] == -1
+
+
+def test_compare_legacy_labels_match_explicit_answerable_true():
+    baseline = [{"query": "known", "relevant_ids": ["a"], "ranked_ids": ["a"]}]
+    assert compare(baseline, [{**baseline[0], "answerable": True}])["delta"]["recall@5"] == 0
+
+
 @pytest.mark.parametrize("answerable,ids", [(False, ["a"]), (True, []), ("false", []), (0, [])])
 def test_invalid_answerability_contract_rejected(answerable, ids):
     with pytest.raises(ValueError):

@@ -62,9 +62,10 @@ def compare(baseline, candidate, k=5):
         return result
     if labels(baseline) != labels(candidate):
         raise ValueError("comparison requires identical queries and relevance labels")
+    metrics = (f"recall@{k}", f"hit_rate@{k}", "mrr", "no_answer_empty_rate", "no_answer_retrieval_rate")
     return {"baseline": before, "candidate": after,
-            "delta": {key: after[key] - before[key]
-                      for key in (f"recall@{k}", f"hit_rate@{k}", "mrr")}}
+            "delta": {key: after[key] - before[key] if before[key] is not None and after[key] is not None else None
+                      for key in metrics}}
 
 
 def main():
