@@ -36,6 +36,25 @@ def test_compare_legacy_labels_match_explicit_answerable_true():
     assert compare(baseline, [{**baseline[0], "answerable": True}])["delta"]["recall@5"] == 0
 
 
+def test_query_changes_align_reordered_queries_and_expose_metric_tradeoffs():
+    baseline = [
+        {"query": "known", "relevant_ids": ["a", "b"], "ranked_ids": ["a"]},
+        {"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": ["x"]},
+    ]
+    candidate = [{**baseline[1], "ranked_ids": []},
+                 {**baseline[0], "ranked_ids": ["x", "a", "b"]}]
+    changes = compare(baseline, candidate, k=3)["query_changes"]
+    assert changes == [
+        {"query": "known", "answerable": True, "recall_delta": .5, "hit_delta": 0,
+         "reciprocal_rank_delta": -.5, "empty_retrieval_delta": None},
+        {"query": "unknown", "answerable": False, "recall_delta": None, "hit_delta": None,
+         "reciprocal_rank_delta": None, "empty_retrieval_delta": 1},
+    ]
+    unchanged = compare(baseline, baseline, k=3)["query_changes"]
+    assert unchanged[0]["recall_delta"] == unchanged[0]["reciprocal_rank_delta"] == 0
+    assert unchanged[1]["empty_retrieval_delta"] == 0
+
+
 @pytest.mark.parametrize("answerable,ids", [(False, ["a"]), (True, []), ("false", []), (0, [])])
 def test_invalid_answerability_contract_rejected(answerable, ids):
     with pytest.raises(ValueError):

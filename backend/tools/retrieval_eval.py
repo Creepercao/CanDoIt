@@ -63,7 +63,22 @@ def compare(baseline, candidate, k=5):
     if labels(baseline) != labels(candidate):
         raise ValueError("comparison requires identical queries and relevance labels")
     metrics = (f"recall@{k}", f"hit_rate@{k}", "mrr", "no_answer_empty_rate", "no_answer_retrieval_rate")
+    candidate_details = {item["query"]: item for item in after["details"]}
+    query_changes = []
+    for old in before["details"]:
+        new = candidate_details[old["query"]]
+        answerable = old["answerable"]
+        query_changes.append({
+            "query": old["query"], "answerable": answerable,
+            "recall_delta": new["recall"] - old["recall"] if answerable else None,
+            "hit_delta": int(new["hit"]) - int(old["hit"]) if answerable else None,
+            "reciprocal_rank_delta": (new["reciprocal_rank"] - old["reciprocal_rank"]
+                                      if answerable else None),
+            "empty_retrieval_delta": (int(new["retrieved_count"] == 0) - int(old["retrieved_count"] == 0)
+                                      if not answerable else None),
+        })
     return {"baseline": before, "candidate": after,
+            "query_changes": query_changes,
             "delta": {key: after[key] - before[key] if before[key] is not None and after[key] is not None else None
                       for key in metrics}}
 
