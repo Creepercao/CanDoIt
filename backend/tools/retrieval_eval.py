@@ -25,6 +25,22 @@ def _aggregate(details, k):
             "mrr": sum(item["reciprocal_rank"] for item in supported) / len(supported) if supported else None}
 
 
+def _summarize_changes(changes, k):
+    fields = {f"recall@{k}": "recall_delta", f"hit_rate@{k}": "hit_delta",
+              f"mrr@{k}": "reciprocal_rank_at_k_delta", "mrr": "reciprocal_rank_delta",
+              "no_answer_empty_rate": "empty_retrieval_delta"}
+    summary = {}
+    for metric, field in fields.items():
+        applicable = [change for change in changes if change[field] is not None]
+        summary[metric] = {
+            "compared_queries": len(applicable),
+            "improved": [change["query"] for change in applicable if change[field] > 0],
+            "regressed": [change["query"] for change in applicable if change[field] < 0],
+            "unchanged": [change["query"] for change in applicable if change[field] == 0],
+        }
+    return summary
+
+
 def evaluate(rows: list[dict], k: int = 5) -> dict:
     """Macro recall@k, MRR@k and MRR over the complete supplied rankings.
 
@@ -99,6 +115,7 @@ def compare(baseline, candidate, k=5):
         })
     return {"baseline": before, "candidate": after,
             "query_changes": query_changes,
+            "change_summary": _summarize_changes(query_changes, k),
             "slices": {tag: {"baseline": before["slices"][tag], "candidate": after["slices"][tag],
                              "delta": deltas(before["slices"][tag], after["slices"][tag])}
                        for tag in before["slices"]},

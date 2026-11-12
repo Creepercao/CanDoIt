@@ -187,6 +187,34 @@ def test_invalid_slice_tags_rejected(tags):
         evaluate([{"query": "q", "relevant_ids": ["a"], "ranked_ids": [], "tags": tags}])
 
 
+def test_change_summary_exposes_tradeoffs_without_combining_unrelated_metrics():
+    baseline = [
+        {"query": "召回更多但首条后移", "relevant_ids": ["a", "b"], "ranked_ids": ["a"]},
+        {"query": "从命中变漏检", "relevant_ids": ["a"], "ranked_ids": ["a"]},
+        {"query": "不变", "relevant_ids": ["a"], "ranked_ids": []},
+        {"query": "无答案改善", "answerable": False, "relevant_ids": [], "ranked_ids": ["x"]},
+    ]
+    candidate = [{**baseline[3], "ranked_ids": []}, baseline[2],
+                 {**baseline[1], "ranked_ids": []},
+                 {**baseline[0], "ranked_ids": ["x", "a", "b"]}]
+    result = compare(baseline, candidate, k=3)["change_summary"]
+    assert result["recall@3"] == {
+        "compared_queries": 3, "improved": ["召回更多但首条后移"],
+        "regressed": ["从命中变漏检"], "unchanged": ["不变"],
+    }
+    assert result["mrr"]["regressed"] == ["召回更多但首条后移", "从命中变漏检"]
+    assert result["no_answer_empty_rate"] == {
+        "compared_queries": 1, "improved": ["无答案改善"], "regressed": [], "unchanged": [],
+    }
+
+
+def test_summary_does_not_count_undefined_metrics_as_unchanged():
+    rows = [{"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": []}]
+    summary = compare(rows, rows)["change_summary"]
+    assert summary["mrr"] == {"compared_queries": 0, "improved": [], "regressed": [], "unchanged": []}
+    assert summary["no_answer_empty_rate"]["unchanged"] == ["unknown"]
+
+
 def test_hit_rate_differs_from_recall_for_multiple_labels():
     result = evaluate([{"query": "a", "relevant_ids": ["a", "b"],
                         "ranked_ids": ["a"]}])
