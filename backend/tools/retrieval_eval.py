@@ -127,7 +127,8 @@ def main():
     parser.add_argument("input", type=Path, help="UTF-8 JSON array of labeled rankings")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="Compare against saved baseline rankings")
-    parser.add_argument("--output", type=Path, help="Also save the JSON report; path must not exist")
+    parser.add_argument("--output", type=Path, help="Also save the report; path must not exist")
+    parser.add_argument("--format", choices=("json", "markdown"), default="json", help="Report format for stdout and --output")
     parser.add_argument("--gates", type=Path, help="JSON quality rules; requires --baseline; failed gates exit 1")
     args = parser.parse_args()
     if args.gates and not args.baseline:
@@ -145,7 +146,12 @@ def main():
 
             rules = json.loads(args.gates.read_text(encoding="utf-8"))
             result["gate_result"] = check_gates(result, rules)
-        report = json.dumps(result, ensure_ascii=False, indent=2)
+        if args.format == "markdown":
+            from backend.tools.retrieval_report import render_markdown
+
+            report = render_markdown(result).rstrip("\n")
+        else:
+            report = json.dumps(result, ensure_ascii=False, indent=2)
         if args.output:
             with args.output.open("x", encoding="utf-8") as handle:
                 handle.write(report + "\n")
