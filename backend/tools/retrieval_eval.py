@@ -128,7 +128,10 @@ def main():
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="Compare against saved baseline rankings")
     parser.add_argument("--output", type=Path, help="Also save the JSON report; path must not exist")
+    parser.add_argument("--gates", type=Path, help="JSON quality rules; requires --baseline; failed gates exit 1")
     args = parser.parse_args()
+    if args.gates and not args.baseline:
+        parser.error("--gates requires --baseline")
     try:
         rows = json.loads(args.input.read_text(encoding="utf-8"))
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
@@ -137,6 +140,11 @@ def main():
         if args.baseline:
             baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
             result = compare(baseline, rows, args.k)
+        if args.gates:
+            from backend.tools.retrieval_gates import check_gates
+
+            rules = json.loads(args.gates.read_text(encoding="utf-8"))
+            result["gate_result"] = check_gates(result, rules)
         report = json.dumps(result, ensure_ascii=False, indent=2)
         if args.output:
             with args.output.open("x", encoding="utf-8") as handle:
@@ -144,6 +152,8 @@ def main():
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     print(report)
+    if args.gates and not result["gate_result"]["passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
