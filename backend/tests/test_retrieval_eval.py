@@ -161,6 +161,32 @@ def test_cutoff_mrr_no_answer_and_miss_denominators():
     assert result["details"][0]["reciprocal_rank_at_k"] is None
 
 
+def test_overlapping_slices_have_separate_denominators_and_stable_comparison():
+    rows = [
+        {"query": "退款", "relevant_ids": ["a"], "ranked_ids": ["a"], "tags": ["售后", "售后", "多意图"]},
+        {"query": "未收录", "answerable": False, "relevant_ids": [], "ranked_ids": ["x"], "tags": ["售后"]},
+        {"query": "未分组", "relevant_ids": ["a"], "ranked_ids": []},
+    ]
+    result = evaluate(rows)
+    assert result["queries"] == 3
+    assert result["recall@5"] == .5
+    assert result["slices"]["售后"]["queries"] == 2
+    assert result["slices"]["售后"]["recall@5"] == 1
+    assert result["slices"]["售后"]["no_answer_empty_rate"] == 0
+    assert result["slices"]["多意图"]["queries"] == 1
+    assert result["slices"]["多意图"]["no_answer_empty_rate"] is None
+    candidate = [rows[2], {**rows[1], "ranked_ids": []}, {**rows[0], "tags": ["多意图", "售后"]}]
+    assert compare(rows, candidate)["slices"]["售后"]["delta"]["no_answer_empty_rate"] == 1
+    with pytest.raises(ValueError, match="tags"):
+        compare(rows, [*rows[:2], {**rows[2], "tags": ["新增"]}])
+
+
+@pytest.mark.parametrize("tags", [None, "售后", [""], [3], ["   "]])
+def test_invalid_slice_tags_rejected(tags):
+    with pytest.raises(ValueError, match="tags"):
+        evaluate([{"query": "q", "relevant_ids": ["a"], "ranked_ids": [], "tags": tags}])
+
+
 def test_hit_rate_differs_from_recall_for_multiple_labels():
     result = evaluate([{"query": "a", "relevant_ids": ["a", "b"],
                         "ranked_ids": ["a"]}])

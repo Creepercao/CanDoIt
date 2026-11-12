@@ -22,7 +22,7 @@ async def export_rankings(labels, search, depth=20, threshold=0.3):
         raise ValueError("labels must be an array of objects")
     rows = [{"query": row.get("query"), "relevant_ids": row.get("relevant_ids"),
              "ranked_ids": [],
-             **({"answerable": row["answerable"]} if "answerable" in row else {})}
+             **({key: row[key] for key in ("answerable", "tags") if key in row})}
             for row in labels]
     evaluate(rows)  # Validate the entire corpus before making any API calls.
     for row in rows:

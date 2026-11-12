@@ -5,6 +5,26 @@ import json
 from pathlib import Path
 
 
+def metric_names(k):
+    return (f"recall@{k}", f"hit_rate@{k}", f"mrr@{k}", "mrr",
+            "no_answer_empty_rate", "no_answer_retrieval_rate")
+
+
+def _aggregate(details, k):
+    supported = [item for item in details if item["answerable"]]
+    unsupported = [item for item in details if not item["answerable"]]
+    empty_rate = (sum(item["retrieved_count"] == 0 for item in unsupported) / len(unsupported)
+                  if unsupported else None)
+    return {"queries": len(details), "k": k,
+            "answerable_queries": len(supported), "no_answer_queries": len(unsupported),
+            "no_answer_empty_rate": empty_rate,
+            "no_answer_retrieval_rate": 1 - empty_rate if empty_rate is not None else None,
+            f"hit_rate@{k}": sum(item["hit"] for item in supported) / len(supported) if supported else None,
+            f"recall@{k}": sum(item["recall"] for item in supported) / len(supported) if supported else None,
+            f"mrr@{k}": sum(item["reciprocal_rank_at_k"] for item in supported) / len(supported) if supported else None,
+            "mrr": sum(item["reciprocal_rank"] for item in supported) / len(supported) if supported else None}
+
+
 def evaluate(rows: list[dict], k: int = 5) -> dict:
     """Macro recall@k, MRR@k and MRR over the complete supplied rankings.
 
@@ -19,6 +39,9 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
     for row in rows:
         if not isinstance(row.get("query"), str) or not row["query"].strip():
             raise ValueError("each row needs a non-empty query")
+        tags = row.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) or not tag.strip() for tag in tags):
+            raise ValueError("tags must be a list of non-empty strings")
         for key in ("relevant_ids", "ranked_ids"):
             values = row.get(key)
             if not isinstance(values, list) or any(
@@ -34,37 +57,30 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
         reciprocal_rank = next(
             (1 / rank for rank, item in enumerate(ranked, 1) if item in relevant), 0.0
         )
-        details.append({"query": row["query"], "answerable": answerable, "recall": recall,
+        details.append({"query": row["query"], "tags": sorted(set(tags)), "answerable": answerable, "recall": recall,
                         "hit": bool(relevant.intersection(ranked[:k])),
                         "retrieved_count": len(ranked),
                         "reciprocal_rank_at_k": reciprocal_rank if answerable and reciprocal_rank >= 1 / k else (0.0 if answerable else None),
                         "reciprocal_rank": reciprocal_rank if answerable else None})
-    supported = [item for item in details if item["answerable"]]
-    unsupported = [item for item in details if not item["answerable"]]
-    empty_rate = (sum(item["retrieved_count"] == 0 for item in unsupported) / len(unsupported)
-                  if unsupported else None)
-    return {"queries": len(details), "k": k,
-            "answerable_queries": len(supported), "no_answer_queries": len(unsupported),
-            "no_answer_empty_rate": empty_rate,
-            "no_answer_retrieval_rate": 1 - empty_rate if empty_rate is not None else None,
-            f"hit_rate@{k}": sum(item["hit"] for item in supported) / len(supported) if supported else None,
-            f"recall@{k}": sum(item["recall"] for item in supported) / len(supported) if supported else None,
-            f"mrr@{k}": sum(item["reciprocal_rank_at_k"] for item in supported) / len(supported) if supported else None,
-            "mrr": sum(item["reciprocal_rank"] for item in supported) / len(supported) if supported else None,
-            "details": details}
+    slices = {tag: _aggregate([item for item in details if tag in item["tags"]], k)
+              for tag in sorted({tag for item in details for tag in item["tags"]})}
+    return {**_aggregate(details, k), "details": details, "slices": slices}
 
 
 def compare(baseline, candidate, k=5):
     """Compare identical labeled query sets, regardless of row order."""
     before, after = evaluate(baseline, k), evaluate(candidate, k)
     def labels(rows):
-        result = {row["query"]: set(row["relevant_ids"]) for row in rows}
+        result = {row["query"]: (set(row["relevant_ids"]), set(row.get("tags", []))) for row in rows}
         if len(result) != len(rows):
             raise ValueError("comparison requires unique queries")
         return result
     if labels(baseline) != labels(candidate):
-        raise ValueError("comparison requires identical queries and relevance labels")
-    metrics = (f"recall@{k}", f"hit_rate@{k}", f"mrr@{k}", "mrr", "no_answer_empty_rate", "no_answer_retrieval_rate")
+        raise ValueError("comparison requires identical queries, relevance labels and tags")
+    metrics = metric_names(k)
+    def deltas(old, new):
+        return {key: new[key] - old[key] if old[key] is not None and new[key] is not None else None
+                for key in metrics}
     candidate_details = {item["query"]: item for item in after["details"]}
     query_changes = []
     for old in before["details"]:
@@ -83,8 +99,10 @@ def compare(baseline, candidate, k=5):
         })
     return {"baseline": before, "candidate": after,
             "query_changes": query_changes,
-            "delta": {key: after[key] - before[key] if before[key] is not None and after[key] is not None else None
-                      for key in metrics}}
+            "slices": {tag: {"baseline": before["slices"][tag], "candidate": after["slices"][tag],
+                             "delta": deltas(before["slices"][tag], after["slices"][tag])}
+                       for tag in before["slices"]},
+            "delta": deltas(before, after)}
 
 
 def main():

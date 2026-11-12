@@ -56,6 +56,23 @@ def test_export_no_answer_labels_and_reject_invalid_corpus_before_search():
     assert calls == []
 
 
+def test_export_preserves_business_tags_and_validates_them_before_search():
+    calls = []
+
+    async def search(query, **kwargs):
+        calls.append(query)
+        return [{"id": "a"}]
+
+    labels = [{"query": "q", "relevant_ids": ["a"], "tags": ["售后", "长尾"]}]
+    rows = asyncio.run(export_rankings(labels, search))
+    assert rows[0]["tags"] == labels[0]["tags"]
+    assert evaluate(rows)["slices"]["长尾"]["mrr"] == 1
+    calls.clear()
+    with pytest.raises(ValueError, match="tags"):
+        asyncio.run(export_rankings([labels[0], {**labels[0], "tags": "售后"}], search))
+    assert calls == []
+
+
 def test_export_and_compare_cli_file_workflow(tmp_path, monkeypatch, capsys):
     import json
     import sys
