@@ -1,0 +1,5 @@
+[
+  {"metric": "recall@5", "min_delta": 0},
+  {"metric": "no_answer_empty_rate", "min_value": 1},
+  {"metric": "mrr@5", "slice": "多意图", "min_delta": 0}
+]

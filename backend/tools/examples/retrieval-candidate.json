@@ -1,0 +1,5 @@
+[
+  {"query": "退款入口在哪里", "relevant_ids": ["demo-refund"], "ranked_ids": ["demo-refund"], "tags": ["售后"]},
+  {"query": "产品质量不好，能退吗", "relevant_ids": ["demo-complaint", "demo-refund"], "ranked_ids": ["demo-shipping", "demo-complaint", "demo-refund"], "tags": ["售后", "多意图"]},
+  {"query": "未收录的其他平台政策", "answerable": false, "relevant_ids": [], "ranked_ids": [], "tags": ["无答案"]}
+]

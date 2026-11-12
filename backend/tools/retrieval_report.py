@@ -40,6 +40,12 @@ def render_markdown(result):
         return _table(["指标", "得分"], [(key, scope[key]) for key in metrics])
 
     lines += ["## 整体指标", "", *metric_table(result)]
+    if "inputs" in result:
+        lines += ["## 输入文件指纹", "",
+                  "指纹对应实际读取的文件字节，用于核对标注排名与验收规则；不代表知识库快照或模型配置。", ""]
+        lines += _table(["用途", "路径", "SHA-256", "字节数"],
+                        [(role, item["path"], item["sha256"], item["bytes"])
+                         for role, item in result["inputs"].items()])
     for tag, scope in result.get("slices", {}).items():
         counts = scope["candidate"] if comparison else scope
         lines += ["## 业务分组：" + _cell(tag), "",

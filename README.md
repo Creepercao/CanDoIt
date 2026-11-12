@@ -613,6 +613,11 @@ CanDoIt/
 python -m pytest backend/tests -q
 ```
 
+检索评估可独立读取本地排名 JSON，支持 MRR@K、业务标签分组、基线退步题汇总、
+验收门槛与 JSON/Markdown 报告，运行时不加载模型或训练。
+操作步骤及可直接运行的离线演示见 [检索评估说明](backend/tools/RETRIEVAL.md)。
+排名导出工具会调用实际知识库和 embedding 服务，与离线评分分开运行。
+
 ## Skill 技能系统
 
 Skill 是自包含的插件模块，支持两种形式：
