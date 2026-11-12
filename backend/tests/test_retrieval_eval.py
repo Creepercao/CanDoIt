@@ -46,9 +46,9 @@ def test_query_changes_align_reordered_queries_and_expose_metric_tradeoffs():
     changes = compare(baseline, candidate, k=3)["query_changes"]
     assert changes == [
         {"query": "known", "answerable": True, "recall_delta": .5, "hit_delta": 0,
-         "reciprocal_rank_delta": -.5, "empty_retrieval_delta": None},
+         "reciprocal_rank_delta": -.5, "reciprocal_rank_at_k_delta": -.5, "empty_retrieval_delta": None},
         {"query": "unknown", "answerable": False, "recall_delta": None, "hit_delta": None,
-         "reciprocal_rank_delta": None, "empty_retrieval_delta": 1},
+         "reciprocal_rank_delta": None, "reciprocal_rank_at_k_delta": None, "empty_retrieval_delta": 1},
     ]
     unchanged = compare(baseline, baseline, k=3)["query_changes"]
     assert unchanged[0]["recall_delta"] == unchanged[0]["reciprocal_rank_delta"] == 0
@@ -140,6 +140,25 @@ def test_mrr_uses_full_ranking():
     assert result["recall@1"] == 0
     assert result["mrr"] == 0.5
     assert result["hit_rate@1"] == 0
+    assert result["mrr@1"] == 0
+
+
+def test_cutoff_mrr_counts_boundary_after_deduplication_and_compares():
+    rows = [{"query": "q", "relevant_ids": ["a"], "ranked_ids": ["x", "x", "a"]}]
+    result = evaluate(rows, k=2)
+    assert result["mrr@2"] == .5
+    assert result["details"][0]["reciprocal_rank_at_k"] == .5
+    comparison = compare(rows, [{**rows[0], "ranked_ids": ["x", "y", "a"]}], k=2)
+    assert comparison["delta"]["mrr@2"] == -.5
+    assert comparison["query_changes"][0]["reciprocal_rank_at_k_delta"] == -.5
+
+
+def test_cutoff_mrr_no_answer_and_miss_denominators():
+    unsupported = {"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": []}
+    assert evaluate([unsupported])["mrr@5"] is None
+    result = evaluate([unsupported, {"query": "known", "relevant_ids": ["a"], "ranked_ids": []}])
+    assert result["mrr@5"] == 0
+    assert result["details"][0]["reciprocal_rank_at_k"] is None
 
 
 def test_hit_rate_differs_from_recall_for_multiple_labels():

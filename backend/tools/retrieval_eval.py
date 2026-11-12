@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def evaluate(rows: list[dict], k: int = 5) -> dict:
-    """Macro recall@k and MRR over the complete supplied rankings.
+    """Macro recall@k, MRR@k and MRR over the complete supplied rankings.
 
     Each row contains query, relevant_ids and ranked_ids (best first).
     Duplicate retrieved IDs count once and do not consume extra ranks.
@@ -37,6 +37,7 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
         details.append({"query": row["query"], "answerable": answerable, "recall": recall,
                         "hit": bool(relevant.intersection(ranked[:k])),
                         "retrieved_count": len(ranked),
+                        "reciprocal_rank_at_k": reciprocal_rank if answerable and reciprocal_rank >= 1 / k else (0.0 if answerable else None),
                         "reciprocal_rank": reciprocal_rank if answerable else None})
     supported = [item for item in details if item["answerable"]]
     unsupported = [item for item in details if not item["answerable"]]
@@ -48,6 +49,7 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
             "no_answer_retrieval_rate": 1 - empty_rate if empty_rate is not None else None,
             f"hit_rate@{k}": sum(item["hit"] for item in supported) / len(supported) if supported else None,
             f"recall@{k}": sum(item["recall"] for item in supported) / len(supported) if supported else None,
+            f"mrr@{k}": sum(item["reciprocal_rank_at_k"] for item in supported) / len(supported) if supported else None,
             "mrr": sum(item["reciprocal_rank"] for item in supported) / len(supported) if supported else None,
             "details": details}
 
@@ -62,7 +64,7 @@ def compare(baseline, candidate, k=5):
         return result
     if labels(baseline) != labels(candidate):
         raise ValueError("comparison requires identical queries and relevance labels")
-    metrics = (f"recall@{k}", f"hit_rate@{k}", "mrr", "no_answer_empty_rate", "no_answer_retrieval_rate")
+    metrics = (f"recall@{k}", f"hit_rate@{k}", f"mrr@{k}", "mrr", "no_answer_empty_rate", "no_answer_retrieval_rate")
     candidate_details = {item["query"]: item for item in after["details"]}
     query_changes = []
     for old in before["details"]:
@@ -74,6 +76,8 @@ def compare(baseline, candidate, k=5):
             "hit_delta": int(new["hit"]) - int(old["hit"]) if answerable else None,
             "reciprocal_rank_delta": (new["reciprocal_rank"] - old["reciprocal_rank"]
                                       if answerable else None),
+            "reciprocal_rank_at_k_delta": (new["reciprocal_rank_at_k"] - old["reciprocal_rank_at_k"]
+                                           if answerable else None),
             "empty_retrieval_delta": (int(new["retrieved_count"] == 0) - int(old["retrieved_count"] == 0)
                                       if not answerable else None),
         })
