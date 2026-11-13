@@ -78,4 +78,9 @@ def render_markdown(result):
                           "；".join(item["tags"]), item["retrieved_count"], item["recall"],
                           item["reciprocal_rank_at_k"], item["reciprocal_rank"])
                          for item in result["details"]])
+    lines += ["## 命中与漏检定位", "", "命中和漏检均按前 K 个去重结果计算；排名保留完整输入深度。", ""]
+    lines += _table(["问题", "相关ID", "前K命中ID", "前K漏检ID", "完整排名"],
+                    [(item["query"], "；".join(item["relevant_ids"]), "；".join(item["hit_ids"]),
+                      "；".join(item["missed_ids"]), "；".join(item["ranked_ids"]))
+                     for item in score["details"]])
     return "\n".join(lines)

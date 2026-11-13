@@ -83,6 +83,9 @@ def evaluate(rows: list[dict], k: int = 5) -> dict:
             (1 / rank for rank, item in enumerate(ranked, 1) if item in relevant), 0.0
         )
         details.append({"query": row["query"], "tags": sorted(set(tags)), "answerable": answerable, "recall": recall,
+                        "relevant_ids": sorted(relevant), "ranked_ids": ranked,
+                        "hit_ids": [item for item in ranked[:k] if item in relevant],
+                        "missed_ids": sorted(relevant.difference(ranked[:k])),
                         "hit": bool(relevant.intersection(ranked[:k])),
                         "retrieved_count": len(ranked),
                         "reciprocal_rank_at_k": reciprocal_rank if answerable and reciprocal_rank >= 1 / k else (0.0 if answerable else None),
