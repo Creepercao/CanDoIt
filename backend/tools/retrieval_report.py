@@ -54,8 +54,9 @@ def render_markdown(result):
     if "gate_result" in result:
         gates = result["gate_result"]
         lines += ["## 验收门槛", "", "结果：" + ("通过" if gates["passed"] else "未通过"), ""]
-        lines += _table(["指标", "范围", "最低样本量", "实际样本量", "最低候选分", "最低增量", "候选分", "实际增量", "结果", "原因"],
-                        [(check["metric"], check.get("slice", "整体"), check.get("min_queries"), check["sample_count"], check.get("min_value"),
+        lines += _table(["指标", "范围", "最低样本量", "实际样本量", "最高退步比例", "实际退步比例", "最低候选分", "最低增量", "候选分", "实际增量", "结果", "原因"],
+                        [(check["metric"], check.get("slice", "整体"), check.get("min_queries"), check["sample_count"],
+                          check.get("max_regression_rate"), check["regression_rate"], check.get("min_value"),
                           check.get("min_delta"), check["candidate"], check["delta"],
                           "通过" if check["passed"] else "未通过", check["reason"])
                          for check in gates["checks"]])

@@ -49,6 +49,30 @@ def test_minimum_sample_count_rejects_invalid_types(value):
         check_gates(comparison(), [{"metric": "mrr", "min_queries": value}])
 
 
+def test_regression_gate_catches_losses_hidden_by_average_and_filters_slices():
+    before = [{"query": "loser", "relevant_ids": ["a"], "ranked_ids": ["a"], "tags": ["关键"]},
+              {"query": "winner", "relevant_ids": ["a"], "ranked_ids": []},
+              {"query": "unknown", "answerable": False, "relevant_ids": [], "ranked_ids": []}]
+    after = [{**before[0], "ranked_ids": []}, {**before[1], "ranked_ids": ["a"]}, before[2]]
+    result = compare(before, after)
+    assert result["delta"]["mrr"] == 0
+    checks = check_gates(result, [{"metric": "mrr", "min_delta": 0, "max_regression_rate": 0},
+                                  {"metric": "mrr", "max_regression_rate": .5},
+                                  {"metric": "mrr", "slice": "关键", "max_regression_rate": .5}])["checks"]
+    assert checks[0]["reason"] == "excessive_regressions"
+    assert checks[0]["regressed_queries"] == 1
+    assert checks[0]["regression_rate"] == .5
+    assert checks[1]["passed"] is True
+    assert checks[2]["regression_rate"] == 1
+    assert checks[2]["passed"] is False
+
+
+@pytest.mark.parametrize("value", [True, -1, 2, float("nan"), "0", None])
+def test_invalid_regression_limits_rejected(value):
+    with pytest.raises(ValueError):
+        check_gates(comparison(), [{"metric": "mrr", "max_regression_rate": value}])
+
+
 @pytest.mark.parametrize("rules", [[], {}, [None],
     [{"metric": "mrr"}], [{"metric": "mrr", "min_delta": True}],
     [{"metric": "mrr", "min_value": float("nan")}],
