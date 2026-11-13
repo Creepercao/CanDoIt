@@ -73,6 +73,48 @@ def test_export_preserves_business_tags_and_validates_them_before_search():
     assert calls == []
 
 
+def test_export_duplicate_queries_never_call_search():
+    async def search(*args, **kwargs):
+        pytest.fail("duplicates must fail before retrieval")
+
+    row = {"query": "q", "relevant_ids": ["a"]}
+    with pytest.raises(ValueError, match="unique"):
+        asyncio.run(export_rankings([row, row], search))
+
+
+@pytest.mark.parametrize("failure", ["labels", "depth", "threshold", "existing", "parent"])
+def test_cli_preflight_errors_never_initialize_knowledge_base(tmp_path, monkeypatch, failure):
+    import json
+    import sys
+    from types import SimpleNamespace
+    from backend.tools.retrieval_export import main
+
+    def forbidden():
+        pytest.fail("must not initialize providers for invalid inputs")
+
+    monkeypatch.setitem(sys.modules, "backend.research_cache", SimpleNamespace(get_knowledge_base=forbidden))
+    source, output = tmp_path / "labels.json", tmp_path / "rankings.json"
+    source.write_text(json.dumps([{"query": "q", "relevant_ids": ["a"]}]), encoding="utf-8-sig")
+    extra = []
+    if failure == "labels":
+        source.write_text('[{}]', encoding="utf-8")
+    elif failure == "existing":
+        output.write_text("keep", encoding="utf-8")
+    elif failure == "parent":
+        output = tmp_path / "missing" / "rankings.json"
+    elif failure == "depth":
+        extra = ["--depth", "0"]
+    monkeypatch.setattr("sys.argv", ["retrieval_export", str(source), str(output),
+                                    "--threshold", "nan" if failure == "threshold" else ".3", *extra])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    if failure == "existing":
+        assert output.read_text(encoding="utf-8") == "keep"
+    else:
+        assert not output.exists()
+
+
 def test_export_and_compare_cli_file_workflow(tmp_path, monkeypatch, capsys):
     import json
     import sys

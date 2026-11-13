@@ -13,7 +13,7 @@ from pathlib import Path
 from backend.tools.retrieval_eval import evaluate
 
 
-async def export_rankings(labels, search, depth=20, threshold=0.3):
+def validate_export(labels, depth=20, threshold=0.3):
     if type(depth) is not int or depth < 1 or depth > 200:
         raise ValueError("depth must be between 1 and 200")
     if type(threshold) not in (int, float) or not math.isfinite(threshold) or not -1 <= threshold <= 1:
@@ -25,6 +25,13 @@ async def export_rankings(labels, search, depth=20, threshold=0.3):
              **({key: row[key] for key in ("answerable", "tags") if key in row})}
             for row in labels]
     evaluate(rows)  # Validate the entire corpus before making any API calls.
+    if len({row["query"] for row in rows}) != len(rows):
+        raise ValueError("export requires unique queries for later comparison")
+    return rows
+
+
+async def export_rankings(labels, search, depth=20, threshold=0.3):
+    rows = validate_export(labels, depth, threshold)
     for row in rows:
         results = await search(row["query"], top_k=depth, threshold=threshold)
         row["ranked_ids"] = [entry["id"] for entry in results]
@@ -50,10 +57,15 @@ def main():
         await kb._ensure_init()
         if not kb.available:
             raise ValueError("knowledge base is unavailable")
-        return await export_rankings(json.loads(args.labels.read_text(encoding="utf-8")),
-                                     kb.search, args.depth, args.threshold)
+        return await export_rankings(labels, kb.search, args.depth, args.threshold)
 
     try:
+        labels = json.loads(args.labels.read_text(encoding="utf-8-sig"))
+        validate_export(labels, args.depth, args.threshold)
+        if args.output.exists() or args.output.is_symlink():
+            raise FileExistsError(f"output already exists: {args.output}")
+        if not args.output.parent.is_dir():
+            raise FileNotFoundError(f"output directory does not exist: {args.output.parent}")
         rows = asyncio.run(run())
         # Exclusive creation protects previous experimental results.
         with args.output.open("x", encoding="utf-8") as handle:
