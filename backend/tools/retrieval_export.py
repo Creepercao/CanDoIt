@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 
 from backend.tools.retrieval_eval import evaluate
+from backend.tools.retrieval_io import read_json_input
 
 
 def validate_export(labels, depth=20, threshold=0.3):
@@ -60,7 +61,7 @@ def main():
         return await export_rankings(labels, kb.search, args.depth, args.threshold)
 
     try:
-        labels = json.loads(args.labels.read_text(encoding="utf-8-sig"))
+        labels, _ = read_json_input(args.labels)
         validate_export(labels, args.depth, args.threshold)
         if args.output.exists() or args.output.is_symlink():
             raise FileExistsError(f"output already exists: {args.output}")

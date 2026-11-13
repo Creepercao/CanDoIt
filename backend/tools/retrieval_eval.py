@@ -1,17 +1,11 @@
 """Score saved retrieval rankings without model or database dependencies."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
 
-def _read_json_input(path):
-    """Hash the exact bytes parsed, including a possible Windows UTF-8 BOM."""
-    raw = path.read_bytes()
-    return json.loads(raw.decode("utf-8-sig")), {
-        "path": str(path.resolve()), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
-    }
+from backend.tools.retrieval_io import read_json_input
 
 
 def metric_names(k):
@@ -146,18 +140,18 @@ def main():
     if args.gates and not args.baseline:
         parser.error("--gates requires --baseline")
     try:
-        rows, candidate_input = _read_json_input(args.input)
+        rows, candidate_input = read_json_input(args.input)
         inputs = {"candidate": candidate_input}
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError("input must be an array of objects")
         result = evaluate(rows, args.k)
         if args.baseline:
-            baseline, inputs["baseline"] = _read_json_input(args.baseline)
+            baseline, inputs["baseline"] = read_json_input(args.baseline)
             result = compare(baseline, rows, args.k)
         if args.gates:
             from backend.tools.retrieval_gates import check_gates
 
-            rules, inputs["gates"] = _read_json_input(args.gates)
+            rules, inputs["gates"] = read_json_input(args.gates)
             result["gate_result"] = check_gates(result, rules)
         result["inputs"] = inputs
         if args.format == "markdown":

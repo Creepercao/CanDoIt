@@ -4,7 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from backend.tools.retrieval_eval import compare, _read_json_input
+from backend.tools.retrieval_eval import compare
+from backend.tools.retrieval_io import read_json_input
 
 
 def build_review(comparison, metric=None, tag=None):
@@ -38,8 +39,8 @@ def main():
     parser.add_argument("--slice", dest="tag")
     args = parser.parse_args()
     try:
-        candidate, candidate_input = _read_json_input(args.candidate)
-        baseline, baseline_input = _read_json_input(args.baseline)
+        candidate, candidate_input = read_json_input(args.candidate)
+        baseline, baseline_input = read_json_input(args.baseline)
         result = build_review(compare(baseline, candidate, args.k), args.metric, args.tag)
         result["inputs"] = {"candidate": candidate_input, "baseline": baseline_input}
         with args.output.open("x", encoding="utf-8") as handle:

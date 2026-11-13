@@ -42,3 +42,27 @@ def test_review_keeps_metric_tradeoffs_and_both_rankings():
         build_review(comparison, metric="typo")
     with pytest.raises(ValueError):
         build_review(comparison, tag="typo")
+
+
+def test_review_cli_saves_auditable_cases_and_preserves_manual_notes(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from backend.tools.retrieval_review import main
+
+    examples = Path(__file__).resolve().parents[1] / "tools" / "examples"
+    output = tmp_path / "review.json"
+    monkeypatch.setattr("sys.argv", ["retrieval_review", str(examples / "retrieval-candidate.json"),
+                                    "--baseline", str(examples / "retrieval-baseline.json"),
+                                    "--metric", "mrr@5", "--slice", "多意图", "--output", str(output)])
+    main()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["selected_queries"] == 1
+    assert report["cases"][0]["changes"]["reciprocal_rank_at_k_delta"] == -.5
+    assert set(report["inputs"]) == {"candidate", "baseline"}
+    report["cases"][0]["review_note"] = "待核对候选召回与重排"
+    edited = json.dumps(report, ensure_ascii=False)
+    output.write_text(edited, encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert output.read_text(encoding="utf-8") == edited

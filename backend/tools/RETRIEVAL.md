@@ -37,6 +37,8 @@ python -m backend.tools.retrieval_export labels.json candidate-rankings.json --d
 
 输出保留 `query`、`relevant_ids`、显式填写的 `answerable` 和 `tags`，增加按相关性排序的 `ranked_ids`。
 每份输出必须使用尚不存在的路径。有答案问题检索为空时，保留原来的相关 ID，不能改成无答案样本。
+导出会先校验完整标注、查询唯一性、深度、阈值、已有输出和父目录，再初始化知识库。
+最终写入仍使用独占创建，防止检索期间出现同名文件时被覆盖。
 
 导出器会检查知识库是否可用，但生产检索中的 embedding 不可用、底层查询失败也可能返回空列表。
 应核对服务状态和日志，将失败批次排除或重新导出；空排名本身不能证明系统成功识别了无答案。
@@ -53,6 +55,8 @@ python -m backend.tools.retrieval_eval candidate-rankings.json --k 5 --baseline 
 `--output` 另外保存相同内容的 UTF-8 文件，并拒绝覆盖已有文件。输入无效不会创建报告文件。
 输入支持普通 UTF-8 和带 BOM 的 UTF-8；文件指纹对应实际解析的原始字节。`evaluate` 和
 `compare` 函数不读文件，只有 CLI 报告带 `inputs` 指纹。
+评分、导出及复核三个 CLI 共用严格 JSON 读取器：拒绝任意层级的重复键、NaN、Infinity
+以及溢出为无穷的数值，防止规则或标签被静默覆盖。非法输入返回退出码 2。
 
 | 指标 | 计算范围与含义 |
 | --- | --- |
@@ -75,6 +79,9 @@ python -m backend.tools.retrieval_eval candidate-rankings.json --k 5 --baseline 
 `slices` 按标签独立计算样本数和指标，采用各自的有答案/无答案分母。`change_summary`
 分别列出每项正向质量指标的 `improved`、`regressed`、`unchanged` 问题列表和可比较样本数。
 未定义的指标不计为“不变”；不同指标间可能存在取舍，工具不会强行合并成一个总分。
+逐题 `details` 还保留相关 ID、去重后的完整排名、前 K 命中的 `hit_ids` 和未命中的
+`missed_ids`。出现在 K 之后的相关条目也属于前 K 漏检，不能当作整个排名中不存在。
+Markdown 报告的“命中与漏检定位”展示这些条目，方便回查召回与重排环节。
 
 ## 4. 设置整体和分组验收门槛
 
@@ -83,7 +90,7 @@ python -m backend.tools.retrieval_eval candidate-rankings.json --k 5 --baseline 
 ```json
 [
   {"metric": "recall@5", "min_value": 0.8, "min_delta": 0},
-  {"metric": "mrr@5", "slice": "售后", "min_delta": 0},
+  {"metric": "mrr@5", "slice": "售后", "min_delta": 0, "min_queries": 20, "max_regression_rate": 0.05},
   {"metric": "no_answer_empty_rate", "min_value": 0.9}
 ]
 ```
@@ -98,6 +105,12 @@ python -m backend.tools.retrieval_eval candidate-rankings.json --baseline baseli
   所有规则都采用越高越好的方向，因此不接受 `no_answer_retrieval_rate`，应改查其补数
   `no_answer_empty_rate`。示例阈值只是格式演示，不能直接当作实际业务标准。
 - 缺少对应类型样本导致指标为 `null` 时，规则以 `undefined_metric` 判定未通过，不能将其当作零分通过验收。
+- 可选 `min_queries` 为正整数，检查所选范围内该指标真正使用的样本数：无答案空召回率
+  统计无答案问题，其余指标统计有答案问题。未达到要求时返回 `insufficient_samples`，
+  报告保留 `sample_count`。例如 2 道有答案和 10 道无答案问题，MRR 的样本量仍然只有 2。
+- 可选 `max_regression_rate` 为 [0, 1]，限制该指标逐题退步的比例。分母与指标样本数一致，
+  选择分组时只计算该组；不满足时返回 `excessive_regressions`。平均分持平也可能触发此限制。
+  所有配置约束都须满足，可只设置样本量或退步比例；这类门槛仍要求指标有定义。
 - 使用 `--gates` 必须提供 `--baseline`。退出码 **0** 表示正常评分或全部门槛通过；**1**
   表示门槛未通过，报告仍会打印并保存；**2** 表示输入、规则或输出路径错误，不保存新报告。
 - 整体平均分通过不保证每个问题都变好。用关键业务分组门槛和退步题列表补充人工检查，
@@ -116,10 +129,23 @@ python -m backend.tools.retrieval_eval backend/tools/examples/retrieval-candidat
 但“多意图”分组的 MRR@5 从 1 降至 0.5。分组门槛应未通过并返回退出码 **1**，报告仍生成。
 输出路径必须不存在；生成的演示报告是本地文件，无需加入 Git。
 
-## 6. 无训练验证
+## 6. 导出退步题复核材料
 
 ```powershell
-python -m pytest backend/tests/test_retrieval_eval.py backend/tests/test_retrieval_export.py backend/tests/test_retrieval_gates.py backend/tests/test_retrieval_report.py backend/tests/test_retrieval_cli.py -q
+python -m backend.tools.retrieval_review backend/tools/examples/retrieval-candidate.json --baseline backend/tools/examples/retrieval-baseline.json --metric mrr@5 --slice 多意图 --output review.json
+```
+
+不填写 `--metric` 时选择任一正向指标退步的问题；不填写 `--slice` 时检查全部问题。
+指标中的 K 必须匹配 `--k`（默认 5）。只按退步筛选，不将召回变好但首条后移的题整体判为改善。
+输出保留双方完整排名、相关 ID、命中和漏检、逐题指标变化、退步指标列表、输入文件指纹，
+并提供空白 `review_note` 供人工填写。空备注不代表已复核，也不会自动生成新的相关性标签。
+没有退步时正常生成空 `cases`；错误指标或分组返回退出码 2。输出路径必须不存在，
+重复执行不会覆盖已经填写的备注。查看条目原文与检索服务日志后，再判断是标签、召回还是重排问题。
+
+## 7. 无训练验证
+
+```powershell
+python -m pytest backend/tests/test_retrieval_eval.py backend/tests/test_retrieval_export.py backend/tests/test_retrieval_gates.py backend/tests/test_retrieval_report.py backend/tests/test_retrieval_cli.py backend/tests/test_retrieval_review.py backend/tests/test_retrieval_io.py -q
 ```
 
 测试注入假的检索结果，覆盖混合标注、分组、截断指标、无答案集合、退步识别、验收门槛、
