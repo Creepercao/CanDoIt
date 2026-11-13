@@ -31,6 +31,24 @@ def test_empty_denominator_fails_closed_even_with_zero_requirement():
     assert result["checks"][0]["reason"] == "undefined_metric"
 
 
+def test_minimum_sample_count_uses_metric_population_and_selected_slice():
+    result = comparison()
+    checks = check_gates(result, [{"metric": "mrr", "min_queries": 2},
+                                  {"metric": "no_answer_empty_rate", "min_queries": 1},
+                                  {"metric": "mrr", "slice": "未知", "min_queries": 1}])["checks"]
+    assert checks[0]["sample_count"] == 1  # Does not count the no-answer query.
+    assert checks[0]["reason"] == "insufficient_samples"
+    assert checks[1]["passed"] is True
+    assert checks[2]["sample_count"] == 0
+    assert checks[2]["reason"] == "insufficient_samples"
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "1", None])
+def test_minimum_sample_count_rejects_invalid_types(value):
+    with pytest.raises(ValueError):
+        check_gates(comparison(), [{"metric": "mrr", "min_queries": value}])
+
+
 @pytest.mark.parametrize("rules", [[], {}, [None],
     [{"metric": "mrr"}], [{"metric": "mrr", "min_delta": True}],
     [{"metric": "mrr", "min_value": float("nan")}],
