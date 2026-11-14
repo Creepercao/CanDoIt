@@ -163,5 +163,33 @@ def test_export_and_compare_cli_file_workflow(tmp_path, monkeypatch, capsys):
     assert result["delta"]["no_answer_empty_rate"] == 1
     assert result["query_changes"][1]["empty_retrieval_delta"] == 1
     assert json.loads(source.read_text(encoding="utf-8")) == labels
-    assert calls == [(query, {"top_k": 3, "threshold": .7})
+    assert calls == [(query, {"top_k": 3, "threshold": .7, "strict": True})
                      for query in ("已收录", "未收录", "已收录", "未收录")]
+
+
+@pytest.mark.parametrize("failure", ["embedding", "query"])
+def test_real_knowledge_base_failure_does_not_export_false_empty_rankings(tmp_path, monkeypatch, failure):
+    import json
+    from backend import research_cache as rc
+    from backend.tools.retrieval_export import main
+
+    class Collection:
+        def query(self, **kwargs):
+            raise OSError("database is down")
+
+    kb = rc.KnowledgeBase.__new__(rc.KnowledgeBase)
+    kb._initialized = True
+    kb._collection = Collection()
+
+    async def embedding(*args):
+        return None if failure == "embedding" else [.1, .2]
+
+    monkeypatch.setattr(rc, "get_embedding", embedding)
+    monkeypatch.setattr(rc, "get_knowledge_base", lambda: kb)
+    source, output = tmp_path / "labels.json", tmp_path / "rankings.json"
+    source.write_text(json.dumps([{"query": "unknown", "answerable": False, "relevant_ids": []}]), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["retrieval_export", str(source), str(output), "--threshold", ".3"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert not output.exists()

@@ -58,7 +58,10 @@ def main():
         await kb._ensure_init()
         if not kb.available:
             raise ValueError("knowledge base is unavailable")
-        return await export_rankings(labels, kb.search, args.depth, args.threshold)
+        async def strict_search(query, **kwargs):
+            return await kb.search(query, strict=True, **kwargs)
+
+        return await export_rankings(labels, strict_search, args.depth, args.threshold)
 
     try:
         labels, _ = read_json_input(args.labels)
@@ -71,7 +74,7 @@ def main():
         # Exclusive creation protects previous experimental results.
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(rows, handle, ensure_ascii=False, indent=2)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         parser.error(str(exc))
 
 
