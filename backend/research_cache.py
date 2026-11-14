@@ -32,6 +32,10 @@ from backend.embedding import (
 
 logger = logging.getLogger("research_cache")
 
+
+class KnowledgeSearchError(RuntimeError):
+    """A retrieval failure that must not be scored as a successful empty result."""
+
 # ── Configuration ──────────────────────────────────────────────────────
 #
 # The thresholds below come from an actual calibration run against the provider
@@ -436,6 +440,8 @@ class KnowledgeBase:
         query: str,
         top_k: int = 5,
         threshold: float = RETRIEVAL_SIMILARITY_DEFAULT,
+        *,
+        strict: bool = False,
     ) -> list[dict]:
         """Search the knowledge base for similar past research results."""
         if not isinstance(query, str) or not query.strip():
@@ -444,11 +450,31 @@ class KnowledgeBase:
             raise ValueError("top_k must be an integer between 1 and 200")
         if type(threshold) not in (int, float) or not math.isfinite(threshold) or not -1 <= threshold <= 1:
             raise ValueError("threshold must be finite and between -1 and 1")
-        await self._ensure_init()
+        if type(strict) is not bool:
+            raise ValueError("strict must be a boolean")
+        try:
+            await self._ensure_init()
+        except Exception as exc:
+            if strict:
+                raise KnowledgeSearchError("knowledge base initialization failed") from exc
+            logger.warning("KnowledgeBase initialization failed: %s", exc)
+            return []
         if not self.available:
+            if strict:
+                raise KnowledgeSearchError("knowledge base is unavailable")
             return []
 
-        embedding = await get_embedding(query[:500])
+        try:
+            embedding = await get_embedding(query[:500])
+        except Exception as exc:
+            if strict:
+                raise KnowledgeSearchError("embedding request failed") from exc
+            logger.warning("KnowledgeBase embedding failed: %s", exc)
+            return []
+        if embedding is None:
+            if strict:
+                raise KnowledgeSearchError("embedding is unavailable")
+            return []
         # Over-fetch, then filter by threshold, then trim. Fetching only top_k
         # candidates first would silently drop good hits that rank just below
         # the cut-off, leaving an empty result even when the base has a match.
@@ -465,6 +491,8 @@ class KnowledgeBase:
                 # No embedding available — skip (don't trigger ONNX download)
                 return []
         except Exception as e:
+            if strict:
+                raise KnowledgeSearchError("knowledge base query failed") from e
             logger.warning(f"KnowledgeBase search error: {e}")
             return []
 
@@ -483,6 +511,8 @@ class KnowledgeBase:
                 if not math.isfinite(distance):
                     raise ValueError("non-finite distance")
             except (TypeError, ValueError, OverflowError):
+                if strict:
+                    raise KnowledgeSearchError(f"invalid distance for entry {entry_id}")
                 logger.warning("KnowledgeBase skipped invalid distance for entry %s", entry_id)
                 continue
             # ChromaDB returns cosine distance for cosine collections

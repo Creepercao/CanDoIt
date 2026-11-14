@@ -136,3 +136,38 @@ def test_invalid_distance_is_never_returned_as_a_hit(kb, monkeypatch, bad):
     results = asyncio.run(kb.search("q", threshold=-1))
     assert [item["id"] for item in results] == ["valid"]
     assert results[0]["similarity"] == .9
+
+
+@pytest.mark.parametrize("failure", ["init", "unavailable", "embedding", "embedding_error", "query", "distance"])
+def test_strict_search_distinguishes_failure_from_empty_results(kb, monkeypatch, failure):
+    async def failed_init():
+        raise OSError("database failed")
+
+    async def unavailable_embedding(*args):
+        return None
+
+    async def failed_embedding(*args):
+        raise OSError("provider failed")
+
+    def failed_query(**kwargs):
+        raise OSError("query failed")
+
+    if failure == "init":
+        monkeypatch.setattr(kb, "_ensure_init", failed_init)
+    elif failure == "unavailable":
+        kb._collection = None
+    elif failure == "embedding":
+        monkeypatch.setattr(rc, "get_embedding", unavailable_embedding)
+    elif failure == "embedding_error":
+        monkeypatch.setattr(rc, "get_embedding", failed_embedding)
+    elif failure == "query":
+        monkeypatch.setattr(kb._collection, "query", failed_query)
+    else:
+        monkeypatch.setattr(kb._collection, "query", lambda **kwargs: {"ids": [["bad"]], "distances": [[None]]})
+    with pytest.raises(rc.KnowledgeSearchError):
+        asyncio.run(kb.search("q", strict=True))
+    assert asyncio.run(kb.search("q")) == []
+
+
+def test_strict_search_allows_successful_empty_retrieval(kb):
+    assert asyncio.run(kb.search("q", threshold=.99, strict=True)) == []
