@@ -193,3 +193,29 @@ def test_real_knowledge_base_failure_does_not_export_false_empty_rankings(tmp_pa
         main()
     assert exc.value.code == 2
     assert not output.exists()
+
+
+def test_timeout_cancels_pending_search_and_never_queries_later_rows():
+    calls, cancelled = [], []
+
+    async def search(query, **kwargs):
+        calls.append(query)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(query)
+
+    labels = [{"query": query, "relevant_ids": ["a"]} for query in ("first", "second")]
+    with pytest.raises(ValueError, match="timed out at row 1"):
+        asyncio.run(export_rankings(labels, search, timeout_seconds=.01))
+    assert calls == cancelled == ["first"]
+    assert all("ranked_ids" not in row for row in labels)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, None, "1", float("inf"), float("nan")])
+def test_invalid_timeout_never_calls_retrieval(timeout):
+    async def search(*args, **kwargs):
+        pytest.fail("invalid timeout must fail before retrieval")
+
+    with pytest.raises(ValueError, match="timeout"):
+        asyncio.run(export_rankings([{"query": "q", "relevant_ids": ["a"]}], search, timeout_seconds=timeout))

@@ -14,7 +14,9 @@ from backend.tools.retrieval_eval import evaluate
 from backend.tools.retrieval_io import read_json_input
 
 
-def validate_export(labels, depth=20, threshold=0.3):
+def validate_export(labels, depth=20, threshold=0.3, timeout_seconds=60):
+    if type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be finite and positive")
     if type(depth) is not int or depth < 1 or depth > 200:
         raise ValueError("depth must be between 1 and 200")
     if type(threshold) not in (int, float) or not math.isfinite(threshold) or not -1 <= threshold <= 1:
@@ -31,10 +33,14 @@ def validate_export(labels, depth=20, threshold=0.3):
     return rows
 
 
-async def export_rankings(labels, search, depth=20, threshold=0.3):
-    rows = validate_export(labels, depth, threshold)
-    for row in rows:
-        results = await search(row["query"], top_k=depth, threshold=threshold)
+async def export_rankings(labels, search, depth=20, threshold=0.3, timeout_seconds=60):
+    rows = validate_export(labels, depth, threshold, timeout_seconds)
+    for index, row in enumerate(rows, 1):
+        try:
+            results = await asyncio.wait_for(search(row["query"], top_k=depth, threshold=threshold),
+                                             timeout=timeout_seconds)
+        except TimeoutError as exc:
+            raise ValueError(f"retrieval timed out at row {index} after {timeout_seconds} seconds") from exc
         row["ranked_ids"] = [entry["id"] for entry in results]
     evaluate(rows)
     return rows
@@ -45,6 +51,7 @@ def main():
     parser.add_argument("labels", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--depth", type=int, default=20)
+    parser.add_argument("--timeout-seconds", type=float, default=60, help="Cooperative timeout per query (default: 60)")
     parser.add_argument("--threshold", type=float, required=True,
                         help="Use the threshold of the retrieval configuration being evaluated")
     args = parser.parse_args()
@@ -61,11 +68,11 @@ def main():
         async def strict_search(query, **kwargs):
             return await kb.search(query, strict=True, **kwargs)
 
-        return await export_rankings(labels, strict_search, args.depth, args.threshold)
+        return await export_rankings(labels, strict_search, args.depth, args.threshold, args.timeout_seconds)
 
     try:
         labels, _ = read_json_input(args.labels)
-        validate_export(labels, args.depth, args.threshold)
+        validate_export(labels, args.depth, args.threshold, args.timeout_seconds)
         if args.output.exists() or args.output.is_symlink():
             raise FileExistsError(f"output already exists: {args.output}")
         if not args.output.parent.is_dir():
