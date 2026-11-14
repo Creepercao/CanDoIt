@@ -475,9 +475,18 @@ class KnowledgeBase:
         distances = results.get("distances", [[]])[0]
 
         for i, entry_id in enumerate(ids):
-            distance = distances[i] if i < len(distances) else 1.0
+            distance = distances[i] if i < len(distances) else None
+            try:
+                if distance is None or isinstance(distance, bool):
+                    raise ValueError("missing or boolean distance")
+                distance = float(distance)
+                if not math.isfinite(distance):
+                    raise ValueError("non-finite distance")
+            except (TypeError, ValueError, OverflowError):
+                logger.warning("KnowledgeBase skipped invalid distance for entry %s", entry_id)
+                continue
             # ChromaDB returns cosine distance for cosine collections
-            similarity = 1.0 - float(distance) if distance is not None else 0.0
+            similarity = 1.0 - distance
             if similarity < threshold:
                 continue
             entries.append({

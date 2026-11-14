@@ -125,3 +125,14 @@ def test_search_rejects_bad_configuration_before_initialization(kb, monkeypatch,
     monkeypatch.setattr(kb, "_ensure_init", forbidden)
     with pytest.raises(ValueError):
         asyncio.run(kb.search(query, top_k, threshold))
+
+
+@pytest.mark.parametrize("bad", [None, True, "broken", float("nan"), float("inf"), -float("inf")])
+def test_invalid_distance_is_never_returned_as_a_hit(kb, monkeypatch, bad):
+    monkeypatch.setattr(kb._collection, "query", lambda **kwargs: {
+        "ids": [["invalid", "valid", "missing"]], "distances": [[bad, .1]],
+        "documents": [["bad", "good", "missing"]], "metadatas": [[{}, {}, {}]],
+    })
+    results = asyncio.run(kb.search("q", threshold=-1))
+    assert [item["id"] for item in results] == ["valid"]
+    assert results[0]["similarity"] == .9
