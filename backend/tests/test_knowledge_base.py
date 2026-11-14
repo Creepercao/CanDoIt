@@ -113,3 +113,15 @@ def test_add_rejects_too_short_synthesis(kb):
 
     assert asyncio.run(scenario()) is None
     assert len(kb._collection.rows) == 0
+
+
+@pytest.mark.parametrize("query,top_k,threshold", [("", 5, .4), (None, 5, .4), ("q", 0, .4),
+    ("q", True, .4), ("q", 201, .4), ("q", 1.5, .4), ("q", 5, float("nan")),
+    ("q", 5, True), ("q", 5, "0.4"), ("q", 5, 2)])
+def test_search_rejects_bad_configuration_before_initialization(kb, monkeypatch, query, top_k, threshold):
+    async def forbidden():
+        pytest.fail("invalid search must not initialize the database")
+
+    monkeypatch.setattr(kb, "_ensure_init", forbidden)
+    with pytest.raises(ValueError):
+        asyncio.run(kb.search(query, top_k, threshold))

@@ -17,6 +17,7 @@ Integration points are in ``research_worker`` (builtin_workers.py) and
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -437,6 +438,12 @@ class KnowledgeBase:
         threshold: float = RETRIEVAL_SIMILARITY_DEFAULT,
     ) -> list[dict]:
         """Search the knowledge base for similar past research results."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        if type(top_k) is not int or not 1 <= top_k <= 200:
+            raise ValueError("top_k must be an integer between 1 and 200")
+        if type(threshold) not in (int, float) or not math.isfinite(threshold) or not -1 <= threshold <= 1:
+            raise ValueError("threshold must be finite and between -1 and 1")
         await self._ensure_init()
         if not self.available:
             return []
