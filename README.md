@@ -618,6 +618,7 @@ python -m pytest backend/tests -q
 支持最低样本量和逐题退步比例约束，并可导出双侧排名和漏检条目供人工复核。
 操作步骤及可直接运行的离线演示见 [检索评估说明](backend/tools/RETRIEVAL.md)。
 排名导出工具会调用实际知识库和 embedding 服务，与离线评分分开运行。
+导出支持严格检索、逐题等待超时与 `--validate-only` 离线预检查，服务故障会终止导出。
 
 ## Skill 技能系统
 

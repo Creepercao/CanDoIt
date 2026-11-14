@@ -49,12 +49,15 @@ async def export_rankings(labels, search, depth=20, threshold=0.3, timeout_secon
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("labels", type=Path)
-    parser.add_argument("output", type=Path)
+    parser.add_argument("output", type=Path, nargs="?")
+    parser.add_argument("--validate-only", action="store_true", help="Validate labels and configuration without loading services")
     parser.add_argument("--depth", type=int, default=20)
     parser.add_argument("--timeout-seconds", type=float, default=60, help="Cooperative timeout per query (default: 60)")
     parser.add_argument("--threshold", type=float, required=True,
                         help="Use the threshold of the retrieval configuration being evaluated")
     args = parser.parse_args()
+    if args.output is None and not args.validate_only:
+        parser.error("output is required unless --validate-only is used")
 
     async def run():
         from backend.research_cache import get_knowledge_base
@@ -71,12 +74,23 @@ def main():
         return await export_rankings(labels, strict_search, args.depth, args.threshold, args.timeout_seconds)
 
     try:
-        labels, _ = read_json_input(args.labels)
-        validate_export(labels, args.depth, args.threshold, args.timeout_seconds)
-        if args.output.exists() or args.output.is_symlink():
+        labels, source = read_json_input(args.labels)
+        rows = validate_export(labels, args.depth, args.threshold, args.timeout_seconds)
+        if args.output and (args.output.exists() or args.output.is_symlink()):
             raise FileExistsError(f"output already exists: {args.output}")
-        if not args.output.parent.is_dir():
+        if args.output and not args.output.parent.is_dir():
             raise FileNotFoundError(f"output directory does not exist: {args.output.parent}")
+        if args.validate_only:
+            counts = evaluate(rows)
+            keys = ("queries", "answerable_queries", "no_answer_queries")
+            print(json.dumps({"validated_only": True, "input": source,
+                              "configuration": {"depth": args.depth, "threshold": args.threshold,
+                                                "timeout_seconds": args.timeout_seconds},
+                              **{key: counts[key] for key in keys},
+                              "slices": {tag: {key: values[key] for key in keys}
+                                         for tag, values in counts["slices"].items()}},
+                             ensure_ascii=False, indent=2))
+            return
         rows = asyncio.run(run())
         # Exclusive creation protects previous experimental results.
         with args.output.open("x", encoding="utf-8") as handle:

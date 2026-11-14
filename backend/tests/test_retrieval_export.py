@@ -219,3 +219,38 @@ def test_invalid_timeout_never_calls_retrieval(timeout):
 
     with pytest.raises(ValueError, match="timeout"):
         asyncio.run(export_rankings([{"query": "q", "relevant_ids": ["a"]}], search, timeout_seconds=timeout))
+
+
+def test_validation_only_reports_population_and_never_initializes_services(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    from types import SimpleNamespace
+    from backend.tools.retrieval_export import main
+
+    def forbidden():
+        pytest.fail("validation-only must not initialize services")
+
+    monkeypatch.setitem(sys.modules, "backend.research_cache", SimpleNamespace(get_knowledge_base=forbidden))
+    source = tmp_path / "labels.json"
+    source.write_text(json.dumps([
+        {"query": "known", "relevant_ids": ["a"], "tags": ["售后", "售后"]},
+        {"query": "unknown", "answerable": False, "relevant_ids": [], "tags": ["售后"]},
+    ]), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["retrieval_export", str(source), "--validate-only", "--threshold", ".4"])
+    main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["validated_only"] is True
+    assert report["queries"] == 2
+    assert report["slices"]["售后"] == {"queries": 2, "answerable_queries": 1, "no_answer_queries": 1}
+    assert report["configuration"] == {"depth": 20, "threshold": .4, "timeout_seconds": 60}
+    assert "recall@5" not in report
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_normal_export_still_requires_output(tmp_path, monkeypatch):
+    from backend.tools.retrieval_export import main
+
+    monkeypatch.setattr("sys.argv", ["retrieval_export", str(tmp_path / "missing.json"), "--threshold", ".4"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
