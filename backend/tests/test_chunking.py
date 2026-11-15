@@ -1,6 +1,6 @@
 import pytest
 
-from backend.chunking import chunk_text, split_sections
+from backend.chunking import chunk_text, split_sections, prepare_document
 
 
 @pytest.mark.parametrize("text", ["", "  \n", "甲乙\n\n丙丁\n\n末尾", "汉" * 5001, "a\r\n\r\nb\r\n尾部", "😀abc" * 40])
@@ -62,3 +62,30 @@ def test_overlapping_chunks_progress_and_reconstruct_the_complete_input(text, si
 def test_overlap_validation(overlap):
     with pytest.raises(ValueError):
         chunk_text("abc", 5, overlap)
+
+
+def test_hierarchy_has_stable_ids_exact_offsets_and_no_cross_section_overlap():
+    text = "前言\n# 重名\n" + "甲" * 60 + "\n# 重名\n尾部\n"
+    result = prepare_document(text, "manual", 20, 5)
+    assert result == prepare_document(text, "manual", 20, 5)
+    assert result["document"]["text"] == text
+    sections = {section["id"]: section for section in result["sections"]}
+    assert len(sections) == 3
+    coverage = set()
+    for chunk in result["chunks"]:
+        parent = sections[chunk["parent_id"]]
+        assert parent["parent_id"] == chunk["document_id"] == result["document"]["id"]
+        assert parent["start"] <= chunk["start"] < chunk["end"] <= parent["end"]
+        assert text[chunk["start"]:chunk["end"]] == chunk["text"]
+        coverage.update(range(chunk["start"], chunk["end"]))
+    assert coverage == set(range(len(text)))
+    assert len({chunk["id"] for chunk in result["chunks"]}) == len(result["chunks"])
+    assert result["stats"]["overlap_chars"] > 0
+    assert prepare_document(text, "other")["document"]["id"] != result["document"]["id"]
+    assert prepare_document(text + "new", "manual")["document"]["id"] != result["document"]["id"]
+
+
+@pytest.mark.parametrize("text,source", [("", "x"), (" \n", "x"), ("text", ""), (None, "x")])
+def test_empty_document_or_source_is_not_indexable(text, source):
+    with pytest.raises(ValueError):
+        prepare_document(text, source)
