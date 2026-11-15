@@ -620,6 +620,9 @@ python -m pytest backend/tests -q
 排名导出工具会调用实际知识库和 embedding 服务，与离线评分分开运行。
 导出支持严格检索、逐题等待超时与 `--validate-only` 离线预检查，服务故障会终止导出。
 
+层级检索的文档准备工具支持按章节和段落分块、块间重叠、父子 ID、JSON 导出及 Markdown
+预览，见 [分块准备说明](backend/tools/CHUNKING.md)。它目前用于离线检查，尚未接入生产知识库。
+
 ## Skill 技能系统
 
 Skill 是自包含的插件模块，支持两种形式：

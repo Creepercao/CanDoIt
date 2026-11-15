@@ -47,3 +47,15 @@ def test_invalid_configuration_and_encoding_do_not_create_artifacts(tmp_path):
     result = run_cli(source, "--source", "guide", "--output", output)
     assert result.returncode == 2
     assert not output.exists()
+
+
+def test_markdown_preview_protects_embedded_code_fences_and_shows_tail(tmp_path):
+    source, output = tmp_path / "code.md", tmp_path / "preview.md"
+    text = "# Demo\n```python\n# literal heading\n```\n尾部"
+    source.write_text(text, encoding="utf-8")
+    result = run_cli(source, "--source", "guide", "--format", "markdown", "--output", output)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == output.read_text(encoding="utf-8")
+    assert "章节：1；分块：1" in result.stdout
+    assert "````text\n" + text + "\n````" in result.stdout
+    assert "此预览未写入知识库" in result.stdout
