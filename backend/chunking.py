@@ -1,6 +1,7 @@
 """Offline text preparation for hierarchical retrieval; offsets use characters."""
 
 import re
+from bisect import bisect_right
 
 
 def split_sections(text):
@@ -39,12 +40,14 @@ def split_sections(text):
     return sections
 
 
-def chunk_text(text, max_chars=1000):
+def chunk_text(text, max_chars=1000, overlap_chars=0):
     """Prefer paragraph endings, hard-split long paragraphs, preserve all text."""
     if not isinstance(text, str):
         raise ValueError("text must be a string")
     if type(max_chars) is not int or max_chars < 1:
         raise ValueError("max_chars must be a positive integer")
+    if type(overlap_chars) is not int or not 0 <= overlap_chars < max_chars:
+        raise ValueError("overlap_chars must be an integer from 0 to max_chars - 1")
     boundaries = [match.end() for match in re.finditer(r"\r?\n[ \t]*\r?\n", text)]
     chunks = []
     start = 0
@@ -52,9 +55,11 @@ def chunk_text(text, max_chars=1000):
         limit = min(start + max_chars, len(text))
         end = limit
         if limit < len(text):
-            candidates = [boundary for boundary in boundaries if start < boundary <= limit]
-            if candidates:
-                end = candidates[-1]
+            index = bisect_right(boundaries, limit) - 1
+            if index >= 0 and boundaries[index] > start + overlap_chars:
+                end = boundaries[index]
         chunks.append({"start": start, "end": end, "text": text[start:end]})
-        start = end
+        if end == len(text):
+            break
+        start = end - overlap_chars
     return chunks

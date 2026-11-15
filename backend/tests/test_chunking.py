@@ -42,3 +42,23 @@ def test_unclosed_code_fence_keeps_tail_and_duplicate_headings_are_distinct():
     assert result[0]["start"] != result[1]["start"]
     assert "".join(item["text"] for item in result) == text
     assert split_sections("") == []
+
+
+@pytest.mark.parametrize("text,size,overlap", [("汉" * 1001, 100, 20), ("a\n\nb\n\nc\n\nd\n\n尾", 8, 6),
+                                             ("😀abcdef", 3, 2), ("short", 100, 50)])
+def test_overlapping_chunks_progress_and_reconstruct_the_complete_input(text, size, overlap):
+    chunks = chunk_text(text, size, overlap)
+    rebuilt = chunks[0]["text"]
+    for previous, current in zip(chunks, chunks[1:]):
+        assert current["start"] == previous["end"] - overlap
+        assert current["start"] > previous["start"]
+        rebuilt += current["text"][previous["end"] - current["start"]:]
+    assert rebuilt == text
+    assert chunks[-1]["end"] == len(text)
+    assert all(len(item["text"]) <= size for item in chunks)
+
+
+@pytest.mark.parametrize("overlap", [-1, 5, True, 1.5, None])
+def test_overlap_validation(overlap):
+    with pytest.raises(ValueError):
+        chunk_text("abc", 5, overlap)
