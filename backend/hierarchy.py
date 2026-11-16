@@ -20,9 +20,26 @@ def validate_snapshot(snapshot):
         raise ValueError("invalid chunk configuration")
     canonical = prepare_document(document.get("text"), document.get("source"), **config)
     for key in canonical:
-        if snapshot.get(key) != canonical[key]:
+        if json.dumps(snapshot.get(key), sort_keys=True, ensure_ascii=False) != json.dumps(canonical[key], sort_keys=True, ensure_ascii=False):
             raise ValueError(f"snapshot {key} does not match its document and configuration")
     return canonical
+
+
+def _payload(snapshot):
+    return json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _snapshot_id(payload):
+    return "snapshot-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _decode_row(row):
+    snapshot_id, document_id, source, payload = row
+    snapshot = validate_snapshot(json.loads(payload))
+    if (_snapshot_id(_payload(snapshot)) != snapshot_id or snapshot["document"]["id"] != document_id
+            or snapshot["document"]["source"] != source):
+        raise ValueError("stored snapshot fingerprint or identity is inconsistent")
+    return snapshot
 
 
 class HierarchyStore:
@@ -47,8 +64,8 @@ class HierarchyStore:
 
     def save(self, snapshot):
         canonical = validate_snapshot(snapshot)  # No file creation for invalid input.
-        payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        snapshot_id = "snapshot-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        payload = _payload(canonical)
+        snapshot_id = _snapshot_id(payload)
         with self._connect() as connection:
             connection.execute("INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?, ?)",
                                (snapshot_id, canonical["document"]["id"], canonical["document"]["source"], payload))
@@ -58,8 +75,25 @@ class HierarchyStore:
         if not self.path.exists():
             return None
         with self._connect() as connection:
-            row = connection.execute("SELECT payload FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
-        return validate_snapshot(json.loads(row[0])) if row else None
+            row = connection.execute("SELECT id, document_id, source, payload FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
+        return _decode_row(row) if row else None
+
+    def verify(self):
+        if not self.path.is_file():
+            raise ValueError("store does not exist")
+        with self._connect() as connection:
+            if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise ValueError("SQLite integrity check failed")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise ValueError("store has invalid foreign key references")
+            rows = connection.execute("SELECT id, document_id, source, payload FROM snapshots").fetchall()
+            for row in rows:
+                _decode_row(row)
+            active = connection.execute("SELECT a.source, s.source FROM active_sources a "
+                                        "JOIN snapshots s ON s.id=a.snapshot_id").fetchall()
+            if any(source != stored_source for source, stored_source in active):
+                raise ValueError("active snapshot belongs to a different source")
+        return {"valid": True, "snapshots": len(rows), "active_sources": len(active)}
 
     def activate(self, snapshot_id):
         snapshot = self.get(snapshot_id)

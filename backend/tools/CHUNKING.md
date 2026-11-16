@@ -2,7 +2,8 @@
 
 此工具是检索层级化的入库前准备：读取一份 UTF-8 Markdown 或纯文本，生成文档、章节、
 分块三类记录。全程使用标准库，不训练、不调用 embedding、不连接或修改 ChromaDB。
-当前生产 KnowledgeBase.add/search 仍沿用原有结构；尚未实现章节摘要、两级检索或旧数据迁移。
+当前生产 KnowledgeBase.add/search 仍沿用原有结构；尚未实现章节摘要、向量两级检索或旧数据迁移。
+独立 SQLite 快照与父章节取回见 [离线层级存储说明](HIERARCHY.md)。
 
 ## 使用
 

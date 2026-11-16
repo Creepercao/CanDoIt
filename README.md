@@ -622,6 +622,8 @@ python -m pytest backend/tests -q
 
 层级检索的文档准备工具支持按章节和段落分块、块间重叠、父子 ID、JSON 导出及 Markdown
 预览，见 [分块准备说明](backend/tools/CHUNKING.md)。它目前用于离线检查，尚未接入生产知识库。
+已提供独立 SQLite 快照、显式版本切换、父章节上下文取回及完整性检查，见
+[离线层级存储说明](backend/tools/HIERARCHY.md)。
 
 ## Skill 技能系统
 

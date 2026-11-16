@@ -107,3 +107,35 @@ def test_context_never_serves_old_versions_or_silently_drops_unknown_hits(tmp_pa
     with pytest.raises(ValueError):
         store.context([new["chunks"][0]["id"], "unknown"])
     assert store.context([])["contexts"] == []
+
+
+@pytest.mark.parametrize("tamper", ["payload", "source", "active"])
+def test_integrity_check_rejects_valid_content_under_wrong_identity(tmp_path, tamper):
+    import json
+    import sqlite3
+
+    path = tmp_path / "store.sqlite"
+    store = HierarchyStore(path)
+    first = store.save(example("first", "guide"))
+    other = store.save(example("other", "policy"))
+    store.activate(first)
+    assert store.verify() == {"valid": True, "snapshots": 2, "active_sources": 1}
+    with sqlite3.connect(path) as connection:
+        if tamper == "payload":
+            connection.execute("UPDATE snapshots SET payload=? WHERE id=?", (json.dumps(example("changed", "guide")), first))
+        elif tamper == "source":
+            connection.execute("UPDATE snapshots SET source='wrong' WHERE id=?", (first,))
+        else:
+            connection.execute("UPDATE active_sources SET snapshot_id=? WHERE source='guide'", (other,))
+    with pytest.raises(ValueError):
+        store.verify()
+    if tamper != "active":
+        with pytest.raises(ValueError):
+            store.get(first)
+
+
+def test_snapshot_offsets_reject_boolean_numeric_aliases():
+    snapshot = example()
+    snapshot["chunks"][0]["start"] = False
+    with pytest.raises(ValueError):
+        validate_snapshot(snapshot)

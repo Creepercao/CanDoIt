@@ -33,6 +33,9 @@ def test_import_reopen_activate_and_context_in_separate_processes(tmp_path):
     assert json.loads(result.stdout) == json.loads(output.read_text(encoding="utf-8"))
     assert json.loads(result.stdout)["contexts"][0]["text"].endswith("尾部")
     assert run_cli(store, "--output", output, "context", ids).returncode == 2
+    verified = run_cli(store, "verify")
+    assert verified.returncode == 0, verified.stderr
+    assert json.loads(verified.stdout) == {"valid": True, "snapshots": 1, "active_sources": 1}
 
 
 def test_missing_or_invalid_input_does_not_create_a_store(tmp_path):

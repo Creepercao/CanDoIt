@@ -19,6 +19,7 @@ def main():
     load.add_argument("--activate", action="store_true")
     versions = commands.add_parser("list")
     versions.add_argument("--source")
+    commands.add_parser("verify")
     activate = commands.add_parser("activate")
     activate.add_argument("snapshot_id")
     context = commands.add_parser("context")
@@ -43,6 +44,8 @@ def main():
             result = {"versions": store.list_versions(args.source)}
         elif args.command == "activate":
             result = {"snapshot_id": args.snapshot_id, "source": store.activate(args.snapshot_id)}
+        elif args.command == "verify":
+            result = store.verify()
         else:
             chunk_ids, source = read_json_input(args.chunk_ids)
             result = {**store.context(chunk_ids, args.max_chars), "input": source}
