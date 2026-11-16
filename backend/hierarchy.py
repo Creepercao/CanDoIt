@@ -38,6 +38,8 @@ class HierarchyStore:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("CREATE TABLE IF NOT EXISTS snapshots ("
                                "id TEXT PRIMARY KEY, document_id TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS active_sources ("
+                               "source TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL REFERENCES snapshots(id))")
             with connection:
                 yield connection
         finally:
@@ -58,3 +60,25 @@ class HierarchyStore:
         with self._connect() as connection:
             row = connection.execute("SELECT payload FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
         return validate_snapshot(json.loads(row[0])) if row else None
+
+    def activate(self, snapshot_id):
+        snapshot = self.get(snapshot_id)
+        if snapshot is None:
+            raise ValueError("cannot activate an unknown snapshot")
+        source = snapshot["document"]["source"]
+        with self._connect() as connection:
+            connection.execute("INSERT INTO active_sources VALUES (?, ?) "
+                               "ON CONFLICT(source) DO UPDATE SET snapshot_id=excluded.snapshot_id",
+                               (source, snapshot_id))
+        return source
+
+    def list_versions(self, source=None):
+        if not self.path.exists():
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id, s.document_id, s.source, a.snapshot_id FROM snapshots s "
+                "LEFT JOIN active_sources a ON a.source=s.source "
+                "WHERE (? IS NULL OR s.source=?) ORDER BY s.source, s.id", (source, source)).fetchall()
+        return [{"id": row[0], "document_id": row[1], "source": row[2], "active": row[0] == row[3]}
+                for row in rows]

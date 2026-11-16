@@ -58,3 +58,20 @@ def test_invalid_snapshot_does_not_create_store(tmp_path):
         HierarchyStore(path).save({})
     assert HierarchyStore(path).get("missing") is None
     assert not path.exists()
+
+
+def test_activation_is_explicit_reversible_and_isolated_per_source(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    first = store.save(example("old", "guide"))
+    second = store.save(example("new", "guide"))
+    other = store.save(example("other", "policy"))
+    assert not any(item["active"] for item in store.list_versions())
+    assert store.activate(first) == "guide"
+    store.activate(other)
+    store.activate(second)
+    assert {item["id"] for item in store.list_versions() if item["active"]} == {second, other}
+    with pytest.raises(ValueError):
+        store.activate("missing")
+    store.activate(first)
+    assert [item["id"] for item in store.list_versions("guide") if item["active"]] == [first]
+    assert store.get(second)["document"]["text"] == "new"
