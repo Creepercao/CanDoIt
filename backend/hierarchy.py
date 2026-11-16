@@ -82,3 +82,43 @@ class HierarchyStore:
                 "WHERE (? IS NULL OR s.source=?) ORDER BY s.source, s.id", (source, source)).fetchall()
         return [{"id": row[0], "document_id": row[1], "source": row[2], "active": row[0] == row[3]}
                 for row in rows]
+
+    def context(self, chunk_ids, max_chars=4000):
+        """Expand ranked active chunk IDs to unique parent sections under a budget."""
+        if not isinstance(chunk_ids, list) or any(not isinstance(item, str) or not item.strip() for item in chunk_ids):
+            raise ValueError("chunk_ids must be an array of non-empty strings")
+        if type(max_chars) is not int or max_chars < 1:
+            raise ValueError("max_chars must be a positive integer")
+        requested = list(dict.fromkeys(chunk_ids))
+        lookup = {}
+        if requested:
+            for version in self.list_versions():
+                if not version["active"]:
+                    continue
+                snapshot = self.get(version["id"])
+                sections = {section["id"]: section for section in snapshot["sections"]}
+                for chunk in snapshot["chunks"]:
+                    if chunk["id"] in requested:
+                        lookup[chunk["id"]] = (version, sections[chunk["parent_id"]])
+        if any(chunk_id not in lookup for chunk_id in requested):
+            raise ValueError("some chunk IDs are missing or belong to inactive snapshots")
+        parents = {}
+        for chunk_id in requested:
+            version, section = lookup[chunk_id]
+            key = (version["id"], section["id"])
+            if key not in parents:
+                parents[key] = {"snapshot_id": version["id"], "document_id": version["document_id"],
+                                "source": version["source"], "section_id": section["id"],
+                                "path": section["path"], "start": section["start"],
+                                "section_end": section["end"], "text": section["text"], "matched_chunk_ids": []}
+            parents[key]["matched_chunk_ids"].append(chunk_id)
+        contexts, remaining = [], max_chars
+        for parent in parents.values():
+            if remaining == 0:
+                break
+            content = parent["text"][:remaining]
+            contexts.append({**parent, "text": content, "end": parent["start"] + len(content),
+                             "truncated": len(content) < len(parent["text"])})
+            remaining -= len(content)
+        return {"contexts": contexts, "chars": max_chars - remaining, "max_chars": max_chars,
+                "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts)}

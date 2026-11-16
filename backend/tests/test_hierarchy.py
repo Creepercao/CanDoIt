@@ -75,3 +75,35 @@ def test_activation_is_explicit_reversible_and_isolated_per_source(tmp_path):
     store.activate(first)
     assert [item["id"] for item in store.list_versions("guide") if item["active"]] == [first]
     assert store.get(second)["document"]["text"] == "new"
+
+
+def test_context_expands_unique_parents_in_rank_order_and_enforces_budget(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    snapshot = example()
+    store.activate(store.save(snapshot))
+    first_section = snapshot["sections"][0]
+    first_chunks = [item["id"] for item in snapshot["chunks"] if item["parent_id"] == first_section["id"]]
+    last = snapshot["chunks"][-1]["id"]
+    result = store.context([last, first_chunks[0], first_chunks[1], last], max_chars=1000)
+    assert len(result["contexts"]) == 2
+    assert result["contexts"][0]["text"].endswith("尾部")
+    assert result["contexts"][1]["text"] == first_section["text"]
+    assert result["contexts"][1]["matched_chunk_ids"] == first_chunks[:2]
+    limited = store.context([first_chunks[0], last], max_chars=10)
+    assert limited["chars"] == 10
+    assert limited["contexts"][0]["truncated"] is True
+    assert limited["contexts"][0]["end"] == first_section["start"] + 10
+    assert limited["omitted_sections"] == 1
+
+
+def test_context_never_serves_old_versions_or_silently_drops_unknown_hits(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    old, new = example("old"), example("new")
+    old_id = store.save(old)
+    store.activate(old_id)
+    store.activate(store.save(new))
+    with pytest.raises(ValueError, match="inactive"):
+        store.context([old["chunks"][0]["id"]])
+    with pytest.raises(ValueError):
+        store.context([new["chunks"][0]["id"], "unknown"])
+    assert store.context([])["contexts"] == []
