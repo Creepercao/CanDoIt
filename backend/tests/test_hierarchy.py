@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from backend.chunking import prepare_document
-from backend.hierarchy import validate_snapshot
+from backend.hierarchy import validate_snapshot, HierarchyStore
 
 
 def example(text="# A\n" + "正文" * 40 + "\n# B\n尾部", source="guide"):
@@ -34,3 +34,27 @@ def test_tampered_snapshots_cannot_be_imported(field):
         del snapshot["sections"]
     with pytest.raises(ValueError):
         validate_snapshot(snapshot)
+
+
+def test_store_reopens_immutable_snapshots_and_distinguishes_chunk_configuration(tmp_path):
+    path = tmp_path / "hierarchy.sqlite"
+    store = HierarchyStore(path)
+    first = example()
+    snapshot_id = store.save(first)
+    assert store.save(first) == snapshot_id
+    assert HierarchyStore(path).get(snapshot_id) == first
+    alternative = prepare_document(first["document"]["text"], "guide", 20, 0)
+    assert alternative["document"]["id"] == first["document"]["id"]
+    other_id = store.save(alternative)
+    assert other_id != snapshot_id
+    assert store.get(other_id) == alternative
+    assert store.get(snapshot_id) == first
+    assert store.get("missing") is None
+
+
+def test_invalid_snapshot_does_not_create_store(tmp_path):
+    path = tmp_path / "store.sqlite"
+    with pytest.raises(ValueError):
+        HierarchyStore(path).save({})
+    assert HierarchyStore(path).get("missing") is None
+    assert not path.exists()
