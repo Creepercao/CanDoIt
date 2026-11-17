@@ -1,8 +1,51 @@
 # 离线层级快照与上下文取回
 
 这组工具承接 chunk_preview 的 JSON，保存到用户指定的独立 SQLite 文件。它不连接生产
-ChromaDB、不生成向量、不训练模型，也不判断哪些分块与问题相关；命中的分块 ID 由调用者提供。
+ChromaDB、不生成向量、不训练模型。可调用离线词法检索得到命中分块，或由调用者提供分块 ID。
 当前交付为分块准备后的本地快照、版本选择和父章节取回，尚未完成章节摘要与向量两级检索。
+
+## 离线词法检索
+
+完成导入和激活后，可输入问题并同时取回上下文：
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite search "退款规则" --section-k 5 --top-k 5 --with-context --max-chars 4000
+```
+
+检索只使用生效快照，先按章节路径与全文计算 BM25，保留前 section-k 个正分章节；
+再在其下分块中分别计算正文 BM25 和标题路径 BM25，用 RRF 融合前 top-k 个结果。
+每路候选在融合前保留全部正分结果，未命中词项的结果不会为凑数补齐。
+标题路径路可召回正文不含查询词但标题相关的块。首阶段遗漏的章节无法由分块融合补回，
+需要在评估时关注 section-k 的影响。
+
+BM25 使用 k1=1.2、b=0.75 和正值 IDF；查询重复词只计算一次。英文标识符与数字转小写，
+中文按单字及相邻双字切词，不跨标点组合。这是便于复现的分词基线，不包含词典分词、
+同义词扩展、语义理解或医疗/业务规则。当前只覆盖基本中文汉字区与 ASCII 标识符。
+
+RRF 使用每路 `1/(60+rank)` 相加，不混合 BM25 原始分数。相同路重复 ID 去重后排名，
+同分按 ID 确定性排序。输出 score 是 RRF 分数，body_score/title_score/section_score 是
+各阶段原始分数；ranks 的顺序为正文路、标题路。分数不是概率，不应套用向量相似度阈值。
+当前两路均为词法检索，不属于向量与 BM25 的混合检索，也未使用 Cross-Encoder。
+
+## 导出排名并评估
+
+人工标注 JSON 沿用 retrieval_eval 的 query/relevant_ids/answerable/tags 格式，其中 relevant_ids
+必须使用对应快照的分块 ID，不能直接将章节或旧知识库条目 ID 当作分块 ID：
+
+```powershell
+python -m backend.tools.hierarchy_export labels.json temp/hierarchy-rankings.json --store temp/hierarchy.sqlite --depth 20 --section-k 5
+python -m backend.tools.retrieval_eval temp/hierarchy-rankings.json --k 5
+```
+
+hierarchy_export 仅调用本地词法检索，输出排名可直接用于已有基线对比、分组指标与退步题复核。
+它拒绝无生效快照的库；检测到导出前后生效快照集合变化时中止，不创建排名文件。
+输出路径必须不存在。标准输出另含输入标注指纹、检索配置和生效快照 ID，应随实验另行保留。
+评估期间应停止其他进程切换版本：前后集合检查不是覆盖全部查询的数据库一致性事务，
+无法保证检测到中途切换后又恢复的情况。标注相关性仍需人工确认，工具不验证标注 ID 的真实相关性。
+
+对比须固定语料版本、分块参数、分词/BM25/RRF 实现与导出深度。section-k 改变时候选集会变化，
+候选子集内计算的 BM25 分数也会变化，不应跨实验直接比较原始分数。
+此基线尚无真实业务质量结论，测试中的人工样本得分不代表生产效果。
 
 ## 操作流程
 
@@ -62,13 +105,13 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 它检测数据不一致，不提供签名或防止攻击者重写整个数据库的保证，也不自动修复或删除内容。
 
 此版本在上下文请求时读取生效快照并查找分块，校验时会重建分块，适合小规模离线验证；
-尚无分块数据库索引、生产并发性能验证、自动过期清理或访问权限层。快照正文存储于 SQLite，
+词法索引在每次查询时临时构建，尚无持久化分块检索索引、生产并发性能验证、自动过期清理或访问权限层。快照正文存储于 SQLite，
 实验数据应放在 temp 等本地目录，不要提交包含业务文本的数据库。
 
 ## 无训练测试
 
 ```powershell
-python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_cli.py -q
+python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```
 
 测试验证内容校验、幂等保存、配置版本隔离、生效回退、原文位置、预算截断、旧版本拒绝、

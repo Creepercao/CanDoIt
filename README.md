@@ -624,6 +624,8 @@ python -m pytest backend/tests -q
 预览，见 [分块准备说明](backend/tools/CHUNKING.md)。它目前用于离线检查，尚未接入生产知识库。
 已提供独立 SQLite 快照、显式版本切换、父章节上下文取回及完整性检查，见
 [离线层级存储说明](backend/tools/HIERARCHY.md)。
+离线检索现支持章节 BM25 筛选、分块正文/标题两路 RRF、带上下文的查询和评估排名导出；
+该词法基线不加载模型，尚未接入生产向量检索。
 
 ## Skill 技能系统
 
