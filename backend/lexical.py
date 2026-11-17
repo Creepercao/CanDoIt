@@ -65,3 +65,22 @@ class BM25Index:
             if score > 0:
                 results.append({"id": identifier, "score": score})
         return sorted(results, key=lambda item: (-item["score"], item["id"]))[:top_k]
+
+
+def reciprocal_rank_fusion(rankings, top_k=5, rank_constant=60):
+    """Fuse ranked ID lists; duplicates within a route count only once."""
+    if not isinstance(rankings, list) or any(not isinstance(route, list) for route in rankings):
+        raise ValueError("rankings must be an array of ranked ID arrays")
+    if type(top_k) is not int or top_k < 1:
+        raise ValueError("top_k must be a positive integer")
+    if type(rank_constant) is not int or rank_constant < 1:
+        raise ValueError("rank_constant must be a positive integer")
+    results = {}
+    for route_index, route in enumerate(rankings):
+        if any(not isinstance(identifier, str) or not identifier.strip() for identifier in route):
+            raise ValueError("ranked IDs must be non-empty strings")
+        for rank, identifier in enumerate(dict.fromkeys(route), 1):
+            item = results.setdefault(identifier, {"id": identifier, "score": 0.0, "ranks": [None] * len(rankings)})
+            item["score"] += 1 / (rank_constant + rank)
+            item["ranks"][route_index] = rank
+    return sorted(results.values(), key=lambda item: (-item["score"], item["id"]))[:top_k]

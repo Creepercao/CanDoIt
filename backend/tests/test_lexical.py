@@ -1,6 +1,6 @@
 import pytest
 
-from backend.lexical import tokenize, BM25Index
+from backend.lexical import tokenize, BM25Index, reciprocal_rank_fusion
 
 
 def test_tokenizer_handles_chinese_identifiers_numbers_and_punctuation():
@@ -39,3 +39,21 @@ def test_bm25_term_frequency_saturates_and_length_normalization_matters():
 def test_invalid_bm25_inputs_rejected(documents, k1, b):
     with pytest.raises(ValueError):
         BM25Index(documents, k1=k1, b=b)
+
+
+def test_rrf_boosts_shared_candidates_and_retains_route_evidence():
+    result = reciprocal_rank_fusion([["a", "a", "b"], ["b", "c"]])
+    assert result[0]["id"] == "b"
+    assert result[0]["ranks"] == [2, 1]
+    assert result[0]["score"] == pytest.approx(1 / 62 + 1 / 61)
+    assert result[1]["ranks"] == [1, None]
+    assert reciprocal_rank_fusion([]) == []
+    assert reciprocal_rank_fusion([[], []]) == []
+    assert reciprocal_rank_fusion([["z"], ["a"]], top_k=1)[0]["id"] == "a"
+
+
+@pytest.mark.parametrize("rankings,top_k,constant", [(None, 5, 60), ([[""]], 5, 60),
+    ([[1]], 5, 60), (["a"], 5, 60), ([], True, 60), ([], 5, 0), ([], 5, True)])
+def test_invalid_rrf_inputs_rejected(rankings, top_k, constant):
+    with pytest.raises(ValueError):
+        reciprocal_rank_fusion(rankings, top_k, constant)
