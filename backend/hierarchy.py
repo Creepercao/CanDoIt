@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 
 from backend.chunking import prepare_document
+from backend.lexical import BM25Index, reciprocal_rank_fusion, tokenize
 
 
 def validate_snapshot(snapshot):
@@ -156,3 +157,43 @@ class HierarchyStore:
             remaining -= len(content)
         return {"contexts": contexts, "chars": max_chars - remaining, "max_chars": max_chars,
                 "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts)}
+
+    def search(self, query, top_k=5, section_k=5):
+        """Offline lexical section selection, then body/title chunk RRF."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        if any(type(value) is not int or not 1 <= value <= 200 for value in (top_k, section_k)):
+            raise ValueError("top_k and section_k must be integers between 1 and 200")
+        if not tokenize(query):
+            return []
+        sections, chunks = {}, {}
+        for version in self.list_versions():
+            if not version["active"]:
+                continue
+            snapshot = self.get(version["id"])
+            for section in snapshot["sections"]:
+                sections[section["id"]] = {**section, "source": version["source"], "snapshot_id": version["id"]}
+            for chunk in snapshot["chunks"]:
+                chunks[chunk["id"]] = chunk
+        selected = BM25Index([{"id": key, "text": " ".join(value["path"]) + "\n" + value["text"]}
+                              for key, value in sections.items()]).search(query, section_k)
+        section_scores = {item["id"]: item["score"] for item in selected}
+        candidates = [chunk for chunk in chunks.values() if chunk["parent_id"] in section_scores]
+        if not candidates:
+            return []
+        body = BM25Index(candidates).search(query, len(candidates))
+        title = BM25Index([{"id": chunk["id"], "text": " ".join(sections[chunk["parent_id"]]["path"])}
+                           for chunk in candidates]).search(query, len(candidates))
+        fused = reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], top_k)
+        body_scores, title_scores = ({item["id"]: item["score"] for item in route} for route in (body, title))
+        results = []
+        for hit in fused:
+            chunk = chunks[hit["id"]]
+            section = sections[chunk["parent_id"]]
+            results.append({**hit, "body_score": body_scores.get(hit["id"], 0),
+                            "title_score": title_scores.get(hit["id"], 0),
+                            "section_score": section_scores[section["id"]], "text": chunk["text"],
+                            "start": chunk["start"], "end": chunk["end"], "parent_id": section["id"],
+                            "document_id": chunk["document_id"], "snapshot_id": section["snapshot_id"],
+                            "source": section["source"], "path": section["path"]})
+        return results
