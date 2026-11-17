@@ -25,6 +25,12 @@ def main():
     context = commands.add_parser("context")
     context.add_argument("chunk_ids", type=Path, help="UTF-8 JSON array of ranked chunk IDs")
     context.add_argument("--max-chars", type=int, default=4000)
+    search = commands.add_parser("search")
+    search.add_argument("query")
+    search.add_argument("--top-k", type=int, default=5)
+    search.add_argument("--section-k", type=int, default=5)
+    search.add_argument("--with-context", action="store_true")
+    search.add_argument("--max-chars", type=int, default=4000)
     args = parser.parse_args()
     try:
         if args.output and (args.output.exists() or args.output.is_symlink()):
@@ -46,6 +52,14 @@ def main():
             result = {"snapshot_id": args.snapshot_id, "source": store.activate(args.snapshot_id)}
         elif args.command == "verify":
             result = store.verify()
+        elif args.command == "search":
+            if args.max_chars < 1:
+                raise ValueError("max_chars must be positive")
+            hits = store.search(args.query, args.top_k, args.section_k)
+            result = {"query": args.query, "hits": hits,
+                      "configuration": {"top_k": args.top_k, "section_k": args.section_k}}
+            if args.with_context:
+                result["context"] = store.context([hit["id"] for hit in hits], args.max_chars)
         else:
             chunk_ids, source = read_json_input(args.chunk_ids)
             result = {**store.context(chunk_ids, args.max_chars), "input": source}

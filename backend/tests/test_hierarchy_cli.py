@@ -46,3 +46,18 @@ def test_missing_or_invalid_input_does_not_create_a_store(tmp_path):
     source.write_text('{}', encoding="utf-8")
     assert run_cli(store, "import", source).returncode == 2
     assert not store.exists()
+
+
+def test_search_cli_can_return_rank_evidence_and_budgeted_context(tmp_path):
+    source, store = tmp_path / "snapshot.json", tmp_path / "store.sqlite"
+    source.write_text(json.dumps(prepare_document("# Refund\n退款退货 policy", "manual")), encoding="utf-8")
+    assert run_cli(store, "import", source, "--activate").returncode == 0
+    result = run_cli(store, "search", "refund", "--with-context", "--max-chars", 10)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["hits"][0]["title_score"] > 0
+    assert report["context"]["chars"] == 10
+    assert report["context"]["contexts"][0]["truncated"] is True
+    assert run_cli(store, "search", "refund", "--top-k", 0).returncode == 2
+    empty = run_cli(store, "search", "notrecorded", "--with-context")
+    assert json.loads(empty.stdout)["context"]["contexts"] == []
