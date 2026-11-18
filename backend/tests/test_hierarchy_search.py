@@ -38,3 +38,25 @@ def test_search_configuration_rejected_before_creating_store(tmp_path, query, k,
     with pytest.raises(ValueError):
         HierarchyStore(path).search(query, k, section_k)
     assert not path.exists()
+
+
+def test_source_filter_is_applied_before_ranking_and_context_expansion(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    for source in ("manual", "policy"):
+        store.activate(store.save(prepare_document("needle " + source, source)))
+    hits = store.search("needle", sources=["manual", "manual"])
+    assert hits and {hit["source"] for hit in hits} == {"manual"}
+    policy_hit = store.search("needle", sources=["policy"])[0]
+    with pytest.raises(ValueError):
+        store.context([policy_hit["id"]], sources=["manual"])
+    with pytest.raises(ValueError, match="no active"):
+        store.prepare(["typo"])
+    assert len(store.prepare().snapshot_ids) == 2
+
+
+@pytest.mark.parametrize("sources", [[], "manual", [None], [""], [True]])
+def test_invalid_source_filters_never_create_database(tmp_path, sources):
+    path = tmp_path / "store.sqlite"
+    with pytest.raises(ValueError):
+        HierarchyStore(path).prepare(sources)
+    assert not path.exists()

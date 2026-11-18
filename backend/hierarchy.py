@@ -120,15 +120,24 @@ class HierarchyStore:
         return [{"id": row[0], "document_id": row[1], "source": row[2], "active": row[0] == row[3]}
                 for row in rows]
 
-    def prepare(self):
+    def prepare(self, sources=None):
         """Capture a fixed, validated corpus for a sequence of queries."""
-        return HierarchyView(self.active_snapshots())
+        if sources is not None and (not isinstance(sources, list) or not sources or
+                any(not isinstance(source, str) or not source.strip() for source in sources)):
+            raise ValueError("sources must be a non-empty array of source keys")
+        snapshots = self.active_snapshots()
+        if sources is not None:
+            selected = set(sources)
+            if selected - {record["source"] for record in snapshots}:
+                raise ValueError("some sources have no active snapshot")
+            snapshots = [record for record in snapshots if record["source"] in selected]
+        return HierarchyView(snapshots)
 
-    def context(self, chunk_ids, max_chars=4000):
-        return self.prepare().context(chunk_ids, max_chars)
+    def context(self, chunk_ids, max_chars=4000, *, sources=None):
+        return self.prepare(sources).context(chunk_ids, max_chars)
 
-    def search(self, query, top_k=5, section_k=5):
-        return self.prepare().search(query, top_k, section_k)
+    def search(self, query, top_k=5, section_k=5, *, sources=None):
+        return self.prepare(sources).search(query, top_k, section_k)
 
     def active_snapshots(self):
         """Read all active pointers and payloads in one SQLite statement."""
