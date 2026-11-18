@@ -61,3 +61,21 @@ def test_search_cli_can_return_rank_evidence_and_budgeted_context(tmp_path):
     assert run_cli(store, "search", "refund", "--top-k", 0).returncode == 2
     empty = run_cli(store, "search", "notrecorded", "--with-context")
     assert json.loads(empty.stdout)["context"]["contexts"] == []
+
+
+def test_cli_scopes_corpus_and_returns_context_around_tail_hit(tmp_path):
+    from backend.hierarchy import HierarchyStore
+    path = tmp_path / "store.sqlite"
+    store = HierarchyStore(path)
+    manual = store.save(prepare_document("# Manual\n" + "x" * 200 + " needle", "manual", 40))
+    store.activate(manual)
+    store.activate(store.save(prepare_document("# Policy\nneedle", "policy")))
+    result = run_cli(path, "search", "needle", "--source", "manual", "--with-context",
+                     "--context-mode", "hit", "--max-chars", 30)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["snapshot_ids"] == [manual]
+    assert {hit["source"] for hit in report["hits"]} == {"manual"}
+    assert "needle" in report["context"]["contexts"][0]["text"]
+    assert report["context"]["mode"] == "hit"
+    assert run_cli(path, "search", "needle", "--source", "typo").returncode == 2

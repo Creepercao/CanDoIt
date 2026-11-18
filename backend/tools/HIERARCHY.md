@@ -10,6 +10,7 @@ ChromaDB、不生成向量、不训练模型。可调用离线词法检索得到
 
 ```powershell
 python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite search "退款规则" --section-k 5 --top-k 5 --with-context --max-chars 4000
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite search "退款规则" --source manual --with-context --context-mode hit --max-chars 1000
 ```
 
 检索只使用生效快照，先按章节路径与全文计算 BM25，保留前 section-k 个正分章节；
@@ -27,6 +28,25 @@ RRF 使用每路 `1/(60+rank)` 相加，不混合 BM25 原始分数。相同路�
 各阶段原始分数；ranks 的顺序为正文路、标题路。分数不是概率，不应套用向量相似度阈值。
 当前两路均为词法检索，不属于向量与 BM25 的混合检索，也未使用 Cross-Encoder。
 
+`search`、`context` 和 `hierarchy_export` 均支持重复填写 `--source`，将语料限定为指定来源的
+生效快照。筛选发生在 BM25 统计与排名之前，因此分数也随语料范围变化；指定不存在或
+没有生效快照的来源会报错。省略时使用全部生效来源。库 API 的 sources 接受非空字符串数组，
+重复值去重，空数组不表示“全部”。从范围外取回上下文会报错，不会跨来源补齐结果。
+
+## 固定版本与只读查询
+
+读取数据库使用 SQLite mode=ro 连接，不建表、不写入、不自动初始化不相关数据库。
+保存和激活使用明确的写连接。生效来源与快照正文通过同一条 SELECT 读取并验证身份，
+缺失引用或来源不一致会直接报错，而非静默当作空语料。
+
+可使用 `view = store.prepare(sources=["manual"])` 捕获固定语料，再调用 view.search 和
+view.context。该视图脱离数据库，后续激活或回退不会影响它；active_snapshots 返回副本，
+修改副本也不会改变视图。新建视图才反映新版本。视图构造时校验一次快照，仍占用完整正文内存，
+不是持久索引或常驻服务缓存。
+
+CLI `search --with-context` 的检索和章节取回共用一个视图，输出 snapshot_ids 可追溯实际版本。
+单独调用 store.search/store.context 则各自捕获当时版本；需要多步一致性时应显式复用视图。
+
 ## 导出排名并评估
 
 人工标注 JSON 沿用 retrieval_eval 的 query/relevant_ids/answerable/tags 格式，其中 relevant_ids
@@ -38,10 +58,11 @@ python -m backend.tools.retrieval_eval temp/hierarchy-rankings.json --k 5
 ```
 
 hierarchy_export 仅调用本地词法检索，输出排名可直接用于已有基线对比、分组指标与退步题复核。
-它拒绝无生效快照的库；检测到导出前后生效快照集合变化时中止，不创建排名文件。
+它拒绝无生效快照的库；整批查询共用开始时捕获的固定语料视图，不会在查询之间混入新版本。
 输出路径必须不存在。标准输出另含输入标注指纹、检索配置和生效快照 ID，应随实验另行保留。
-评估期间应停止其他进程切换版本：前后集合检查不是覆盖全部查询的数据库一致性事务，
-无法保证检测到中途切换后又恢复的情况。标注相关性仍需人工确认，工具不验证标注 ID 的真实相关性。
+其他进程切换生效版本不会改变已捕获的评估视图。active_snapshot_ids 记录本批实际使用的版本，
+不保证这些版本在导出结束时仍是数据库最新生效版本。标注相关性仍需人工确认，工具不验证标注 ID 的真实相关性。
+可追加 `--source manual` 导出指定来源；标注也应匹配该范围，避免把范围外标签当作召回失败。
 
 对比须固定语料版本、分块参数、分词/BM25/RRF 实现与导出深度。section-k 改变时候选集会变化，
 候选子集内计算的 BM25 分数也会变化，不应跨实验直接比较原始分数。
@@ -93,8 +114,12 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
   章节下不同分块的重叠文本不会被简单重复拼接。
 - `max_chars` 为正整数，限制返回章节正文的总字符数。超预算时截断最后一章或省略后续章节，
   返回 `truncated` 和 `omitted_sections`。这是字符预算，不含 JSON 元数据，也不是模型 token 预算。
-- `start/end` 对应实际返回原文区间，`section_end` 是完整章节末尾。截断从章节开头取前缀，
-  因此命中位置可能处于被截掉的尾部，应结合匹配 ID 和截断标记判断是否需要扩大预算。
+- `start/end` 对应实际返回原文区间，`section_start/section_end` 是完整章节范围。
+  默认 `--context-mode prefix` 从章节开头取前缀，可能截掉尾部命中；`--context-mode hit`
+  则优先围绕该章节的首个（排名最高）命中分块取窗口，预算够时保留整个首个分块并扩展邻近文本。
+  预算比该分块还小时仅显示其前一部分，不能保证其他命中也都进入窗口。
+- `matched_ranges` 列出所有匹配分块的原文区间；visible_chunk_ids 表示与窗口有交集，
+  complete_chunk_ids 表示整块落入窗口。仅匹配不代表已完整展示，需同时查看截断与可见性字段。
 - JSON 包含快照 ID、文档 ID、章节 ID、来源、路径、匹配分块 ID 和原文，方便追溯。
   `context` 是按给定命中结果取回父章节，未实现检索、重排、自动摘要或跨章节上下文选择。
 

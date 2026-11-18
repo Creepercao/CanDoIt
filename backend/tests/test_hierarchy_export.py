@@ -48,6 +48,23 @@ def test_export_refuses_empty_corpus_and_freezes_versions_during_queries(tmp_pat
 
     monkeypatch.setattr(view, "search", changed)
     monkeypatch.setattr(store, "prepare", lambda: view)
-    rows, active = export_rankings(labels * 1, store)
+    rows, active = export_rankings(labels + [{**labels[0], "query": "q q"}], store)
     assert active == [first]
     assert rows[0]["ranked_ids"] == [store.get(first)["chunks"][0]["id"]]
+    assert rows[1]["ranked_ids"] == rows[0]["ranked_ids"]
+
+
+def test_export_respects_source_scope_and_records_selected_ids(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    selected = None
+    for source in ("manual", "policy"):
+        sid = store.save(prepare_document("needle", source))
+        store.activate(sid)
+        if source == "manual":
+            selected = sid
+    labels = [{"query": "needle", "relevant_ids": [store.get(selected)["chunks"][0]["id"]]}]
+    rows, active = export_rankings(labels, store, sources=["manual"])
+    assert active == [selected]
+    assert rows[0]["ranked_ids"] == labels[0]["relevant_ids"]
+    with pytest.raises(ValueError, match="no active"):
+        export_rankings(labels, store, sources=["missing"])

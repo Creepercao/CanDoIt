@@ -25,12 +25,16 @@ def main():
     context = commands.add_parser("context")
     context.add_argument("chunk_ids", type=Path, help="UTF-8 JSON array of ranked chunk IDs")
     context.add_argument("--max-chars", type=int, default=4000)
+    context.add_argument("--source", dest="sources", action="append")
+    context.add_argument("--context-mode", choices=("prefix", "hit"), default="prefix")
     search = commands.add_parser("search")
     search.add_argument("query")
     search.add_argument("--top-k", type=int, default=5)
     search.add_argument("--section-k", type=int, default=5)
     search.add_argument("--with-context", action="store_true")
     search.add_argument("--max-chars", type=int, default=4000)
+    search.add_argument("--source", dest="sources", action="append")
+    search.add_argument("--context-mode", choices=("prefix", "hit"), default="prefix")
     args = parser.parse_args()
     try:
         if args.output and (args.output.exists() or args.output.is_symlink()):
@@ -55,14 +59,18 @@ def main():
         elif args.command == "search":
             if args.max_chars < 1:
                 raise ValueError("max_chars must be positive")
-            hits = store.search(args.query, args.top_k, args.section_k)
+            view = store.prepare(args.sources)
+            hits = view.search(args.query, args.top_k, args.section_k)
             result = {"query": args.query, "hits": hits,
-                      "configuration": {"top_k": args.top_k, "section_k": args.section_k}}
+                      "snapshot_ids": list(view.snapshot_ids),
+                      "configuration": {"top_k": args.top_k, "section_k": args.section_k, "sources": args.sources}}
             if args.with_context:
-                result["context"] = store.context([hit["id"] for hit in hits], args.max_chars)
+                result["context"] = view.context([hit["id"] for hit in hits], args.max_chars, mode=args.context_mode)
         else:
             chunk_ids, source = read_json_input(args.chunk_ids)
-            result = {**store.context(chunk_ids, args.max_chars), "input": source}
+            view = store.prepare(args.sources)
+            result = {**view.context(chunk_ids, args.max_chars, mode=args.context_mode),
+                      "snapshot_ids": list(view.snapshot_ids), "input": source}
         report = json.dumps(result, ensure_ascii=False, indent=2)
         if args.output:
             with args.output.open("x", encoding="utf-8") as handle:
