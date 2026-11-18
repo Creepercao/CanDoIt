@@ -129,10 +129,8 @@ class HierarchyStore:
         requested = list(dict.fromkeys(chunk_ids))
         lookup = {}
         if requested:
-            for version in self.list_versions():
-                if not version["active"]:
-                    continue
-                snapshot = self.get(version["id"])
+            for version in self.active_snapshots():
+                snapshot = version["snapshot"]
                 sections = {section["id"]: section for section in snapshot["sections"]}
                 for chunk in snapshot["chunks"]:
                     if chunk["id"] in requested:
@@ -169,10 +167,8 @@ class HierarchyStore:
         if not tokenize(query):
             return []
         sections, chunks = {}, {}
-        for version in self.list_versions():
-            if not version["active"]:
-                continue
-            snapshot = self.get(version["id"])
+        for version in self.active_snapshots():
+            snapshot = version["snapshot"]
             for section in snapshot["sections"]:
                 sections[section["id"]] = {**section, "source": version["source"], "snapshot_id": version["id"]}
             for chunk in snapshot["chunks"]:
@@ -199,3 +195,20 @@ class HierarchyStore:
                             "document_id": chunk["document_id"], "snapshot_id": section["snapshot_id"],
                             "source": section["source"], "path": section["path"]})
         return results
+
+    def active_snapshots(self):
+        """Read all active pointers and payloads in one SQLite statement."""
+        if not self.path.exists():
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT a.source, s.id, s.document_id, s.source, s.payload "
+                "FROM active_sources a LEFT JOIN snapshots s ON s.id=a.snapshot_id ORDER BY a.source"
+            ).fetchall()
+        result = []
+        for source, snapshot_id, document_id, stored_source, payload in rows:
+            if snapshot_id is None or source != stored_source:
+                raise ValueError("active snapshot source or reference is inconsistent")
+            snapshot = _decode_row((snapshot_id, document_id, stored_source, payload))
+            result.append({"id": snapshot_id, "document_id": document_id, "source": source, "snapshot": snapshot})
+        return result

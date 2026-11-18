@@ -165,3 +165,21 @@ def test_read_does_not_initialize_an_unrelated_database(tmp_path):
         HierarchyStore(path).list_versions()
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT name FROM sqlite_master").fetchall() == []
+
+
+def test_active_read_checks_references_instead_of_hiding_invalid_pointers(tmp_path):
+    import sqlite3
+    path = tmp_path / "store.sqlite"
+    store = HierarchyStore(path)
+    sid = store.save(example("needle", "manual"))
+    other = store.save(example("other", "policy"))
+    store.activate(sid)
+    assert [row["id"] for row in store.active_snapshots()] == [sid]
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE active_sources SET snapshot_id=?", (other,))
+    with pytest.raises(ValueError, match="inconsistent"):
+        store.search("needle")
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE active_sources SET snapshot_id='missing'")
+    with pytest.raises(ValueError, match="inconsistent"):
+        store.active_snapshots()
