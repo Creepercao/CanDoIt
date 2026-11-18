@@ -50,13 +50,15 @@ class HierarchyStore:
         self.path = Path(path)
 
     @contextmanager
-    def _connect(self):
-        connection = sqlite3.connect(self.path)
+    def _connect(self, write=False):
+        connection = (sqlite3.connect(self.path) if write else
+                      sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True))
         try:
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("CREATE TABLE IF NOT EXISTS snapshots ("
+            if write:
+                connection.execute("CREATE TABLE IF NOT EXISTS snapshots ("
                                "id TEXT PRIMARY KEY, document_id TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL)")
-            connection.execute("CREATE TABLE IF NOT EXISTS active_sources ("
+                connection.execute("CREATE TABLE IF NOT EXISTS active_sources ("
                                "source TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL REFERENCES snapshots(id))")
             with connection:
                 yield connection
@@ -67,7 +69,7 @@ class HierarchyStore:
         canonical = validate_snapshot(snapshot)  # No file creation for invalid input.
         payload = _payload(canonical)
         snapshot_id = _snapshot_id(payload)
-        with self._connect() as connection:
+        with self._connect(write=True) as connection:
             connection.execute("INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?, ?)",
                                (snapshot_id, canonical["document"]["id"], canonical["document"]["source"], payload))
         return snapshot_id
@@ -101,7 +103,7 @@ class HierarchyStore:
         if snapshot is None:
             raise ValueError("cannot activate an unknown snapshot")
         source = snapshot["document"]["source"]
-        with self._connect() as connection:
+        with self._connect(write=True) as connection:
             connection.execute("INSERT INTO active_sources VALUES (?, ?) "
                                "ON CONFLICT(source) DO UPDATE SET snapshot_id=excluded.snapshot_id",
                                (source, snapshot_id))

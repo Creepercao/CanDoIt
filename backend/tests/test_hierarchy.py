@@ -139,3 +139,29 @@ def test_snapshot_offsets_reject_boolean_numeric_aliases():
     snapshot["chunks"][0]["start"] = False
     with pytest.raises(ValueError):
         validate_snapshot(snapshot)
+
+
+def test_read_connections_cannot_write_or_change_the_database(tmp_path):
+    import sqlite3
+    path = tmp_path / "store # 中文.sqlite"
+    store = HierarchyStore(path)
+    sid = store.save(example())
+    store.activate(sid)
+    before = path.read_bytes()
+    assert store.get(sid)
+    assert store.list_versions()
+    assert store.verify()["valid"]
+    with store._connect() as connection:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute("DELETE FROM snapshots")
+    assert path.read_bytes() == before
+
+
+def test_read_does_not_initialize_an_unrelated_database(tmp_path):
+    import sqlite3
+    path = tmp_path / "empty.sqlite"
+    sqlite3.connect(path).close()
+    with pytest.raises(sqlite3.OperationalError):
+        HierarchyStore(path).list_versions()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master").fetchall() == []
