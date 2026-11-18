@@ -133,8 +133,8 @@ class HierarchyStore:
             snapshots = [record for record in snapshots if record["source"] in selected]
         return HierarchyView(snapshots)
 
-    def context(self, chunk_ids, max_chars=4000, *, sources=None):
-        return self.prepare(sources).context(chunk_ids, max_chars)
+    def context(self, chunk_ids, max_chars=4000, *, sources=None, mode="prefix"):
+        return self.prepare(sources).context(chunk_ids, max_chars, mode=mode)
 
     def search(self, query, top_k=5, section_k=5, *, sources=None):
         return self.prepare(sources).search(query, top_k, section_k)
@@ -168,12 +168,14 @@ class HierarchyView:
         # Return detached records so caller mutations cannot change this view.
         return json.loads(self._records)
 
-    def context(self, chunk_ids, max_chars=4000):
+    def context(self, chunk_ids, max_chars=4000, *, mode="prefix"):
         """Expand ranked active chunk IDs to unique parent sections under a budget."""
         if not isinstance(chunk_ids, list) or any(not isinstance(item, str) or not item.strip() for item in chunk_ids):
             raise ValueError("chunk_ids must be an array of non-empty strings")
         if type(max_chars) is not int or max_chars < 1:
             raise ValueError("max_chars must be a positive integer")
+        if mode not in ("prefix", "hit"):
+            raise ValueError("context mode must be prefix or hit")
         requested = list(dict.fromkeys(chunk_ids))
         lookup = {}
         if requested:
@@ -182,29 +184,42 @@ class HierarchyView:
                 sections = {section["id"]: section for section in snapshot["sections"]}
                 for chunk in snapshot["chunks"]:
                     if chunk["id"] in requested:
-                        lookup[chunk["id"]] = (version, sections[chunk["parent_id"]])
+                        lookup[chunk["id"]] = (version, sections[chunk["parent_id"]], chunk)
         if any(chunk_id not in lookup for chunk_id in requested):
             raise ValueError("some chunk IDs are missing or belong to inactive snapshots")
         parents = {}
         for chunk_id in requested:
-            version, section = lookup[chunk_id]
+            version, section, chunk = lookup[chunk_id]
             key = (version["id"], section["id"])
             if key not in parents:
                 parents[key] = {"snapshot_id": version["id"], "document_id": version["document_id"],
                                 "source": version["source"], "section_id": section["id"],
                                 "path": section["path"], "start": section["start"],
-                                "section_end": section["end"], "text": section["text"], "matched_chunk_ids": []}
+                                "section_start": section["start"], "section_end": section["end"],
+                                "text": section["text"], "matched_chunk_ids": [], "matched_ranges": []}
             parents[key]["matched_chunk_ids"].append(chunk_id)
+            parents[key]["matched_ranges"].append({"id": chunk_id, "start": chunk["start"], "end": chunk["end"]})
         contexts, remaining = [], max_chars
         for parent in parents.values():
             if remaining == 0:
                 break
-            content = parent["text"][:remaining]
-            contexts.append({**parent, "text": content, "end": parent["start"] + len(content),
+            length = min(len(parent["text"]), remaining)
+            offset = 0
+            if mode == "hit":
+                anchor = parent["matched_ranges"][0]
+                before = max(0, (length - (anchor["end"] - anchor["start"])) // 2)
+                offset = max(0, anchor["start"] - parent["start"] - before)
+                offset = min(offset, len(parent["text"]) - length)
+            content = parent["text"][offset:offset + length]
+            start, end = parent["start"] + offset, parent["start"] + offset + len(content)
+            visible = [hit["id"] for hit in parent["matched_ranges"] if hit["start"] < end and hit["end"] > start]
+            complete = [hit["id"] for hit in parent["matched_ranges"] if start <= hit["start"] and hit["end"] <= end]
+            contexts.append({**parent, "text": content, "start": start, "end": end,
+                             "visible_chunk_ids": visible, "complete_chunk_ids": complete,
                              "truncated": len(content) < len(parent["text"])})
             remaining -= len(content)
         return {"contexts": contexts, "chars": max_chars - remaining, "max_chars": max_chars,
-                "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts)}
+                "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts), "mode": mode}
 
     def search(self, query, top_k=5, section_k=5):
         """Offline lexical section selection, then body/title chunk RRF."""

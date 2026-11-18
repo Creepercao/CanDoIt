@@ -198,3 +198,24 @@ def test_prepared_view_keeps_search_and_context_on_captured_version(tmp_path):
     records = view.active_snapshots()
     records[0]["snapshot"]["document"]["text"] = "changed"
     assert view.active_snapshots()[0]["snapshot"]["document"]["text"] == "oldneedle"
+
+
+def test_hit_window_keeps_tail_hits_and_reports_partial_visibility(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    text = "# A\n" + "x" * 200 + " tailneedle"
+    snapshot = prepare_document(text, "manual", 20, 0)
+    store.activate(store.save(snapshot))
+    hit = snapshot["chunks"][-1]
+    prefix = store.context([hit["id"]], 30)["contexts"][0]
+    assert prefix["visible_chunk_ids"] == []
+    window = store.context([hit["id"]], 30, mode="hit")["contexts"][0]
+    assert "tailneedle" in window["text"]
+    assert window["text"] == text[window["start"]:window["end"]]
+    assert window["complete_chunk_ids"] == [hit["id"]]
+    assert window["section_start"] == 0 and window["truncated"]
+    tiny = store.context([hit["id"]], 3, mode="hit")["contexts"][0]
+    assert tiny["visible_chunk_ids"] == [hit["id"]]
+    assert tiny["complete_chunk_ids"] == []
+    assert len(tiny["text"]) == 3
+    with pytest.raises(ValueError, match="mode"):
+        store.context([hit["id"]], mode="unknown")
