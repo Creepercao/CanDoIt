@@ -183,3 +183,18 @@ def test_active_read_checks_references_instead_of_hiding_invalid_pointers(tmp_pa
         connection.execute("UPDATE active_sources SET snapshot_id='missing'")
     with pytest.raises(ValueError, match="inconsistent"):
         store.active_snapshots()
+
+
+def test_prepared_view_keeps_search_and_context_on_captured_version(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    first = store.save(example("oldneedle", "manual"))
+    store.activate(first)
+    view = store.prepare()
+    store.activate(store.save(example("newneedle", "manual")))
+    hits = view.search("oldneedle")
+    assert hits and hits[0]["snapshot_id"] == first
+    assert view.context([hits[0]["id"]])["contexts"][0]["text"] == "oldneedle"
+    assert store.search("oldneedle") == []
+    records = view.active_snapshots()
+    records[0]["snapshot"]["document"]["text"] = "changed"
+    assert view.active_snapshots()[0]["snapshot"]["document"]["text"] == "oldneedle"

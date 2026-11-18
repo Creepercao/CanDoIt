@@ -14,13 +14,12 @@ def export_rankings(labels, store, depth=20, section_k=5):
     rows = validate_export(labels, depth=depth, threshold=0)
     if type(section_k) is not int or not 1 <= section_k <= 200:
         raise ValueError("section_k must be an integer between 1 and 200")
-    active = sorted(item["id"] for item in store.list_versions() if item["active"])
+    view = store.prepare()
+    active = list(view.snapshot_ids)
     if not active:
         raise ValueError("store has no active snapshots")
     for row in rows:
-        row["ranked_ids"] = [hit["id"] for hit in store.search(row["query"], depth, section_k)]
-    if active != sorted(item["id"] for item in store.list_versions() if item["active"]):
-        raise ValueError("active snapshots changed during export")
+        row["ranked_ids"] = [hit["id"] for hit in view.search(row["query"], depth, section_k)]
     return rows, active
 
 

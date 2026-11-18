@@ -30,7 +30,7 @@ def test_local_rankings_feed_existing_evaluator_and_keep_no_answer_labels(tmp_pa
     assert "ranked_ids" not in labels[0]
 
 
-def test_export_refuses_empty_or_changed_active_corpus(tmp_path, monkeypatch):
+def test_export_refuses_empty_corpus_and_freezes_versions_during_queries(tmp_path, monkeypatch):
     store = HierarchyStore(tmp_path / "store.sqlite")
     labels = [{"query": "q", "relevant_ids": ["a"]}]
     with pytest.raises(ValueError, match="no active"):
@@ -38,13 +38,16 @@ def test_export_refuses_empty_or_changed_active_corpus(tmp_path, monkeypatch):
     first = store.save(prepare_document("q", "manual"))
     second = store.save(prepare_document("new q", "manual"))
     store.activate(first)
-    original = store.search
+    view = store.prepare()
+    original = view.search
 
     def changed(*args):
         result = original(*args)
         store.activate(second)
         return result
 
-    monkeypatch.setattr(store, "search", changed)
-    with pytest.raises(ValueError, match="changed"):
-        export_rankings(labels, store)
+    monkeypatch.setattr(view, "search", changed)
+    monkeypatch.setattr(store, "prepare", lambda: view)
+    rows, active = export_rankings(labels * 1, store)
+    assert active == [first]
+    assert rows[0]["ranked_ids"] == [store.get(first)["chunks"][0]["id"]]

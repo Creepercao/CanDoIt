@@ -120,6 +120,45 @@ class HierarchyStore:
         return [{"id": row[0], "document_id": row[1], "source": row[2], "active": row[0] == row[3]}
                 for row in rows]
 
+    def prepare(self):
+        """Capture a fixed, validated corpus for a sequence of queries."""
+        return HierarchyView(self.active_snapshots())
+
+    def context(self, chunk_ids, max_chars=4000):
+        return self.prepare().context(chunk_ids, max_chars)
+
+    def search(self, query, top_k=5, section_k=5):
+        return self.prepare().search(query, top_k, section_k)
+
+    def active_snapshots(self):
+        """Read all active pointers and payloads in one SQLite statement."""
+        if not self.path.exists():
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT a.source, s.id, s.document_id, s.source, s.payload "
+                "FROM active_sources a LEFT JOIN snapshots s ON s.id=a.snapshot_id ORDER BY a.source"
+            ).fetchall()
+        result = []
+        for source, snapshot_id, document_id, stored_source, payload in rows:
+            if snapshot_id is None or source != stored_source:
+                raise ValueError("active snapshot source or reference is inconsistent")
+            snapshot = _decode_row((snapshot_id, document_id, stored_source, payload))
+            result.append({"id": snapshot_id, "document_id": document_id, "source": source, "snapshot": snapshot})
+        return result
+
+
+class HierarchyView:
+    """Detached corpus captured at preparation time; later activation is invisible."""
+
+    def __init__(self, snapshots):
+        self._records = json.dumps(snapshots, ensure_ascii=False)
+        self.snapshot_ids = tuple(sorted(record["id"] for record in snapshots))
+
+    def active_snapshots(self):
+        # Return detached records so caller mutations cannot change this view.
+        return json.loads(self._records)
+
     def context(self, chunk_ids, max_chars=4000):
         """Expand ranked active chunk IDs to unique parent sections under a budget."""
         if not isinstance(chunk_ids, list) or any(not isinstance(item, str) or not item.strip() for item in chunk_ids):
@@ -196,19 +235,3 @@ class HierarchyStore:
                             "source": section["source"], "path": section["path"]})
         return results
 
-    def active_snapshots(self):
-        """Read all active pointers and payloads in one SQLite statement."""
-        if not self.path.exists():
-            return []
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT a.source, s.id, s.document_id, s.source, s.payload "
-                "FROM active_sources a LEFT JOIN snapshots s ON s.id=a.snapshot_id ORDER BY a.source"
-            ).fetchall()
-        result = []
-        for source, snapshot_id, document_id, stored_source, payload in rows:
-            if snapshot_id is None or source != stored_source:
-                raise ValueError("active snapshot source or reference is inconsistent")
-            snapshot = _decode_row((snapshot_id, document_id, stored_source, payload))
-            result.append({"id": snapshot_id, "document_id": document_id, "source": source, "snapshot": snapshot})
-        return result
