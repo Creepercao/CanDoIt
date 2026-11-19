@@ -132,3 +132,21 @@ def test_diagnostics_explain_candidate_pruning_and_empty_results(tmp_path):
     empty = view.search_report("unrecorded")["diagnostics"]
     assert empty["selected_sections"] == [] and empty["returned_hits"] == 0
     assert empty["body_candidates"] == empty["fused_candidates"] == 0
+
+
+def test_retrieval_fingerprints_track_corpus_and_configuration_not_runtime_state(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    store.activate(store.save(prepare_document("# Refund\nrefund", "manual")))
+    view = store.prepare()
+    first = view.retrieval_identity()
+    assert first == store.prepare().retrieval_identity()
+    warm = view.search_report("refund")
+    assert warm["retrieval_sha256"] == first["retrieval_sha256"]
+    assert view.search_report("unknown")["retrieval_sha256"] == first["retrieval_sha256"]
+    for changed in (view.retrieval_identity(top_k=1), view.retrieval_identity(section_k=1), view.retrieval_identity(route="body")):
+        assert changed["corpus_sha256"] == first["corpus_sha256"]
+        assert changed["retrieval_sha256"] != first["retrieval_sha256"]
+    first["configuration"]["bm25"]["b"] = 0
+    assert view.retrieval_identity()["configuration"]["bm25"]["b"] == .75
+    store.activate(store.save(prepare_document("updated refund", "manual")))
+    assert store.prepare().retrieval_identity()["corpus_sha256"] != warm["corpus_sha256"]

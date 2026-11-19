@@ -12,6 +12,15 @@ from backend.chunking import prepare_document
 from backend.lexical import BM25Index, reciprocal_rank_fusion, tokenize
 
 CANDIDATE_CACHE_LIMIT = 4
+RETRIEVER_SPEC = {"version": "hierarchical-lexical-v2", "tokenizer": "cjk-char-bigram-ascii-v1",
+                  "bm25": {"k1": 1.2, "b": .75}, "rrf": {"rank_constant": 60}}
+
+
+def _validate_search_config(top_k, section_k, route):
+    if any(type(value) is not int or not 1 <= value <= 200 for value in (top_k, section_k)):
+        raise ValueError("top_k and section_k must be integers between 1 and 200")
+    if route not in ("rrf", "body"):
+        raise ValueError("route must be rrf or body")
 
 
 def validate_snapshot(snapshot):
@@ -169,7 +178,7 @@ class HierarchyView:
 
     def __init__(self, snapshots):
         self._records = json.dumps(snapshots, ensure_ascii=False)
-        self.snapshot_ids = tuple(sorted(record["id"] for record in snapshots))
+        self._snapshot_ids = tuple(sorted(record["id"] for record in snapshots))
         self._sections, self._chunks, self._chunk_lookup = {}, {}, {}
         for version in json.loads(self._records):
             sections = {section["id"]: section for section in version["snapshot"]["sections"]}
@@ -200,6 +209,20 @@ class HierarchyView:
     def active_snapshots(self):
         # Return detached records so caller mutations cannot change this view.
         return json.loads(self._records)
+
+    @property
+    def snapshot_ids(self):
+        return self._snapshot_ids
+
+    def retrieval_identity(self, top_k=5, section_k=5, *, route="rrf"):
+        """Describe corpus/configuration, excluding query labels and runtime cache state."""
+        _validate_search_config(top_k, section_k, route)
+        corpus = hashlib.sha256(_payload(list(self.snapshot_ids)).encode("utf-8")).hexdigest()
+        identity = {"snapshot_ids": list(self.snapshot_ids), "corpus_sha256": corpus,
+                    "configuration": {**deepcopy(RETRIEVER_SPEC), "route": route,
+                                      "top_k": top_k, "section_k": section_k}}
+        identity["retrieval_sha256"] = hashlib.sha256(_payload(identity).encode("utf-8")).hexdigest()
+        return identity
 
     def context(self, chunk_ids, max_chars=4000, *, mode="prefix"):
         """Expand ranked active chunk IDs to unique parent sections under a budget."""
@@ -255,18 +278,14 @@ class HierarchyView:
         """Offline lexical section selection, then body/title chunk RRF."""
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
-        if any(type(value) is not int or not 1 <= value <= 200 for value in (top_k, section_k)):
-            raise ValueError("top_k and section_k must be integers between 1 and 200")
-        if route not in ("rrf", "body"):
-            raise ValueError("route must be rrf or body")
+        _validate_search_config(top_k, section_k, route)
         diagnostics = {"sections": len(self._sections), "chunks": len(self._chunks),
                        "query_terms": sorted(set(tokenize(query))), "selected_sections": [],
                        "selected_chunks": 0, "body_candidates": 0, "title_candidates": 0,
                        "fused_candidates": 0, "candidate_cache_hit": False}
 
         def report(hits):
-            return {"query": query, "hits": deepcopy(hits), "snapshot_ids": list(self.snapshot_ids),
-                    "configuration": {"route": route, "top_k": top_k, "section_k": section_k},
+            return {"query": query, "hits": deepcopy(hits), **self.retrieval_identity(top_k, section_k, route=route),
                     "diagnostics": {**deepcopy(diagnostics), "returned_hits": len(hits)}}
 
         if not diagnostics["query_terms"]:
