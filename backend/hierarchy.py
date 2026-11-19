@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from copy import deepcopy
+from collections import OrderedDict
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +10,8 @@ import sqlite3
 
 from backend.chunking import prepare_document
 from backend.lexical import BM25Index, reciprocal_rank_fusion, tokenize
+
+CANDIDATE_CACHE_LIMIT = 4
 
 
 def validate_snapshot(snapshot):
@@ -172,6 +175,24 @@ class HierarchyView:
             for chunk in version["snapshot"]["chunks"]:
                 self._chunks[chunk["id"]] = chunk
                 self._chunk_lookup[chunk["id"]] = (version, sections[chunk["parent_id"]], chunk)
+        self._section_index = BM25Index([
+            {"id": key, "text": " ".join(value["path"]) + "\n" + value["text"]}
+            for key, value in self._sections.items()])
+        self._candidate_indexes = OrderedDict()
+
+    def _indexes_for(self, section_ids):
+        key = tuple(sorted(section_ids))
+        if key in self._candidate_indexes:
+            self._candidate_indexes.move_to_end(key)
+            return self._candidate_indexes[key]
+        candidates = [chunk for chunk in self._chunks.values() if chunk["parent_id"] in section_ids]
+        body = BM25Index(candidates)
+        title = BM25Index([{"id": chunk["id"], "text": " ".join(self._sections[chunk["parent_id"]]["path"])}
+                           for chunk in candidates])
+        self._candidate_indexes[key] = (candidates, body, title)
+        if len(self._candidate_indexes) > CANDIDATE_CACHE_LIMIT:
+            self._candidate_indexes.popitem(last=False)
+        return candidates, body, title
 
     def active_snapshots(self):
         # Return detached records so caller mutations cannot change this view.
@@ -233,15 +254,15 @@ class HierarchyView:
         if not tokenize(query):
             return []
         sections, chunks = self._sections, self._chunks
-        selected = BM25Index([{"id": key, "text": " ".join(value["path"]) + "\n" + value["text"]}
-                              for key, value in sections.items()]).search(query, section_k)
+        selected = self._section_index.search(query, section_k)
         section_scores = {item["id"]: item["score"] for item in selected}
-        candidates = [chunk for chunk in chunks.values() if chunk["parent_id"] in section_scores]
+        if not section_scores:
+            return []
+        candidates, body_index, title_index = self._indexes_for(section_scores)
         if not candidates:
             return []
-        body = BM25Index(candidates).search(query, len(candidates))
-        title = BM25Index([{"id": chunk["id"], "text": " ".join(sections[chunk["parent_id"]]["path"])}
-                           for chunk in candidates]).search(query, len(candidates))
+        body = body_index.search(query, len(candidates))
+        title = title_index.search(query, len(candidates))
         fused = reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], top_k)
         body_scores, title_scores = ({item["id"]: item["score"] for item in route} for route in (body, title))
         results = []

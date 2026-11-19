@@ -73,3 +73,27 @@ def test_queries_reuse_prepared_records_and_results_cannot_mutate_the_view(tmp_p
     context = view.context([hit["id"]])
     context["contexts"][0]["path"].append("tampered")
     assert view.context([hit["id"]])["contexts"][0]["path"] == ["Refund"]
+
+
+def test_bm25_indexes_are_reused_and_candidate_cache_is_bounded(tmp_path, monkeypatch):
+    from backend import hierarchy
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    for word in ("alpha", "beta", "gamma", "delta", "epsilon"):
+        store.activate(store.save(prepare_document(word, word)))
+    actual, builds = hierarchy.BM25Index, []
+
+    def counted(documents, *args, **kwargs):
+        builds.append(len(documents))
+        return actual(documents, *args, **kwargs)
+
+    monkeypatch.setattr(hierarchy, "BM25Index", counted)
+    view = store.prepare()
+    first = view.search("alpha", section_k=1)
+    assert len(builds) == 3  # One section index and the two candidate routes.
+    assert view.search("alpha", section_k=1) == first
+    assert len(builds) == 3
+    for word in ("beta", "gamma", "delta", "epsilon"):
+        view.search(word, section_k=1)
+    assert len(view._candidate_indexes) == hierarchy.CANDIDATE_CACHE_LIMIT
+    assert view.search("alpha", section_k=1) == first  # Rebuilt after eviction, same ranking.
+    assert len(view._candidate_indexes) == hierarchy.CANDIDATE_CACHE_LIMIT
