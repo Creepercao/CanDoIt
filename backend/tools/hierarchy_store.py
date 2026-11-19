@@ -31,6 +31,7 @@ def main():
     search.add_argument("query")
     search.add_argument("--top-k", type=int, default=5)
     search.add_argument("--section-k", type=int, default=5)
+    search.add_argument("--route", choices=("rrf", "body"), default="rrf")
     search.add_argument("--with-context", action="store_true")
     search.add_argument("--max-chars", type=int, default=4000)
     search.add_argument("--source", dest="sources", action="append")
@@ -60,10 +61,9 @@ def main():
             if args.max_chars < 1:
                 raise ValueError("max_chars must be positive")
             view = store.prepare(args.sources)
-            hits = view.search(args.query, args.top_k, args.section_k)
-            result = {"query": args.query, "hits": hits,
-                      "snapshot_ids": list(view.snapshot_ids),
-                      "configuration": {"top_k": args.top_k, "section_k": args.section_k, "sources": args.sources}}
+            result = view.search_report(args.query, args.top_k, args.section_k, route=args.route)
+            hits = result["hits"]
+            result["configuration"]["sources"] = args.sources
             if args.with_context:
                 result["context"] = view.context([hit["id"] for hit in hits], args.max_chars, mode=args.context_mode)
         else:

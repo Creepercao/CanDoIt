@@ -79,3 +79,16 @@ def test_cli_scopes_corpus_and_returns_context_around_tail_hit(tmp_path):
     assert "needle" in report["context"]["contexts"][0]["text"]
     assert report["context"]["mode"] == "hit"
     assert run_cli(path, "search", "needle", "--source", "typo").returncode == 2
+
+
+def test_cli_returns_route_diagnostics_and_fingerprints(tmp_path):
+    source, store = tmp_path / "snapshot.json", tmp_path / "store.sqlite"
+    source.write_text(json.dumps(prepare_document("# Refund\n" + "条件" * 60, "manual", 20)), encoding="utf-8")
+    assert run_cli(store, "import", source, "--activate").returncode == 0
+    result = run_cli(store, "search", "refund", "--route", "body", "--with-context")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["diagnostics"]["title_candidates"] == 0
+    assert report["hits"][0]["score_kind"] == "bm25"
+    assert len(report["retrieval_sha256"]) == len(report["corpus_sha256"]) == 64
+    assert report["context"]["contexts"]

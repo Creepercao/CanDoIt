@@ -41,8 +41,8 @@ def test_export_refuses_empty_corpus_and_freezes_versions_during_queries(tmp_pat
     view = store.prepare()
     original = view.search
 
-    def changed(*args):
-        result = original(*args)
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
         store.activate(second)
         return result
 
@@ -68,3 +68,28 @@ def test_export_respects_source_scope_and_records_selected_ids(tmp_path):
     assert rows[0]["ranked_ids"] == labels[0]["relevant_ids"]
     with pytest.raises(ValueError, match="no active"):
         export_rankings(labels, store, sources=["missing"])
+
+
+def test_route_exports_can_be_compared_with_existing_metrics(tmp_path, monkeypatch, capsys):
+    import hashlib
+    from backend.tools.retrieval_eval import compare
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    snapshot = prepare_document("# Refund\n" + "条件" * 80, "manual", 20)
+    store.activate(store.save(snapshot))
+    labels = [{"query": "refund", "relevant_ids": [snapshot["chunks"][-1]["id"]]}]
+    source = tmp_path / "labels.json"
+    source.write_text(json.dumps(labels), encoding="utf-8")
+    exports, metadata = [], []
+    for route in ("body", "rrf"):
+        path = tmp_path / (route + ".json")
+        monkeypatch.setattr("sys.argv", ["hierarchy_export", str(source), str(path), "--store", str(store.path),
+                                        "--route", route, "--depth", "200"])
+        main()
+        meta = json.loads(capsys.readouterr().out)
+        assert meta["rankings_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert meta["configuration"]["route"] == route
+        exports.append(json.loads(path.read_text(encoding="utf-8")))
+        metadata.append(meta)
+    assert compare(*exports, k=200)["delta"]["recall@200"] == 1
+    assert metadata[0]["corpus_sha256"] == metadata[1]["corpus_sha256"]
+    assert metadata[0]["retrieval_sha256"] != metadata[1]["retrieval_sha256"]

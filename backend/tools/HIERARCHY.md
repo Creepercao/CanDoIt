@@ -28,6 +28,32 @@ RRF 使用每路 `1/(60+rank)` 相加，不混合 BM25 原始分数。相同路�
 各阶段原始分数；ranks 的顺序为正文路、标题路。分数不是概率，不应套用向量相似度阈值。
 当前两路均为词法检索，不属于向量与 BM25 的混合检索，也未使用 Cross-Encoder。
 
+### 策略对照与诊断
+
+`search` 与 `hierarchy_export` 支持 `--route rrf|body`，默认 rrf 保留正文和标题路径两路融合。
+body 保持相同的章节筛选，但只按分块正文 BM25 排名，便于评估标题路径路的影响。
+body 模式的 score_kind 为 bm25、title_score 为 0，ranks 第二项为空；rrf 模式的 score_kind
+为 rrf，两类原始分数不能直接比较。比较质量应使用同标注集的 Recall@K、MRR 等指标。
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite search "退款规则" --route body --with-context
+python -m backend.tools.hierarchy_export labels.json temp/body.json --store temp/hierarchy.sqlite --route body
+python -m backend.tools.hierarchy_export labels.json temp/rrf.json --store temp/hierarchy.sqlite --route rrf
+python -m backend.tools.retrieval_eval temp/rrf.json --baseline temp/body.json --k 5
+```
+
+查询报告的 diagnostics 包含语料章节/分块数、分词结果、首阶段选中章节及分数、候选分块数、
+各路正分候选数量、融合去重数量和最终结果数。candidate_cache_hit 只表示候选索引被复用，
+不表示答案或查询结果命中缓存。无结果也会保留诊断信息，方便区分未命中章节与候选不足。
+
+corpus_sha256 根据排序后的快照 ID 生成；retrieval_sha256 同时包含实际语料、显式检索版本、
+分词标识、BM25/RRF 参数、route、top_k 和 section_k。指纹不包含查询文本、人工标签或缓存状态，
+也不是代码字节或 Git 提交的哈希。查询变化、缓存淘汰不会改变它，配置和快照变化则会改变它。
+检索实现变更时仍需维护版本号。还应保留输入标注指纹与实际排名，不能只凭配置指纹判断实验完全相同。
+
+导出文件仍为原有排名数组；标准输出另含上述配置指纹、实际快照、来源范围与输入标注指纹，
+并增加 rankings_sha256 对应实际写出的排名文件字节。应随实验保留标准输出元数据。
+
 `search`、`context` 和 `hierarchy_export` 均支持重复填写 `--source`，将语料限定为指定来源的
 生效快照。筛选发生在 BM25 统计与排名之前，因此分数也随语料范围变化；指定不存在或
 没有生效快照的来源会报错。省略时使用全部生效来源。库 API 的 sources 接受非空字符串数组，
@@ -39,10 +65,11 @@ RRF 使用每路 `1/(60+rank)` 相加，不混合 BM25 原始分数。相同路�
 保存和激活使用明确的写连接。生效来源与快照正文通过同一条 SELECT 读取并验证身份，
 缺失引用或来源不一致会直接报错，而非静默当作空语料。
 
-可使用 `view = store.prepare(sources=["manual"])` 捕获固定语料，再调用 view.search 和
+可使用 `view = store.prepare(sources=["manual"])` 捕获固定语料，再调用 view.search、view.search_report 和
 view.context。该视图脱离数据库，后续激活或回退不会影响它；active_snapshots 返回副本，
 修改副本也不会改变视图。新建视图才反映新版本。视图构造时校验一次快照，仍占用完整正文内存，
-不是持久索引或常驻服务缓存。
+不是持久索引或常驻服务缓存。查找表和章节 BM25 索引在准备时生成；上下文与查询不再逐次反序列化全文。
+结果中的路径等可变字段返回副本，修改结果不会污染视图。
 
 CLI `search --with-context` 的检索和章节取回共用一个视图，输出 snapshot_ids 可追溯实际版本。
 单独调用 store.search/store.context 则各自捕获当时版本；需要多步一致性时应显式复用视图。
@@ -130,7 +157,10 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 它检测数据不一致，不提供签名或防止攻击者重写整个数据库的保证，也不自动修复或删除内容。
 
 此版本在上下文请求时读取生效快照并查找分块，校验时会重建分块，适合小规模离线验证；
-词法索引在每次查询时临时构建，尚无持久化分块检索索引、生产并发性能验证、自动过期清理或访问权限层。快照正文存储于 SQLite，
+章节索引随固定视图复用；候选章节集合的正文与标题索引按 LRU 最多保留 4 组，超过后淘汰，
+重新构建不改变语料统计和排名。这只限制索引组数，不是字节内存上限，大语料仍应注意整体占用。
+每次 store.search 都会新建视图；批量查询应复用 prepare 返回的视图以获得复用收益。
+尚无持久化分块检索索引、生产并发性能验证、自动过期清理或访问权限层。快照正文存储于 SQLite，
 实验数据应放在 temp 等本地目录，不要提交包含业务文本的数据库。
 
 ## 无训练测试
