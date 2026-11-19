@@ -140,8 +140,8 @@ class HierarchyStore:
     def context(self, chunk_ids, max_chars=4000, *, sources=None, mode="prefix"):
         return self.prepare(sources).context(chunk_ids, max_chars, mode=mode)
 
-    def search(self, query, top_k=5, section_k=5, *, sources=None):
-        return self.prepare(sources).search(query, top_k, section_k)
+    def search(self, query, top_k=5, section_k=5, *, sources=None, route="rrf"):
+        return self.prepare(sources).search(query, top_k, section_k, route=route)
 
     def active_snapshots(self):
         """Read all active pointers and payloads in one SQLite statement."""
@@ -245,12 +245,14 @@ class HierarchyView:
         return {"contexts": deepcopy(contexts), "chars": max_chars - remaining, "max_chars": max_chars,
                 "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts), "mode": mode}
 
-    def search(self, query, top_k=5, section_k=5):
+    def search(self, query, top_k=5, section_k=5, *, route="rrf"):
         """Offline lexical section selection, then body/title chunk RRF."""
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
         if any(type(value) is not int or not 1 <= value <= 200 for value in (top_k, section_k)):
             raise ValueError("top_k and section_k must be integers between 1 and 200")
+        if route not in ("rrf", "body"):
+            raise ValueError("route must be rrf or body")
         if not tokenize(query):
             return []
         sections, chunks = self._sections, self._chunks
@@ -262,14 +264,17 @@ class HierarchyView:
         if not candidates:
             return []
         body = body_index.search(query, len(candidates))
-        title = title_index.search(query, len(candidates))
-        fused = reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], top_k)
+        title = title_index.search(query, len(candidates)) if route == "rrf" else []
+        fused = (reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], top_k)
+                 if route == "rrf" else [{**item, "ranks": [index, None]}
+                                         for index, item in enumerate(body[:top_k], 1)])
         body_scores, title_scores = ({item["id"]: item["score"] for item in route} for route in (body, title))
         results = []
         for hit in fused:
             chunk = chunks[hit["id"]]
             section = sections[chunk["parent_id"]]
-            results.append({**hit, "body_score": body_scores.get(hit["id"], 0),
+            results.append({**hit, "route": route, "score_kind": "rrf" if route == "rrf" else "bm25",
+                            "body_score": body_scores.get(hit["id"], 0),
                             "title_score": title_scores.get(hit["id"], 0),
                             "section_score": section_scores[section["id"]], "text": chunk["text"],
                             "start": chunk["start"], "end": chunk["end"], "parent_id": section["id"],

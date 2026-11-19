@@ -95,5 +95,21 @@ def test_bm25_indexes_are_reused_and_candidate_cache_is_bounded(tmp_path, monkey
     for word in ("beta", "gamma", "delta", "epsilon"):
         view.search(word, section_k=1)
     assert len(view._candidate_indexes) == hierarchy.CANDIDATE_CACHE_LIMIT
+
     assert view.search("alpha", section_k=1) == first  # Rebuilt after eviction, same ranking.
     assert len(view._candidate_indexes) == hierarchy.CANDIDATE_CACHE_LIMIT
+
+
+def test_body_route_allows_comparison_without_title_only_candidates(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    store.activate(store.save(prepare_document("# Refund\n" + "条件说明" * 100, "manual", 30)))
+    view = store.prepare()
+    fusion = view.search("refund", top_k=200)
+    body = view.search("refund", top_k=200, route="body")
+    assert len(body) == 1 < len(fusion)
+    assert body[0]["score_kind"] == "bm25"
+    assert body[0]["score"] == body[0]["body_score"] > 0
+    assert body[0]["title_score"] == 0 and body[0]["ranks"] == [1, None]
+    assert all(hit["score_kind"] == "rrf" for hit in fusion)
+    with pytest.raises(ValueError, match="route"):
+        view.search("refund", route="unknown")
