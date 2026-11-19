@@ -143,6 +143,9 @@ class HierarchyStore:
     def search(self, query, top_k=5, section_k=5, *, sources=None, route="rrf"):
         return self.prepare(sources).search(query, top_k, section_k, route=route)
 
+    def search_report(self, query, top_k=5, section_k=5, *, sources=None, route="rrf"):
+        return self.prepare(sources).search_report(query, top_k, section_k, route=route)
+
     def active_snapshots(self):
         """Read all active pointers and payloads in one SQLite statement."""
         if not self.path.exists():
@@ -246,6 +249,9 @@ class HierarchyView:
                 "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts), "mode": mode}
 
     def search(self, query, top_k=5, section_k=5, *, route="rrf"):
+        return self.search_report(query, top_k, section_k, route=route)["hits"]
+
+    def search_report(self, query, top_k=5, section_k=5, *, route="rrf"):
         """Offline lexical section selection, then body/title chunk RRF."""
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
@@ -253,21 +259,37 @@ class HierarchyView:
             raise ValueError("top_k and section_k must be integers between 1 and 200")
         if route not in ("rrf", "body"):
             raise ValueError("route must be rrf or body")
-        if not tokenize(query):
-            return []
+        diagnostics = {"sections": len(self._sections), "chunks": len(self._chunks),
+                       "query_terms": sorted(set(tokenize(query))), "selected_sections": [],
+                       "selected_chunks": 0, "body_candidates": 0, "title_candidates": 0,
+                       "fused_candidates": 0, "candidate_cache_hit": False}
+
+        def report(hits):
+            return {"query": query, "hits": deepcopy(hits), "snapshot_ids": list(self.snapshot_ids),
+                    "configuration": {"route": route, "top_k": top_k, "section_k": section_k},
+                    "diagnostics": {**deepcopy(diagnostics), "returned_hits": len(hits)}}
+
+        if not diagnostics["query_terms"]:
+            return report([])
         sections, chunks = self._sections, self._chunks
         selected = self._section_index.search(query, section_k)
+        diagnostics["selected_sections"] = selected
         section_scores = {item["id"]: item["score"] for item in selected}
         if not section_scores:
-            return []
+            return report([])
+        diagnostics["candidate_cache_hit"] = tuple(sorted(section_scores)) in self._candidate_indexes
         candidates, body_index, title_index = self._indexes_for(section_scores)
         if not candidates:
-            return []
+            return report([])
+        diagnostics["selected_chunks"] = len(candidates)
         body = body_index.search(query, len(candidates))
         title = title_index.search(query, len(candidates)) if route == "rrf" else []
         fused = (reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], top_k)
                  if route == "rrf" else [{**item, "ranks": [index, None]}
                                          for index, item in enumerate(body[:top_k], 1)])
+        diagnostics["body_candidates"] = len(body)
+        diagnostics["title_candidates"] = len(title)
+        diagnostics["fused_candidates"] = len({item["id"] for item in body + title})
         body_scores, title_scores = ({item["id"]: item["score"] for item in route} for route in (body, title))
         results = []
         for hit in fused:
@@ -280,5 +302,5 @@ class HierarchyView:
                             "start": chunk["start"], "end": chunk["end"], "parent_id": section["id"],
                             "document_id": chunk["document_id"], "snapshot_id": section["snapshot_id"],
                             "source": section["source"], "path": section["path"]})
-        return deepcopy(results)
+        return report(results)
 

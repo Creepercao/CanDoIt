@@ -113,3 +113,22 @@ def test_body_route_allows_comparison_without_title_only_candidates(tmp_path):
     assert all(hit["score_kind"] == "rrf" for hit in fusion)
     with pytest.raises(ValueError, match="route"):
         view.search("refund", route="unknown")
+
+
+def test_diagnostics_explain_candidate_pruning_and_empty_results(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    store.activate(store.save(prepare_document("# Refund\n" + "条件" * 70 + "\n# Shipping\ntracking", "manual", 20)))
+    view = store.prepare()
+    result = view.search_report("refund", top_k=2, section_k=1)
+    diag = result["diagnostics"]
+    assert diag["sections"] == 2
+    assert len(diag["selected_sections"]) == 1
+    assert diag["selected_chunks"] < diag["chunks"]
+    assert diag["title_candidates"] == diag["selected_chunks"]
+    assert diag["returned_hits"] == 2
+    assert diag["candidate_cache_hit"] is False
+    assert view.search_report("refund", top_k=2, section_k=1)["diagnostics"]["candidate_cache_hit"] is True
+    assert view.search("refund", top_k=2, section_k=1) == result["hits"]
+    empty = view.search_report("unrecorded")["diagnostics"]
+    assert empty["selected_sections"] == [] and empty["returned_hits"] == 0
+    assert empty["body_candidates"] == empty["fused_candidates"] == 0
