@@ -1,6 +1,7 @@
 """Validated, offline hierarchical document snapshots."""
 
 from contextlib import contextmanager
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -163,6 +164,14 @@ class HierarchyView:
     def __init__(self, snapshots):
         self._records = json.dumps(snapshots, ensure_ascii=False)
         self.snapshot_ids = tuple(sorted(record["id"] for record in snapshots))
+        self._sections, self._chunks, self._chunk_lookup = {}, {}, {}
+        for version in json.loads(self._records):
+            sections = {section["id"]: section for section in version["snapshot"]["sections"]}
+            for identifier, section in sections.items():
+                self._sections[identifier] = {**section, "source": version["source"], "snapshot_id": version["id"]}
+            for chunk in version["snapshot"]["chunks"]:
+                self._chunks[chunk["id"]] = chunk
+                self._chunk_lookup[chunk["id"]] = (version, sections[chunk["parent_id"]], chunk)
 
     def active_snapshots(self):
         # Return detached records so caller mutations cannot change this view.
@@ -177,14 +186,8 @@ class HierarchyView:
         if mode not in ("prefix", "hit"):
             raise ValueError("context mode must be prefix or hit")
         requested = list(dict.fromkeys(chunk_ids))
-        lookup = {}
-        if requested:
-            for version in self.active_snapshots():
-                snapshot = version["snapshot"]
-                sections = {section["id"]: section for section in snapshot["sections"]}
-                for chunk in snapshot["chunks"]:
-                    if chunk["id"] in requested:
-                        lookup[chunk["id"]] = (version, sections[chunk["parent_id"]], chunk)
+        lookup = {identifier: self._chunk_lookup[identifier] for identifier in requested
+                  if identifier in self._chunk_lookup}
         if any(chunk_id not in lookup for chunk_id in requested):
             raise ValueError("some chunk IDs are missing or belong to inactive snapshots")
         parents = {}
@@ -218,7 +221,7 @@ class HierarchyView:
                              "visible_chunk_ids": visible, "complete_chunk_ids": complete,
                              "truncated": len(content) < len(parent["text"])})
             remaining -= len(content)
-        return {"contexts": contexts, "chars": max_chars - remaining, "max_chars": max_chars,
+        return {"contexts": deepcopy(contexts), "chars": max_chars - remaining, "max_chars": max_chars,
                 "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts), "mode": mode}
 
     def search(self, query, top_k=5, section_k=5):
@@ -229,13 +232,7 @@ class HierarchyView:
             raise ValueError("top_k and section_k must be integers between 1 and 200")
         if not tokenize(query):
             return []
-        sections, chunks = {}, {}
-        for version in self.active_snapshots():
-            snapshot = version["snapshot"]
-            for section in snapshot["sections"]:
-                sections[section["id"]] = {**section, "source": version["source"], "snapshot_id": version["id"]}
-            for chunk in snapshot["chunks"]:
-                chunks[chunk["id"]] = chunk
+        sections, chunks = self._sections, self._chunks
         selected = BM25Index([{"id": key, "text": " ".join(value["path"]) + "\n" + value["text"]}
                               for key, value in sections.items()]).search(query, section_k)
         section_scores = {item["id"]: item["score"] for item in selected}
@@ -257,5 +254,5 @@ class HierarchyView:
                             "start": chunk["start"], "end": chunk["end"], "parent_id": section["id"],
                             "document_id": chunk["document_id"], "snapshot_id": section["snapshot_id"],
                             "source": section["source"], "path": section["path"]})
-        return results
+        return deepcopy(results)
 

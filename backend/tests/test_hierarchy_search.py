@@ -60,3 +60,16 @@ def test_invalid_source_filters_never_create_database(tmp_path, sources):
     with pytest.raises(ValueError):
         HierarchyStore(path).prepare(sources)
     assert not path.exists()
+
+
+def test_queries_reuse_prepared_records_and_results_cannot_mutate_the_view(tmp_path, monkeypatch):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    store.activate(store.save(prepare_document("# Refund\nrefund policy", "manual")))
+    view = store.prepare()
+    monkeypatch.setattr(view, "active_snapshots", lambda: pytest.fail("query must reuse prepared records"))
+    hit = view.search("refund")[0]
+    hit["path"].append("tampered")
+    assert view.search("refund")[0]["path"] == ["Refund"]
+    context = view.context([hit["id"]])
+    context["contexts"][0]["path"].append("tampered")
+    assert view.context([hit["id"]])["contexts"][0]["path"] == ["Refund"]
