@@ -93,3 +93,26 @@ def test_route_exports_can_be_compared_with_existing_metrics(tmp_path, monkeypat
     assert compare(*exports, k=200)["delta"]["recall@200"] == 1
     assert metadata[0]["corpus_sha256"] == metadata[1]["corpus_sha256"]
     assert metadata[0]["retrieval_sha256"] != metadata[1]["retrieval_sha256"]
+
+
+def test_cli_pins_historical_export_without_reactivating_it(tmp_path, monkeypatch, capsys):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    snapshot = prepare_document("oldneedle", "manual")
+    old = store.save(snapshot)
+    new = store.save(prepare_document("newneedle", "manual"))
+    store.activate(new)
+    labels = tmp_path / "labels.json"
+    output = tmp_path / "rankings.json"
+    labels.write_text(json.dumps([{"query": "oldneedle", "relevant_ids": [snapshot["chunks"][0]["id"]]}]), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["hierarchy_export", str(labels), str(output), "--store", str(store.path),
+                                    "--snapshot-id", old])
+    main()
+    metadata = json.loads(capsys.readouterr().out)
+    assert metadata["selection"] == "snapshots"
+    assert metadata["selected_snapshot_ids"] == [old]
+    assert "active_snapshot_ids" not in metadata
+    assert json.loads(output.read_text(encoding="utf-8"))[0]["ranked_ids"] == [snapshot["chunks"][0]["id"]]
+    assert [row["id"] for row in store.list_versions() if row["active"]] == [new]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        export_rankings([{"query": "oldneedle", "relevant_ids": [snapshot["chunks"][0]["id"]]}],
+                        store, sources=["manual"], snapshot_ids=[old])
