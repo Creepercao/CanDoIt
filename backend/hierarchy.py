@@ -253,6 +253,32 @@ class HierarchyView:
         identity["retrieval_sha256"] = hashlib.sha256(_payload(identity).encode("utf-8")).hexdigest()
         return identity
 
+    def inventory(self, preview_chars=160, *, include_text=False):
+        """Expose exact labeling IDs and offsets without inventing relevance labels."""
+        if type(preview_chars) is not int or preview_chars < 1:
+            raise ValueError("preview_chars must be a positive integer")
+        if type(include_text) is not bool:
+            raise ValueError("include_text must be boolean")
+
+        def content(text):
+            return {"content_preview": text[:preview_chars], "preview_truncated": len(text) > preview_chars,
+                    **({"text": text} if include_text else {})}
+
+        documents = [{"snapshot_id": version["id"], "id": version["document_id"], "source": version["source"],
+                      "chars": version["snapshot"]["stats"]["source_chars"]} for version in self.active_snapshots()]
+        sections = [{**{key: section[key] for key in ("id", "parent_id", "source", "snapshot_id", "path", "start", "end")},
+                     **content(section["text"])} for section in sorted(self._sections.values(),
+                            key=lambda item: (item["source"], item["start"], item["id"]))]
+        chunks = []
+        for version, section, chunk in sorted(self._chunk_lookup.values(),
+                key=lambda item: (item[0]["source"], item[2]["start"], item[2]["id"])):
+            chunks.append({**{key: chunk[key] for key in ("id", "parent_id", "document_id", "start", "end")},
+                           "snapshot_id": version["id"], "source": version["source"], "path": section["path"],
+                           **content(chunk["text"])})
+        return deepcopy({"kind": "hierarchy-inventory-v1", "snapshot_ids": list(self.snapshot_ids),
+                         "corpus_sha256": self.retrieval_identity()["corpus_sha256"], "preview_chars": preview_chars,
+                         "include_text": include_text, "documents": documents, "sections": sections, "chunks": chunks})
+
     def context(self, chunk_ids, max_chars=4000, *, mode="prefix"):
         """Expand ranked active chunk IDs to unique parent sections under a budget."""
         if not isinstance(chunk_ids, list) or any(not isinstance(item, str) or not item.strip() for item in chunk_ids):
