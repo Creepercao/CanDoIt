@@ -92,3 +92,28 @@ def test_cli_returns_route_diagnostics_and_fingerprints(tmp_path):
     assert report["hits"][0]["score_kind"] == "bm25"
     assert len(report["retrieval_sha256"]) == len(report["corpus_sha256"]) == 64
     assert report["context"]["contexts"]
+
+
+def test_cli_deactivate_inventory_and_historical_replay(tmp_path):
+    from backend.hierarchy import HierarchyStore
+    path = tmp_path / "store.sqlite"
+    snapshot = prepare_document("# Manual\noldneedle", "manual")
+    store = HierarchyStore(path)
+    sid = store.save(snapshot)
+    store.activate(sid)
+    inventory_path = tmp_path / "inventory.json"
+    exported = run_cli(path, "--output", inventory_path, "inventory", "--full-text", "--preview-chars", 3)
+    assert exported.returncode == 0, exported.stderr
+    inventory = json.loads(exported.stdout)
+    assert inventory["chunks"][0]["id"] == snapshot["chunks"][0]["id"]
+    assert inventory["chunks"][0]["text"].endswith("oldneedle")
+    assert json.loads(run_cli(path, "deactivate", "manual").stdout)["deactivated"] is True
+    assert json.loads(run_cli(path, "deactivate", "manual").stdout)["deactivated"] is False
+    assert json.loads(run_cli(path, "search", "oldneedle").stdout)["hits"] == []
+    replay = run_cli(path, "search", "oldneedle", "--snapshot-id", sid, "--with-context")
+    assert replay.returncode == 0, replay.stderr
+    report = json.loads(replay.stdout)
+    assert report["selection"] == "snapshots"
+    assert report["context"]["contexts"][0]["text"].endswith("oldneedle")
+    assert json.loads(run_cli(path, "list").stdout)["versions"][0]["active"] is False
+    assert run_cli(path, "inventory", "--snapshot-id", sid, "--source", "manual").returncode == 2

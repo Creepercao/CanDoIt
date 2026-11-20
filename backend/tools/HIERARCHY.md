@@ -76,6 +76,16 @@ CLI `search --with-context` 的检索和章节取回共用一个视图，输出 
 
 ## 导出排名并评估
 
+可先生成语料清单，查看实际章节与分块 ID，避免手工抄错：
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite --output temp/inventory.json inventory --source manual --preview-chars 160
+```
+
+清单包含文档来源、快照、父子 ID、原文位置和预览截断标记。需要逐块核对全文时添加
+`--full-text`；content_preview 始终是预览，text 才是可选完整内容。清单不会自动生成相关性标签。
+多个重叠分块可能都有关，应由标注者判断，不能仅因出现在同一章节就将其全标为相关。
+
 人工标注 JSON 沿用 retrieval_eval 的 query/relevant_ids/answerable/tags 格式，其中 relevant_ids
 必须使用对应快照的分块 ID，不能直接将章节或旧知识库条目 ID 当作分块 ID：
 
@@ -85,7 +95,10 @@ python -m backend.tools.retrieval_eval temp/hierarchy-rankings.json --k 5
 ```
 
 hierarchy_export 仅调用本地词法检索，输出排名可直接用于已有基线对比、分组指标与退步题复核。
-它拒绝无生效快照的库；整批查询共用开始时捕获的固定语料视图，不会在查询之间混入新版本。
+默认选择时它拒绝无生效快照的库；明确指定历史快照时不要求该版本当前生效。
+整批查询共用开始时捕获的固定语料视图，不会在查询之间混入新版本。
+检索前还会检查整份标注的 relevant_ids 是否属于选定语料中的真实分块，未知 ID、章节 ID、
+其他来源或其他版本的分块会报错，不把这种标注错误当成漏召回。此检查不验证语义相关性。
 输出路径必须不存在。标准输出另含输入标注指纹、检索配置和生效快照 ID，应随实验另行保留。
 其他进程切换生效版本不会改变已捕获的评估视图。active_snapshot_ids 记录本批实际使用的版本，
 不保证这些版本在导出结束时仍是数据库最新生效版本。标注相关性仍需人工确认，工具不验证标注 ID 的真实相关性。
@@ -121,6 +134,31 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite activate s
 快照仍可能存在。每个来源只能有一个生效快照，不影响其他来源；回退时重新激活旧 ID 即可，
 旧内容不会删除。版本列表按来源和 ID 排序，不表示导入时间或新旧顺序。
 
+### 停用与历史复现
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite deactivate manual
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite list --source manual
+```
+
+停用只移除该来源的生效指针，保留所有历史快照。重复停用返回 deactivated=false。
+新准备的默认视图不再包含该来源；已有固定视图仍可继续使用此前捕获的版本。重新 activate
+可恢复该来源，但历史评估无需修改当前生效状态，直接指定快照即可：
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite search "退款规则" --snapshot-id snapshot-替换为实际ID --with-context
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite --output temp/old-inventory.json inventory --snapshot-id snapshot-替换为实际ID --full-text
+python -m backend.tools.hierarchy_export old-labels.json temp/old-rankings.json --store temp/hierarchy.sqlite --snapshot-id snapshot-替换为实际ID
+```
+
+search、context、inventory、hierarchy_export 的 `--snapshot-id` 可重复填写，且与 `--source`
+互斥。同一来源只可选一个快照，防止把不同版本混成同一评估语料；重复相同 ID 去重，缺失 ID 报错。
+库接口使用 `store.prepare_versions([...])`。快照正文与身份经过校验，查询不修改数据库或生效指针。
+
+命令结果的 selection 为 active 或 snapshots，snapshot_ids/selected_snapshot_ids 记录实际版本。
+导出中的 active_snapshot_ids 兼容字段只在默认生效版本选择时输出，指定历史版本时不会用它
+冒充当前生效版本。历史标注也必须使用该历史快照的真实分块 ID。
+
 将真实命中分块 ID 按排名保存为 JSON 字符串数组，例如 `temp/hit-ids.json`，再取回上下文：
 
 ```powershell
@@ -135,7 +173,8 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 
 ## 上下文规则
 
-- 只接受生效快照里的分块 ID，未知或未生效版本的 ID 会使整次请求失败，不静默忽略。
+- 默认只接受生效快照里的分块 ID；明确使用 --snapshot-id 时，接受指定快照中的分块。
+  不属于本次选择范围的 ID 会使整次请求失败，不静默忽略。
   相同内容和位置产生的相同分块 ID 可以跨分块配置复用，匹配的是当前生效快照。
 - 重复分块 ID 去重，同一父章节只返回一次，章节顺序按第一次命中出现的顺序排列。
   章节下不同分块的重叠文本不会被简单重复拼接。
@@ -166,7 +205,7 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 ## 无训练测试
 
 ```powershell
-python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
+python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```
 
 测试验证内容校验、幂等保存、配置版本隔离、生效回退、原文位置、预算截断、旧版本拒绝、
