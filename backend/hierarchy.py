@@ -156,6 +156,25 @@ class HierarchyStore:
             snapshots = [record for record in snapshots if record["source"] in selected]
         return HierarchyView(snapshots)
 
+    def prepare_versions(self, snapshot_ids):
+        """Explicitly read historical snapshots without changing active sources."""
+        if not isinstance(snapshot_ids, list) or not snapshot_ids or any(
+                not isinstance(identifier, str) or not identifier.strip() for identifier in snapshot_ids):
+            raise ValueError("snapshot_ids must be a non-empty array of IDs")
+        identifiers = sorted(set(snapshot_ids))
+        if not self.path.is_file():
+            raise ValueError("some requested snapshots do not exist")
+        placeholders = ",".join("?" for _ in identifiers)
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, document_id, source, payload FROM snapshots WHERE id IN ("
+                                      + placeholders + ") ORDER BY source, id", identifiers).fetchall()
+        if len(rows) != len(identifiers):
+            raise ValueError("some requested snapshots do not exist")
+        if len({row[2] for row in rows}) != len(rows):
+            raise ValueError("select only one snapshot per source")
+        records = [{"id": row[0], "document_id": row[1], "source": row[2], "snapshot": _decode_row(row)} for row in rows]
+        return HierarchyView(records)
+
     def context(self, chunk_ids, max_chars=4000, *, sources=None, mode="prefix"):
         return self.prepare(sources).context(chunk_ids, max_chars, mode=mode)
 

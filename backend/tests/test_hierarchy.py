@@ -237,3 +237,31 @@ def test_deactivate_keeps_history_and_existing_views_until_reactivation(tmp_path
     store.activate(sid)
     assert len(store.search("needle")) == 2
     assert HierarchyStore(tmp_path / "missing.sqlite").deactivate("manual") is False
+
+
+def test_explicit_versions_reproduce_old_corpus_without_changing_active_state(tmp_path):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    old = store.save(example("oldneedle", "manual"))
+    new = store.save(example("newneedle", "manual"))
+    store.activate(new)
+    before = store.path.read_bytes()
+    view = store.prepare_versions([old, old])
+    assert view.snapshot_ids == (old,)
+    assert view.search("oldneedle")
+    assert view.search("newneedle") == []
+    assert store.path.read_bytes() == before
+    assert [row["id"] for row in store.list_versions() if row["active"]] == [new]
+    with pytest.raises(ValueError, match="one snapshot"):
+        store.prepare_versions([old, new])
+    with pytest.raises(ValueError, match="do not exist"):
+        store.prepare_versions([old, "missing"])
+    store.deactivate("manual")
+    assert store.prepare_versions([old]).search("oldneedle")
+
+
+@pytest.mark.parametrize("identifiers", [[], "id", [None], [""], [True]])
+def test_invalid_pinned_selection_does_not_create_database(tmp_path, identifiers):
+    path = tmp_path / "missing.sqlite"
+    with pytest.raises(ValueError):
+        HierarchyStore(path).prepare_versions(identifiers)
+    assert not path.exists()
