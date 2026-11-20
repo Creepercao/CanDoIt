@@ -219,3 +219,21 @@ def test_hit_window_keeps_tail_hits_and_reports_partial_visibility(tmp_path):
     assert len(tiny["text"]) == 3
     with pytest.raises(ValueError, match="mode"):
         store.context([hit["id"]], mode="unknown")
+
+
+def test_deactivate_keeps_history_and_existing_views_until_reactivation(tmp_path):
+    path = tmp_path / "store.sqlite"
+    store = HierarchyStore(path)
+    sid = store.save(example("needle", "manual"))
+    other = store.save(example("needle", "policy"))
+    store.activate(sid)
+    store.activate(other)
+    view = store.prepare()
+    assert store.deactivate("manual") is True
+    assert store.deactivate("manual") is False
+    assert store.get(sid)["document"]["text"] == "needle"
+    assert {hit["source"] for hit in store.search("needle")} == {"policy"}
+    assert {hit["source"] for hit in view.search("needle")} == {"manual", "policy"}
+    store.activate(sid)
+    assert len(store.search("needle")) == 2
+    assert HierarchyStore(tmp_path / "missing.sqlite").deactivate("manual") is False

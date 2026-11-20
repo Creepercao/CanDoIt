@@ -133,6 +133,16 @@ class HierarchyStore:
         return [{"id": row[0], "document_id": row[1], "source": row[2], "active": row[0] == row[3]}
                 for row in rows]
 
+    def deactivate(self, source):
+        """Remove a source's active pointer while retaining every stored snapshot."""
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must be a non-empty string")
+        if not self.path.exists():
+            return False
+        with self._connect(write=True) as connection:
+            removed = connection.execute("DELETE FROM active_sources WHERE source=?", (source,)).rowcount
+        return bool(removed)
+
     def prepare(self, sources=None):
         """Capture a fixed, validated corpus for a sequence of queries."""
         if sources is not None and (not isinstance(sources, list) or not sources or
