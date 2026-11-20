@@ -38,6 +38,7 @@ def test_export_refuses_empty_corpus_and_freezes_versions_during_queries(tmp_pat
     first = store.save(prepare_document("q", "manual"))
     second = store.save(prepare_document("new q", "manual"))
     store.activate(first)
+    labels[0]["relevant_ids"] = [store.get(first)["chunks"][0]["id"]]
     view = store.prepare()
     original = view.search
 
@@ -116,3 +117,20 @@ def test_cli_pins_historical_export_without_reactivating_it(tmp_path, monkeypatc
     with pytest.raises(ValueError, match="mutually exclusive"):
         export_rankings([{"query": "oldneedle", "relevant_ids": [snapshot["chunks"][0]["id"]]}],
                         store, sources=["manual"], snapshot_ids=[old])
+
+
+@pytest.mark.parametrize("invalid", ["unknown", "section", "old"])
+def test_all_relevance_ids_checked_before_any_query(tmp_path, monkeypatch, invalid):
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    old = prepare_document("oldneedle", "manual")
+    store.save(old)
+    current = prepare_document("needle", "manual")
+    store.activate(store.save(current))
+    bad = {"unknown": "fake", "section": current["sections"][0]["id"], "old": old["chunks"][0]["id"]}[invalid]
+    labels = [{"query": "known", "relevant_ids": [current["chunks"][0]["id"]]},
+              {"query": "invalid", "relevant_ids": [bad]}]
+    view = store.prepare()
+    monkeypatch.setattr(view, "search", lambda *a, **kw: pytest.fail("must check all IDs before retrieval"))
+    monkeypatch.setattr(store, "prepare", lambda: view)
+    with pytest.raises(ValueError, match="selected corpus"):
+        export_rankings(labels, store)

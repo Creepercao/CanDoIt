@@ -22,6 +22,7 @@ def export_report(labels, store, depth=20, section_k=5, sources=None, *, route="
     active = list(view.snapshot_ids)
     if not active:
         raise ValueError("store has no active snapshots")
+    view.require_chunk_ids([identifier for row in rows for identifier in row["relevant_ids"]])
     identity = view.retrieval_identity(depth, section_k, route=route)
     for row in rows:
         row["ranked_ids"] = [hit["id"] for hit in view.search(row["query"], depth, section_k, route=route)]

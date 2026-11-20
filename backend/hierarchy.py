@@ -279,6 +279,14 @@ class HierarchyView:
                          "corpus_sha256": self.retrieval_identity()["corpus_sha256"], "preview_chars": preview_chars,
                          "include_text": include_text, "documents": documents, "sections": sections, "chunks": chunks})
 
+    def require_chunk_ids(self, identifiers):
+        if not isinstance(identifiers, list) or any(
+                not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers):
+            raise ValueError("chunk IDs must be an array of non-empty strings")
+        missing = sorted(set(identifiers) - self._chunks.keys())
+        if missing:
+            raise ValueError("relevant IDs are absent from the selected corpus: " + ", ".join(missing[:5]))
+
     def context(self, chunk_ids, max_chars=4000, *, mode="prefix"):
         """Expand ranked active chunk IDs to unique parent sections under a budget."""
         if not isinstance(chunk_ids, list) or any(not isinstance(item, str) or not item.strip() for item in chunk_ids):
