@@ -215,6 +215,19 @@ true；note 留作判断依据，不参与评分。`validate_annotations(package
 即使所有问题都标为无答案，也必须匹配绑定的语料。`require_complete=False` 仅检查进度，
 返回 pending_queries，不会把尚未审核的问题变成可用于导出的无答案样本。
 
+问题种子格式为 `[{"query":"退款条件是什么？","tags":["售后"]}]`，不能预填相关 ID。
+命令行使用严格 JSON 读取和已有文件保护，不启动模型或服务：
+
+```powershell
+python -m backend.tools.hierarchy_labels --store temp/hierarchy.sqlite draft temp/questions.json temp/labels.json
+python -m backend.tools.hierarchy_labels --store temp/hierarchy.sqlite check temp/labels.json --allow-pending
+python -m backend.tools.hierarchy_labels --store temp/hierarchy.sqlite check temp/labels.json --output temp/checked.json
+```
+
+draft 支持重复 --source 或 --snapshot-id，两者互斥；check 始终读取文件绑定的历史版本，
+即使生效版本已经改变也可复核。--allow-pending 用于查看剩余问题，默认 check 要求全部完成。
+请另用 inventory --snapshot-id 导出对应原文进行人工判断；仅核验格式/归属不代表相关性判断正确。
+
 ```powershell
 python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```

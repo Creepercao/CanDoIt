@@ -1,8 +1,14 @@
 """Human relevance annotations bound to an immutable hierarchy corpus."""
 
+import argparse
 from copy import deepcopy
+import json
+from pathlib import Path
+import sqlite3
 
+from backend.hierarchy import HierarchyStore
 from backend.tools.retrieval_export import validate_export
+from backend.tools.retrieval_io import read_json_input
 
 
 def _questions(questions):
@@ -84,3 +90,54 @@ def validate_annotations(package, view, *, require_complete=True):
     return {"rows": completed, "queries": len(rows), "reviewed_queries": len(completed),
             "pending_queries": pending, "complete": not pending,
             "snapshot_ids": identity["snapshot_ids"], "corpus_sha256": identity["corpus_sha256"]}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--store", type=Path, required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    draft = commands.add_parser("draft", help="Create a pending annotation file from query/tags seeds")
+    draft.add_argument("questions", type=Path)
+    draft.add_argument("output", type=Path)
+    selection = draft.add_mutually_exclusive_group()
+    selection.add_argument("--source", dest="sources", action="append")
+    selection.add_argument("--snapshot-id", dest="snapshot_ids", action="append")
+    check = commands.add_parser("check", help="Validate annotations against their pinned historical snapshots")
+    check.add_argument("labels", type=Path)
+    check.add_argument("--allow-pending", action="store_true", help="Report progress without requiring completion")
+    check.add_argument("--output", type=Path, help="Save the validation summary; path must not exist")
+    args = parser.parse_args()
+    try:
+        if args.output:
+            if args.output.exists() or args.output.is_symlink():
+                raise FileExistsError("output already exists")
+            if not args.output.parent.is_dir():
+                raise FileNotFoundError("output directory does not exist")
+        if not args.store.is_file():
+            raise ValueError("store does not exist")
+        store = HierarchyStore(args.store)
+        if args.command == "draft":
+            questions, source = read_json_input(args.questions)
+            view = (store.prepare_versions(args.snapshot_ids) if args.snapshot_ids is not None
+                    else store.prepare(args.sources))
+            artifact = draft_annotations(questions, view)
+            report = {key: artifact[key] for key in ("kind", "snapshot_ids", "corpus_sha256")}
+            report["queries"] = len(artifact["rows"])
+        else:
+            package, source = read_json_input(args.labels)
+            if not isinstance(package, dict):
+                raise ValueError("labels must be an annotation package")
+            view = store.prepare_versions(package.get("snapshot_ids"))
+            report = validate_annotations(package, view, require_complete=not args.allow_pending)
+            report.pop("rows")
+            artifact = {**report, "input": source}
+        if args.output:
+            with args.output.open("x", encoding="utf-8") as handle:
+                json.dump(artifact, handle, ensure_ascii=False, indent=2)
+        print(json.dumps({**report, "input": source}, ensure_ascii=False, indent=2))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    main()
