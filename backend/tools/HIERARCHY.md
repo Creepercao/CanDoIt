@@ -209,6 +209,12 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 reviewed=false 表示待人工判断，不能把空相关 ID 自动视为“知识库没有答案”。草稿不提供
 检索排名或自动相关性标签，避免将检索器自己的结果直接当成评估真值。
 
+人工阅读清单原文后填写 relevant_ids、显式设置 answerable=true/false，最后将 reviewed 改为
+true；note 留作判断依据，不参与评分。`validate_annotations(package, view)` 默认要求全部审核，
+拒绝缺少可回答性判断、相关 ID 与可回答性冲突、重复/其他语料/章节 ID，以及语料版本不匹配。
+即使所有问题都标为无答案，也必须匹配绑定的语料。`require_complete=False` 仅检查进度，
+返回 pending_queries，不会把尚未审核的问题变成可用于导出的无答案样本。
+
 ```powershell
 python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```
