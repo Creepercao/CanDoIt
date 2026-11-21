@@ -204,6 +204,11 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 
 ## 无训练测试
 
+标注草稿 API `hierarchy_labels.draft_annotations(questions, view)` 接受包含 query 和可选 tags
+的问题列表，记录固定视图的 snapshot_ids 和 corpus_sha256。草稿中的 answerable=null、
+reviewed=false 表示待人工判断，不能把空相关 ID 自动视为“知识库没有答案”。草稿不提供
+检索排名或自动相关性标签，避免将检索器自己的结果直接当成评估真值。
+
 ```powershell
 python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```
