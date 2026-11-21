@@ -202,7 +202,7 @@ python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite verify
 尚无持久化分块检索索引、生产并发性能验证、自动过期清理或访问权限层。快照正文存储于 SQLite，
 实验数据应放在 temp 等本地目录，不要提交包含业务文本的数据库。
 
-## 无训练测试
+## 人工标注与实验文件
 
 标注草稿 API `hierarchy_labels.draft_annotations(questions, view)` 接受包含 query 和可选 tags
 的问题列表，记录固定视图的 snapshot_ids 和 corpus_sha256。草稿中的 answerable=null、
@@ -241,8 +241,25 @@ hierarchy-rankings-v1 单文件，避免命令行摘要遗失后无法确认实�
 输出文件字节（bundle 模式指整个文件），二者含义不同。这是数据一致性检查，不是数字签名，
 不能证明标签正确、阻止重新计算指纹，或验证未随文件交付的快照正文。
 
+完成审核后，可用同一套标注对照正文单路与正文/标题 RRF：
+
 ```powershell
-python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
+python -m backend.tools.hierarchy_export temp/labels.json temp/body-experiment.json --store temp/hierarchy.sqlite --route body --depth 20 --bundle
+python -m backend.tools.hierarchy_export temp/labels.json temp/rrf-experiment.json --store temp/hierarchy.sqlite --route rrf --depth 20 --bundle
+python -m backend.tools.retrieval_eval temp/rrf-experiment.json --baseline temp/body-experiment.json --format markdown --output temp/comparison.md
+python -m backend.tools.retrieval_review temp/rrf-experiment.json --baseline temp/body-experiment.json --output temp/review.json
+```
+
+评分和退步题复核无需重新打开数据库，先校验 bundle 内容/语料/配置指纹，再执行既有指标、
+分组与门槛逻辑。JSON 报告 experiments 保留实验元数据；Markdown 展示路由、深度及版本指纹。
+双方 bundle 必须来自同一语料；不能与缺少语料记录的旧数组混合比较。旧数组之间的比较保持兼容。
+bundle 的评估 K 不得超过导出深度；完整 MRR 受导出深度影响，策略对照宜保持深度和其他参数一致。
+本流程不判断人工标注是否正确，也尚未提供真实业务标注集、生产向量检索或效果提升证明。
+
+## 无训练测试
+
+```powershell
+python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py backend/tests/test_hierarchy_labels.py backend/tests/test_hierarchy_labels_cli.py backend/tests/test_hierarchy_artifact.py backend/tests/test_hierarchy_workflow.py -q
 ```
 
 测试验证内容校验、幂等保存、配置版本隔离、生效回退、原文位置、预算截断、旧版本拒绝、

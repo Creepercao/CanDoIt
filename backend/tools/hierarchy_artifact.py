@@ -57,3 +57,21 @@ def unpack_artifact(artifact):
     if "queries" in metadata and (type(metadata["queries"]) is not int or metadata["queries"] != len(artifact["rows"])):
         raise ValueError("artifact query count does not match rows")
     return deepcopy(artifact["rows"]), deepcopy(metadata)
+
+
+def decode_rankings(value, k=5):
+    """Accept legacy arrays or validate a bundled experiment before scoring."""
+    if isinstance(value, list):
+        return value, None
+    rows, metadata = unpack_artifact(value)
+    if type(k) is not int or k < 1 or k > metadata["configuration"]["top_k"]:
+        raise ValueError("evaluation k must be positive and not exceed artifact retrieval depth")
+    return rows, metadata
+
+
+def require_comparable_experiments(baseline, candidate):
+    """Avoid silently comparing a known corpus with an unknown or different one."""
+    if (baseline is None) != (candidate is None):
+        raise ValueError("comparison cannot mix a rankings artifact with a legacy array of unknown corpus")
+    if baseline is not None and baseline["corpus_sha256"] != candidate["corpus_sha256"]:
+        raise ValueError("artifact comparison requires the same corpus snapshots")

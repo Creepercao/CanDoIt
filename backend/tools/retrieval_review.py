@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from backend.tools.hierarchy_artifact import decode_rankings, require_comparable_experiments
 from backend.tools.retrieval_eval import compare
 from backend.tools.retrieval_io import read_json_input
 
@@ -39,10 +40,15 @@ def main():
     parser.add_argument("--slice", dest="tag")
     args = parser.parse_args()
     try:
-        candidate, candidate_input = read_json_input(args.candidate)
-        baseline, baseline_input = read_json_input(args.baseline)
+        value, candidate_input = read_json_input(args.candidate)
+        candidate, candidate_experiment = decode_rankings(value, args.k)
+        value, baseline_input = read_json_input(args.baseline)
+        baseline, baseline_experiment = decode_rankings(value, args.k)
+        require_comparable_experiments(baseline_experiment, candidate_experiment)
         result = build_review(compare(baseline, candidate, args.k), args.metric, args.tag)
         result["inputs"] = {"candidate": candidate_input, "baseline": baseline_input}
+        if candidate_experiment is not None:
+            result["experiments"] = {"candidate": candidate_experiment, "baseline": baseline_experiment}
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(result, handle, ensure_ascii=False, indent=2)
     except (ValueError, OSError) as exc:

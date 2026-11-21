@@ -46,6 +46,14 @@ def render_markdown(result):
         lines += _table(["用途", "路径", "SHA-256", "字节数"],
                         [(role, item["path"], item["sha256"], item["bytes"])
                          for role, item in result["inputs"].items()])
+    if "experiments" in result:
+        lines += ["## 离线实验条件", "",
+                  "以下来自已校验的排名文件；指纹用于一致性核对，不证明人工标签或真实业务效果。", ""]
+        lines += _table(["用途", "路由", "导出深度", "章节候选数", "语料指纹", "检索配置指纹", "快照ID"],
+                        [(role, item["configuration"].get("route"), item["configuration"]["top_k"],
+                          item["configuration"].get("section_k"), item["corpus_sha256"],
+                          item["retrieval_sha256"], "；".join(item["snapshot_ids"]))
+                         for role, item in result["experiments"].items()])
     for tag, scope in result.get("slices", {}).items():
         counts = scope["candidate"] if comparison else scope
         lines += ["## 业务分组：" + _cell(tag), "",

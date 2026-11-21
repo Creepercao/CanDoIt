@@ -130,7 +130,7 @@ def compare(baseline, candidate, k=5):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="UTF-8 JSON array of labeled rankings")
+    parser.add_argument("input", type=Path, help="UTF-8 rankings array or hierarchy-rankings-v1 artifact")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="Compare against saved baseline rankings")
     parser.add_argument("--output", type=Path, help="Also save the report; path must not exist")
@@ -140,13 +140,21 @@ def main():
     if args.gates and not args.baseline:
         parser.error("--gates requires --baseline")
     try:
-        rows, candidate_input = read_json_input(args.input)
+        from backend.tools.hierarchy_artifact import decode_rankings, require_comparable_experiments
+
+        value, candidate_input = read_json_input(args.input)
+        rows, candidate_experiment = decode_rankings(value, args.k)
         inputs = {"candidate": candidate_input}
+        experiments = {"candidate": candidate_experiment} if candidate_experiment is not None else {}
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError("input must be an array of objects")
         result = evaluate(rows, args.k)
         if args.baseline:
-            baseline, inputs["baseline"] = read_json_input(args.baseline)
+            value, inputs["baseline"] = read_json_input(args.baseline)
+            baseline, baseline_experiment = decode_rankings(value, args.k)
+            require_comparable_experiments(baseline_experiment, candidate_experiment)
+            if baseline_experiment is not None:
+                experiments["baseline"] = baseline_experiment
             result = compare(baseline, rows, args.k)
         if args.gates:
             from backend.tools.retrieval_gates import check_gates
@@ -154,6 +162,8 @@ def main():
             rules, inputs["gates"] = read_json_input(args.gates)
             result["gate_result"] = check_gates(result, rules)
         result["inputs"] = inputs
+        if experiments:
+            result["experiments"] = experiments
         if args.format == "markdown":
             from backend.tools.retrieval_report import render_markdown
 

@@ -164,6 +164,11 @@ python -m backend.tools.retrieval_review backend/tools/examples/retrieval-candid
 
 ## 7. 无训练验证
 
+hierarchy_export 的 `--bundle` 单文件也可直接作为 retrieval_eval / retrieval_review 的输入，
+详见 [HIERARCHY.md](HIERARCHY.md)。CLI 先核验内容与实验指纹，再评分；报告保留 experiments，
+Markdown 展示实验条件。双方 bundle 必须绑定同一语料，且不支持 bundle 与旧数组混合比较。
+K 不得大于 bundle 记录的导出深度。普通排名数组的既有用法不变。
+
 ```powershell
 python -m pytest backend/tests/test_retrieval_eval.py backend/tests/test_retrieval_export.py backend/tests/test_retrieval_gates.py backend/tests/test_retrieval_report.py backend/tests/test_retrieval_cli.py backend/tests/test_retrieval_review.py backend/tests/test_retrieval_io.py -q
 ```
