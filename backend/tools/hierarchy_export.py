@@ -7,26 +7,36 @@ from pathlib import Path
 import sqlite3
 
 from backend.hierarchy import HierarchyStore
+from backend.tools.hierarchy_labels import validate_annotations
 from backend.tools.retrieval_export import validate_export
 from backend.tools.retrieval_io import read_json_input
 
 
 def export_report(labels, store, depth=20, section_k=5, sources=None, *, route="rrf", snapshot_ids=None):
-    rows = validate_export(labels, depth=depth, threshold=0)
+    bound = isinstance(labels, dict)
+    rows = None if bound else validate_export(labels, depth=depth, threshold=0)
     if type(section_k) is not int or not 1 <= section_k <= 200:
         raise ValueError("section_k must be an integer between 1 and 200")
     if snapshot_ids is not None and sources is not None:
         raise ValueError("sources and snapshot_ids are mutually exclusive")
+    if bound and snapshot_ids is None and sources is None:
+        snapshot_ids = labels.get("snapshot_ids")
+        if snapshot_ids is None:
+            raise ValueError("bound labels require snapshot_ids")
     view = (store.prepare_versions(snapshot_ids) if snapshot_ids is not None else
             store.prepare(sources) if sources is not None else store.prepare())
     active = list(view.snapshot_ids)
     if not active:
         raise ValueError("store has no active snapshots")
+    if bound:
+        checked = validate_annotations(labels, view)
+        rows = validate_export(checked["rows"], depth=depth, threshold=0)
     view.require_chunk_ids([identifier for row in rows for identifier in row["relevant_ids"]])
     identity = view.retrieval_identity(depth, section_k, route=route)
     for row in rows:
         row["ranked_ids"] = [hit["id"] for hit in view.search(row["query"], depth, section_k, route=route)]
-    return {"rows": rows, **identity}
+    return {"rows": rows, **identity, "selection": "snapshots" if snapshot_ids is not None else "active",
+            "label_format": "hierarchy-labels-v1" if bound else "legacy-array"}
 
 
 def export_rankings(labels, store, depth=20, section_k=5, sources=None, *, route="rrf", snapshot_ids=None):
@@ -62,9 +72,8 @@ def main():
         rankings_sha256 = hashlib.sha256(args.output.read_bytes()).hexdigest()
     except (ValueError, OSError, sqlite3.Error) as exc:
         parser.error(str(exc))
-    selection_metadata = {"selection": "snapshots" if args.snapshot_ids is not None else "active",
-                          "selected_snapshot_ids": report["snapshot_ids"]}
-    if args.snapshot_ids is None:
+    selection_metadata = {"selected_snapshot_ids": report["snapshot_ids"]}
+    if report["selection"] == "active":
         selection_metadata["active_snapshot_ids"] = report["snapshot_ids"]
     print(json.dumps({**report, **selection_metadata, "queries": len(rows), "input": source,
                       "sources": args.sources, "rankings_sha256": rankings_sha256},

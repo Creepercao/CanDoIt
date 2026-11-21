@@ -228,6 +228,12 @@ draft 支持重复 --source 或 --snapshot-id，两者互斥；check 始终读�
 即使生效版本已经改变也可复核。--allow-pending 用于查看剩余问题，默认 check 要求全部完成。
 请另用 inventory --snapshot-id 导出对应原文进行人工判断；仅核验格式/归属不代表相关性判断正确。
 
+已完成审核的 labels.json 可以直接交给 hierarchy_export。不提供来源/版本参数时，绑定格式
+自动锁定文件内的历史快照；显式传入 --source 或 --snapshot-id 时必须与标注语料完全一致。
+未审核或版本不匹配会在检索前报错，不产生排名文件。旧的 JSON 标注数组仍可使用，但它
+没有语料绑定，尤其无法证明“无答案”判断来自哪个版本；推荐使用新格式。
+人工备注和 reviewed 状态不进入排名数组，导出摘要的 label_format 说明输入格式。
+
 ```powershell
 python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```

@@ -134,3 +134,49 @@ def test_all_relevance_ids_checked_before_any_query(tmp_path, monkeypatch, inval
     monkeypatch.setattr(store, "prepare", lambda: view)
     with pytest.raises(ValueError, match="selected corpus"):
         export_rankings(labels, store)
+
+
+def test_bound_labels_pin_historical_corpus_and_keep_notes_out_of_rankings(tmp_path, monkeypatch, capsys):
+    from backend.tools.hierarchy_labels import draft_annotations
+
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    snapshot = prepare_document("refund policy", "manual")
+    sid = store.save(snapshot)
+    store.activate(sid)
+    package = draft_annotations([{"query": "refund"}, {"query": "missing"}], store.prepare())
+    package["rows"][0].update(reviewed=True, answerable=True, relevant_ids=[snapshot["chunks"][0]["id"]], note="人工阅读原文")
+    package["rows"][1].update(reviewed=True, answerable=False)
+    current = store.save(prepare_document("changed", "manual"))
+    store.activate(current)
+    source, output = tmp_path / "labels.json", tmp_path / "rankings.json"
+    source.write_text(json.dumps(package), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["hierarchy_export", str(source), str(output), "--store", str(store.path)])
+    main()
+    metadata = json.loads(capsys.readouterr().out)
+    rows = json.loads(output.read_text(encoding="utf-8"))
+    assert metadata["selection"] == "snapshots"
+    assert metadata["label_format"] == "hierarchy-labels-v1"
+    assert metadata["selected_snapshot_ids"] == [sid]
+    assert "active_snapshot_ids" not in metadata
+    assert rows[0]["ranked_ids"] == package["rows"][0]["relevant_ids"]
+    assert "note" not in rows[0] and "reviewed" not in rows[0]
+    assert [row["id"] for row in store.list_versions() if row["active"]] == [current]
+    with pytest.raises(ValueError, match="corpus"):
+        export_rankings(package, store, snapshot_ids=[current])
+
+
+def test_bound_pending_labels_fail_before_retrieval_and_do_not_create_output(tmp_path, monkeypatch):
+    from backend.hierarchy import HierarchyView
+    from backend.tools.hierarchy_labels import draft_annotations
+
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    store.activate(store.save(prepare_document("refund policy", "manual")))
+    package = draft_annotations([{"query": "refund"}], store.prepare())
+    source, output = tmp_path / "labels.json", tmp_path / "rankings.json"
+    source.write_text(json.dumps(package), encoding="utf-8")
+    monkeypatch.setattr(HierarchyView, "search", lambda *a, **kw: pytest.fail("pending labels must not reach retrieval"))
+    monkeypatch.setattr("sys.argv", ["hierarchy_export", str(source), str(output), "--store", str(store.path)])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert not output.exists()
