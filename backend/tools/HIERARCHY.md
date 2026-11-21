@@ -234,6 +234,13 @@ draft 支持重复 --source 或 --snapshot-id，两者互斥；check 始终读�
 没有语料绑定，尤其无法证明“无答案”判断来自哪个版本；推荐使用新格式。
 人工备注和 reviewed 状态不进入排名数组，导出摘要的 label_format 说明输入格式。
 
+`hierarchy_export ... --bundle` 将排名 rows、快照/检索配置、输入标注文件指纹一起存为
+hierarchy-rankings-v1 单文件，避免命令行摘要遗失后无法确认实验条件。默认仍输出兼容的排名数组。
+库接口 `hierarchy_artifact.unpack_artifact` 校验内容、语料及检索配置指纹，返回排名和元数据，
+无需数据库或模型。content_sha256 针对规范化 JSON 内容，stdout 的 rankings_sha256 针对实际
+输出文件字节（bundle 模式指整个文件），二者含义不同。这是数据一致性检查，不是数字签名，
+不能证明标签正确、阻止重新计算指纹，或验证未随文件交付的快照正文。
+
 ```powershell
 python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py -q
 ```

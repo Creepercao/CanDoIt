@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 
 from backend.hierarchy import HierarchyStore
+from backend.tools.hierarchy_artifact import make_artifact
 from backend.tools.hierarchy_labels import validate_annotations
 from backend.tools.retrieval_export import validate_export
 from backend.tools.retrieval_io import read_json_input
@@ -52,6 +53,7 @@ def main():
     parser.add_argument("--depth", type=int, default=20)
     parser.add_argument("--section-k", type=int, default=5)
     parser.add_argument("--route", choices=("rrf", "body"), default="rrf")
+    parser.add_argument("--bundle", action="store_true", help="Save rankings and experiment metadata in one verifiable JSON artifact")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--source", dest="sources", action="append", help="Repeat to select active source keys")
     selection.add_argument("--snapshot-id", dest="snapshot_ids", action="append", help="Repeat to pin historical snapshot IDs")
@@ -67,16 +69,18 @@ def main():
         report = export_report(labels, HierarchyStore(args.store), args.depth, args.section_k, args.sources,
                                route=args.route, snapshot_ids=args.snapshot_ids)
         rows = report.pop("rows")
+        metadata = {**report, "selected_snapshot_ids": report["snapshot_ids"], "queries": len(rows),
+                    "input": source, "sources": args.sources}
+        if report["selection"] == "active":
+            metadata["active_snapshot_ids"] = report["snapshot_ids"]
+        artifact = make_artifact(rows, metadata) if args.bundle else rows
         with args.output.open("x", encoding="utf-8") as handle:
-            json.dump(rows, handle, ensure_ascii=False, indent=2)
+            json.dump(artifact, handle, ensure_ascii=False, indent=2)
         rankings_sha256 = hashlib.sha256(args.output.read_bytes()).hexdigest()
     except (ValueError, OSError, sqlite3.Error) as exc:
         parser.error(str(exc))
-    selection_metadata = {"selected_snapshot_ids": report["snapshot_ids"]}
-    if report["selection"] == "active":
-        selection_metadata["active_snapshot_ids"] = report["snapshot_ids"]
-    print(json.dumps({**report, **selection_metadata, "queries": len(rows), "input": source,
-                      "sources": args.sources, "rankings_sha256": rankings_sha256},
+    print(json.dumps({**metadata, "rankings_sha256": rankings_sha256,
+                      "output_format": "hierarchy-rankings-v1" if args.bundle else "legacy-array"},
                      ensure_ascii=False, indent=2))
 
 
