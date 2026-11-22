@@ -256,10 +256,41 @@ python -m backend.tools.retrieval_review temp/rrf-experiment.json --baseline tem
 bundle 的评估 K 不得超过导出深度；完整 MRR 受导出深度影响，策略对照宜保持深度和其他参数一致。
 本流程不判断人工标注是否正确，也尚未提供真实业务标注集、生产向量检索或效果提升证明。
 
+## 双人标注复核与裁决
+
+两名标注者分别使用同一份草稿，阅读固定语料后完成 labels-a.json 和 labels-b.json。
+双方文件必须全部审核，问题及业务标签集合相同，问题顺序可以不同。工具不检查两份文件
+是否由不同的人独立完成，也不把一致意见视为正确性证明。
+
+```powershell
+python -m backend.tools.hierarchy_review --store temp/hierarchy.sqlite compare temp/labels-a.json temp/labels-b.json --output temp/agreement.json
+python -m backend.tools.hierarchy_review --store temp/hierarchy.sqlite consensus temp/labels-a.json temp/labels-b.json --output temp/pending.json
+python -m backend.tools.hierarchy_review --store temp/hierarchy.sqlite coverage temp/pending.json --output temp/coverage.json
+python -m backend.tools.hierarchy_review --store temp/hierarchy.sqlite adjudicate temp/pending.json temp/decisions.json --output temp/final-labels.json
+python -m backend.tools.hierarchy_export temp/final-labels.json temp/final-experiment.json --store temp/hierarchy.sqlite --bundle
+```
+
+compare 输出可回答性一致题数、相关分块完全一致题数及逐题分歧。Jaccard 是双方相关 ID
+交集数除以并集数；双方均无答案时不计入均值，报告同时列出 jaccard_queries 分母。
+这些是集合一致性描述，不是准确率、显著性检验或 Cohen's kappa。
+consensus 保留完全一致的已审核标签，将所有分歧重置为 answerable=null、reviewed=false，
+保留双方备注供裁决参考。分歧不做并集、投票或自动判无答案。
+
+decisions.json 是数组，每项格式：
+`{"query":"原问题全文","answerable":false,"relevant_ids":[],"note":"人工检查原文后的裁决依据"}`。
+必须恰好覆盖所有待处理问题，理由不能为空，不能修改已一致的问题；有答案时必须提供该
+语料中的有效相关分块。裁决后保留双方备注并追加理由，输出通过完整审核校验，才能导出。
+已有文件不会覆盖，所有命令读取绑定的历史快照，不切换当前生效版本。compare 报告保存双方
+输入指纹；其他命令 stdout 也包含输入指纹，需保留审计来源时请同时保存比较报告与命令摘要。
+
+coverage 只统计已审核标签里的相关分块，按来源和章节给出 labeled_chunks/evidence_queries，
+显示零证据章节及待审核问题。无答案题没有可归属的证据来源；尚未审核的候选 ID 不计入覆盖。
+它有助于发现样本集中分布，但不能证明业务主题覆盖充分或建立真实效果基线。
+
 ## 无训练测试
 
 ```powershell
-python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py backend/tests/test_hierarchy_labels.py backend/tests/test_hierarchy_labels_cli.py backend/tests/test_hierarchy_artifact.py backend/tests/test_hierarchy_workflow.py -q
+python -m pytest backend/tests/test_chunking.py backend/tests/test_chunk_preview.py backend/tests/test_hierarchy.py backend/tests/test_hierarchy_inventory.py backend/tests/test_hierarchy_cli.py backend/tests/test_lexical.py backend/tests/test_hierarchy_search.py backend/tests/test_hierarchy_export.py backend/tests/test_hierarchy_labels.py backend/tests/test_hierarchy_labels_cli.py backend/tests/test_hierarchy_artifact.py backend/tests/test_hierarchy_workflow.py backend/tests/test_hierarchy_review.py backend/tests/test_hierarchy_review_cli.py -q
 ```
 
 测试验证内容校验、幂等保存、配置版本隔离、生效回退、原文位置、预算截断、旧版本拒绝、

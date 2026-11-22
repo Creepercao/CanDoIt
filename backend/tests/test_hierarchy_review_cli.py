@@ -86,3 +86,24 @@ def test_coverage_cli_saves_source_and_section_distribution(tmp_path, monkeypatc
     assert report["labeled_chunks"] == 1
     assert len(report["sections"]) == 2
     assert report["inputs"]["left"]["sha256"] == hashlib.sha256(paths[0].read_bytes()).hexdigest()
+
+
+def test_subprocess_consensus_adjudication_export_and_scoring(tmp_path):
+    from backend.tests.test_hierarchy_workflow import cli
+    paths, sid = files(tmp_path)
+    store = tmp_path / "store.sqlite"
+    pending, decisions, final = [tmp_path / name for name in ("pending.json", "decisions.json", "final.json")]
+    result = cli("hierarchy_review", "--store", store, "consensus", *paths, "--output", pending)
+    assert result.returncode == 0, result.stderr
+    decisions.write_text(json.dumps([{"query": "first", "answerable": False, "relevant_ids": [], "note": "人工复核后无依据"}]), encoding="utf-8")
+    result = cli("hierarchy_review", "--store", store, "adjudicate", pending, decisions, "--output", final)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["inputs"]["right"]["sha256"] == hashlib.sha256(decisions.read_bytes()).hexdigest()
+    rankings = tmp_path / "experiment.json"
+    result = cli("hierarchy_export", final, rankings, "--store", store, "--bundle")
+    assert result.returncode == 0, result.stderr
+    result = cli("retrieval_eval", rankings)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["no_answer_queries"] == 2
+    assert report["experiments"]["candidate"]["snapshot_ids"] == [sid]

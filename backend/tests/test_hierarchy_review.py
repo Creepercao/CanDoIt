@@ -96,3 +96,41 @@ def test_coverage_counts_only_reviewed_evidence_and_includes_empty_sections(tmp_
     package["rows"][0]["reviewed"] = False
     pending = annotation_coverage(package, view)
     assert pending["labeled_chunks"] == 0 and pending["pending_queries"] == ["first"]
+
+
+def test_adjudication_preserves_agreements_and_both_original_notes(tmp_path):
+    from backend.tools.hierarchy_review import adjudicate_annotations
+    view, _, left = annotations(tmp_path)
+    right = deepcopy(left)
+    left["rows"][0]["note"] = "有依据"
+    right["rows"][0].update(answerable=False, relevant_ids=[], note="未找到")
+    pending = consensus_annotations(left, right, view)
+    original = deepcopy(pending)
+    resolved = adjudicate_annotations(pending, [{"query": "first", "answerable": False, "relevant_ids": [], "note": "逐章检查后无依据"}], view)
+    assert resolved["rows"][1] == pending["rows"][1]
+    assert all(row["reviewed"] for row in resolved["rows"])
+    assert all(text in resolved["rows"][0]["note"] for text in ("有依据", "未找到", "逐章检查"))
+    assert pending == original
+
+
+@pytest.mark.parametrize("problem", ["missing", "extra", "duplicate", "reason", "ids", "answerable"])
+def test_adjudication_rejects_incomplete_or_invalid_decisions(tmp_path, problem):
+    from backend.tools.hierarchy_review import adjudicate_annotations
+    view, _, package = annotations(tmp_path)
+    package["rows"][0]["reviewed"] = False
+    decision = {"query": "first", "answerable": False, "relevant_ids": [], "note": "核对后裁决"}
+    decisions = [decision]
+    if problem == "missing":
+        decisions = []
+    elif problem == "extra":
+        decision["query"] = "unknown"
+    elif problem == "duplicate":
+        decisions.append(deepcopy(decision))
+    elif problem == "reason":
+        decision["note"] = " "
+    elif problem == "ids":
+        decision.update(answerable=True, relevant_ids=["foreign"])
+    else:
+        decision["answerable"] = 0
+    with pytest.raises(ValueError):
+        adjudicate_annotations(package, decisions, view)

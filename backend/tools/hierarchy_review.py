@@ -76,6 +76,33 @@ def annotation_coverage(package, view):
                          for section in inventory["sections"]]}
 
 
+def adjudicate_annotations(package, decisions, view):
+    """Resolve exactly the pending questions with explicit human decisions."""
+    checked = validate_annotations(package, view, require_complete=False)
+    if not isinstance(decisions, list):
+        raise ValueError("decisions must be an array")
+    indexed = {}
+    for decision in decisions:
+        if not isinstance(decision, dict) or set(decision) != {"query", "answerable", "relevant_ids", "note"}:
+            raise ValueError("each decision requires query, answerable, relevant_ids and note")
+        query = decision["query"]
+        if not isinstance(query, str) or not query.strip() or query in indexed:
+            raise ValueError("decisions require unique non-empty queries")
+        if not isinstance(decision["note"], str) or not decision["note"].strip():
+            raise ValueError("each decision requires a non-empty rationale note")
+        indexed[query] = decision
+    if set(indexed) != set(checked["pending_queries"]):
+        raise ValueError("decisions must resolve exactly all pending queries")
+    result = deepcopy(package)
+    for row in result["rows"]:
+        if row["query"] in indexed:
+            decision = indexed[row["query"]]
+            row.update(answerable=decision["answerable"], relevant_ids=deepcopy(decision["relevant_ids"]),
+                       note=row["note"] + "\n裁决: " + decision["note"], reviewed=True)
+    validate_annotations(result, view)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--store", type=Path, required=True)
@@ -91,6 +118,10 @@ def main():
     coverage = commands.add_parser("coverage", help="Count reviewed evidence by source and section")
     coverage.add_argument("left", type=Path)
     coverage.add_argument("--output", type=Path, required=True)
+    adjudicate = commands.add_parser("adjudicate", help="Resolve all pending queries using explicit decisions and reasons")
+    adjudicate.add_argument("left", type=Path, help="Pending annotation package")
+    adjudicate.add_argument("right", type=Path, help="JSON array of human decisions")
+    adjudicate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.output.exists() or args.output.is_symlink():
@@ -109,9 +140,13 @@ def main():
             artifact = report
         else:
             right, right_input = read_json_input(args.right)
-            report = compare_annotations(left, right, view)
+            if args.command == "adjudicate":
+                artifact = adjudicate_annotations(left, right, view)
+                report = {"queries": len(artifact["rows"]), "disputed_queries": []}
+            else:
+                report = compare_annotations(left, right, view)
+                artifact = consensus_annotations(left, right, view) if args.command == "consensus" else report
             report["inputs"] = {"left": left_input, "right": right_input}
-            artifact = consensus_annotations(left, right, view) if args.command == "consensus" else report
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(artifact, handle, ensure_ascii=False, indent=2)
         print(json.dumps({"output": str(args.output), "queries": report["queries"],
