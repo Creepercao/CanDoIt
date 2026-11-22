@@ -1,8 +1,14 @@
 """Compare human annotations without using retrieval results as ground truth."""
 
+import argparse
 from copy import deepcopy
+import json
+from pathlib import Path
+import sqlite3
 
+from backend.hierarchy import HierarchyStore
 from backend.tools.hierarchy_labels import draft_annotations, validate_annotations
+from backend.tools.retrieval_io import read_json_input
 
 
 def compare_annotations(left, right, view):
@@ -43,3 +49,38 @@ def consensus_annotations(left, right, view):
                        relevant_ids=deepcopy(item["left"]["relevant_ids"]), reviewed=True)
     validate_annotations(result, view, require_complete=False)
     return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--store", type=Path, required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    compare = commands.add_parser("compare", help="Compare two fully reviewed annotation files")
+    compare.add_argument("left", type=Path)
+    compare.add_argument("right", type=Path)
+    compare.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        if args.output.exists() or args.output.is_symlink():
+            raise FileExistsError("output already exists")
+        if not args.output.parent.is_dir():
+            raise FileNotFoundError("output directory does not exist")
+        if not args.store.is_file():
+            raise ValueError("store does not exist")
+        left, left_input = read_json_input(args.left)
+        right, right_input = read_json_input(args.right)
+        if not isinstance(left, dict):
+            raise ValueError("left input must be an annotation package")
+        view = HierarchyStore(args.store).prepare_versions(left.get("snapshot_ids"))
+        report = compare_annotations(left, right, view)
+        report["inputs"] = {"left": left_input, "right": right_input}
+        with args.output.open("x", encoding="utf-8") as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2)
+        print(json.dumps({"output": str(args.output), "queries": report["queries"],
+                          "disputed_queries": report["disputed_queries"]}, ensure_ascii=False, indent=2))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    main()
