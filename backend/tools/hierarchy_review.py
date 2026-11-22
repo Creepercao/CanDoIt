@@ -51,6 +51,31 @@ def consensus_annotations(left, right, view):
     return result
 
 
+def annotation_coverage(package, view):
+    """Count reviewed evidence locations, without claiming semantic coverage."""
+    checked = validate_annotations(package, view, require_complete=False)
+    inventory = view.inventory()
+    chunks = {item["id"]: item for item in inventory["chunks"]}
+    selected = {identifier for row in checked["rows"] for identifier in row["relevant_ids"]}
+
+    def counts(scope):
+        ids = {item["id"] for item in scope}
+        return {"chunks": len(ids), "labeled_chunks": len(ids & selected),
+                "evidence_queries": sum(bool(ids.intersection(row["relevant_ids"])) for row in checked["rows"])}
+
+    return {"kind": "hierarchy-coverage-v1", "snapshot_ids": list(view.snapshot_ids),
+            "corpus_sha256": package["corpus_sha256"], "queries": checked["queries"],
+            "reviewed_queries": checked["reviewed_queries"], "pending_queries": checked["pending_queries"],
+            "answerable_queries": sum(row["answerable"] for row in checked["rows"]),
+            "no_answer_queries": sum(not row["answerable"] for row in checked["rows"]),
+            **counts(chunks.values()),
+            "sources": [{"source": document["source"], **counts(item for item in chunks.values() if item["source"] == document["source"])}
+                        for document in inventory["documents"]],
+            "sections": [{"id": section["id"], "source": section["source"], "path": section["path"],
+                          **counts(item for item in chunks.values() if item["parent_id"] == section["id"])}
+                         for section in inventory["sections"]]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--store", type=Path, required=True)
@@ -63,6 +88,9 @@ def main():
     consensus.add_argument("left", type=Path)
     consensus.add_argument("right", type=Path)
     consensus.add_argument("--output", type=Path, required=True)
+    coverage = commands.add_parser("coverage", help="Count reviewed evidence by source and section")
+    coverage.add_argument("left", type=Path)
+    coverage.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.output.exists() or args.output.is_symlink():
@@ -72,17 +100,22 @@ def main():
         if not args.store.is_file():
             raise ValueError("store does not exist")
         left, left_input = read_json_input(args.left)
-        right, right_input = read_json_input(args.right)
         if not isinstance(left, dict):
             raise ValueError("left input must be an annotation package")
         view = HierarchyStore(args.store).prepare_versions(left.get("snapshot_ids"))
-        report = compare_annotations(left, right, view)
-        report["inputs"] = {"left": left_input, "right": right_input}
-        artifact = consensus_annotations(left, right, view) if args.command == "consensus" else report
+        if args.command == "coverage":
+            report = annotation_coverage(left, view)
+            report["inputs"] = {"left": left_input}
+            artifact = report
+        else:
+            right, right_input = read_json_input(args.right)
+            report = compare_annotations(left, right, view)
+            report["inputs"] = {"left": left_input, "right": right_input}
+            artifact = consensus_annotations(left, right, view) if args.command == "consensus" else report
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(artifact, handle, ensure_ascii=False, indent=2)
         print(json.dumps({"output": str(args.output), "queries": report["queries"],
-                          "disputed_queries": report["disputed_queries"], "inputs": report["inputs"]}, ensure_ascii=False, indent=2))
+                          "disputed_queries": report.get("disputed_queries", []), "inputs": report["inputs"]}, ensure_ascii=False, indent=2))
     except (ValueError, OSError, sqlite3.Error) as exc:
         parser.error(str(exc))
 

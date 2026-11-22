@@ -83,3 +83,16 @@ def test_full_agreement_produces_a_complete_detached_label_package(tmp_path):
     assert validate_annotations(result, view)["complete"]
     result["rows"][0]["relevant_ids"].clear()
     assert package["rows"][0]["relevant_ids"]
+
+
+def test_coverage_counts_only_reviewed_evidence_and_includes_empty_sections(tmp_path):
+    from backend.tools.hierarchy_review import annotation_coverage
+    view, snapshot, package = annotations(tmp_path)
+    report = annotation_coverage(package, view)
+    assert report["labeled_chunks"] == 1 and report["evidence_queries"] == 1
+    assert report["sources"][0]["labeled_chunks"] == 1
+    assert sorted(section["labeled_chunks"] for section in report["sections"]) == [0, 1]
+    assert report["no_answer_queries"] == 1
+    package["rows"][0]["reviewed"] = False
+    pending = annotation_coverage(package, view)
+    assert pending["labeled_chunks"] == 0 and pending["pending_queries"] == ["first"]

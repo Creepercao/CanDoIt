@@ -75,3 +75,14 @@ def test_consensus_cli_outputs_editable_labels_that_cannot_export_before_resolut
         export_report(package, store)
     package["rows"][0].update(reviewed=True, answerable=False, note="人工裁决：没有答案")
     assert len(export_report(package, store)["rows"]) == 2
+
+
+def test_coverage_cli_saves_source_and_section_distribution(tmp_path, monkeypatch):
+    paths, _ = files(tmp_path)
+    output = tmp_path / "coverage.json"
+    monkeypatch.setattr(sys, "argv", ["review", "--store", str(tmp_path / "store.sqlite"), "coverage", str(paths[0]), "--output", str(output)])
+    main()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["labeled_chunks"] == 1
+    assert len(report["sections"]) == 2
+    assert report["inputs"]["left"]["sha256"] == hashlib.sha256(paths[0].read_bytes()).hexdigest()
