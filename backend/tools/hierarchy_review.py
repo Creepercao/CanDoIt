@@ -59,6 +59,10 @@ def main():
     compare.add_argument("left", type=Path)
     compare.add_argument("right", type=Path)
     compare.add_argument("--output", type=Path, required=True)
+    consensus = commands.add_parser("consensus", help="Save agreements and leave disagreements pending")
+    consensus.add_argument("left", type=Path)
+    consensus.add_argument("right", type=Path)
+    consensus.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.output.exists() or args.output.is_symlink():
@@ -74,10 +78,11 @@ def main():
         view = HierarchyStore(args.store).prepare_versions(left.get("snapshot_ids"))
         report = compare_annotations(left, right, view)
         report["inputs"] = {"left": left_input, "right": right_input}
+        artifact = consensus_annotations(left, right, view) if args.command == "consensus" else report
         with args.output.open("x", encoding="utf-8") as handle:
-            json.dump(report, handle, ensure_ascii=False, indent=2)
+            json.dump(artifact, handle, ensure_ascii=False, indent=2)
         print(json.dumps({"output": str(args.output), "queries": report["queries"],
-                          "disputed_queries": report["disputed_queries"]}, ensure_ascii=False, indent=2))
+                          "disputed_queries": report["disputed_queries"], "inputs": report["inputs"]}, ensure_ascii=False, indent=2))
     except (ValueError, OSError, sqlite3.Error) as exc:
         parser.error(str(exc))
 

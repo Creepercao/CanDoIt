@@ -56,3 +56,22 @@ def test_compare_rejects_pending_and_duplicate_keys_without_output(tmp_path, mon
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 2 and not output.exists()
+
+
+def test_consensus_cli_outputs_editable_labels_that_cannot_export_before_resolution(tmp_path, monkeypatch, capsys):
+    from backend.tools.hierarchy_export import export_report
+    from backend.tools.hierarchy_labels import validate_annotations
+    paths, sid = files(tmp_path)
+    output = tmp_path / "consensus.json"
+    store = HierarchyStore(tmp_path / "store.sqlite")
+    monkeypatch.setattr(sys, "argv", ["review", "--store", str(store.path), "consensus", *map(str, paths), "--output", str(output)])
+    main()
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["inputs"]["left"]["sha256"] == hashlib.sha256(paths[0].read_bytes()).hexdigest()
+    package = json.loads(output.read_text(encoding="utf-8"))
+    view = store.prepare_versions([sid])
+    assert validate_annotations(package, view, require_complete=False)["pending_queries"] == ["first"]
+    with pytest.raises(ValueError, match="pending"):
+        export_report(package, store)
+    package["rows"][0].update(reviewed=True, answerable=False, note="人工裁决：没有答案")
+    assert len(export_report(package, store)["rows"]) == 2
