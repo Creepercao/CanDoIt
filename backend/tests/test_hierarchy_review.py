@@ -5,7 +5,7 @@ import pytest
 from backend.chunking import prepare_document
 from backend.hierarchy import HierarchyStore
 from backend.tools.hierarchy_labels import draft_annotations
-from backend.tools.hierarchy_review import compare_annotations
+from backend.tools.hierarchy_review import compare_annotations, consensus_annotations
 
 
 def annotations(tmp_path):
@@ -58,3 +58,28 @@ def test_comparison_rejects_incomparable_labels(tmp_path, problem):
         right["rows"][0]["query"] = "other"
     with pytest.raises(ValueError):
         compare_annotations(left, right, view)
+
+
+def test_consensus_keeps_agreements_and_resets_conflicting_answerability(tmp_path):
+    from backend.tools.hierarchy_labels import validate_annotations
+    view, _, left = annotations(tmp_path)
+    right = deepcopy(left)
+    right["rows"][0].update(answerable=False, relevant_ids=[], note="未找到依据")
+    result = consensus_annotations(left, right, view)
+    assert result["rows"][0]["answerable"] is None
+    assert result["rows"][0]["relevant_ids"] == []
+    assert not result["rows"][0]["reviewed"]
+    assert "未找到依据" in result["rows"][0]["note"]
+    assert result["rows"][1]["reviewed"] and result["rows"][1]["answerable"] is False
+    assert validate_annotations(result, view, require_complete=False)["pending_queries"] == ["first"]
+    with pytest.raises(ValueError, match="pending"):
+        validate_annotations(result, view)
+
+
+def test_full_agreement_produces_a_complete_detached_label_package(tmp_path):
+    from backend.tools.hierarchy_labels import validate_annotations
+    view, _, package = annotations(tmp_path)
+    result = consensus_annotations(package, package, view)
+    assert validate_annotations(result, view)["complete"]
+    result["rows"][0]["relevant_ids"].clear()
+    assert package["rows"][0]["relevant_ids"]

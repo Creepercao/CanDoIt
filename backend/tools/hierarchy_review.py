@@ -1,6 +1,8 @@
 """Compare human annotations without using retrieval results as ground truth."""
 
-from backend.tools.hierarchy_labels import validate_annotations
+from copy import deepcopy
+
+from backend.tools.hierarchy_labels import draft_annotations, validate_annotations
 
 
 def compare_annotations(left, right, view):
@@ -28,3 +30,16 @@ def compare_annotations(left, right, view):
             "answerable_agreements": sum(item["answerable_agrees"] for item in details),
             "jaccard_queries": len(overlap), "mean_relevance_jaccard": sum(overlap) / len(overlap) if overlap else None,
             "disputed_queries": [item["query"] for item in details if not item["exact_agreement"]], "details": details}
+
+
+def consensus_annotations(left, right, view):
+    """Retain exact agreements; leave every disagreement explicitly unreviewed."""
+    report = compare_annotations(left, right, view)
+    result = draft_annotations([{"query": item["query"], "tags": item["tags"]} for item in report["details"]], view)
+    for row, item in zip(result["rows"], report["details"]):
+        row["note"] = "A: " + item["left"]["note"] + "\nB: " + item["right"]["note"]
+        if item["exact_agreement"]:
+            row.update(answerable=item["left"]["answerable"],
+                       relevant_ids=deepcopy(item["left"]["relevant_ids"]), reviewed=True)
+    validate_annotations(result, view, require_complete=False)
+    return result
