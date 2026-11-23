@@ -42,3 +42,21 @@ def test_trace_identifies_section_pruning(tmp_path):
     result = view.relevance_trace("needle", [chunk["id"] for chunk in snapshot["chunks"]], section_k=1)
     assert sorted(item["stage"] for item in result["relevance_trace"]) == ["returned", "section_pruned"]
     assert sorted(item["section_rank"] for item in result["relevance_trace"]) == [1, 2]
+
+
+def test_batch_diagnosis_separates_no_answer_and_counts_per_question_evidence(tmp_path):
+    from backend.tools.hierarchy_labels import draft_annotations
+    from backend.tools.hierarchy_diagnose import diagnose_labels
+    store, snapshot, _ = corpus(tmp_path)
+    view = store.prepare()
+    package = draft_annotations([{"query": "needle", "tags": ["售后"]}, {"query": "ordinary", "tags": ["售后"]}], view)
+    package["rows"][0].update(reviewed=True, answerable=True, relevant_ids=[snapshot["chunks"][0]["id"]])
+    package["rows"][1].update(reviewed=True, answerable=False)
+    report = diagnose_labels(package, view)
+    assert report["relevant_chunks"] == sum(report["stages"].values()) == 1
+    assert report["no_answer_queries"] == report["no_answer_nonempty_queries"] == 1
+    assert report["slices"]["售后"]["queries"] == 2
+    assert report["snapshot_ids"] == list(view.snapshot_ids)
+    package["rows"][1]["reviewed"] = False
+    with pytest.raises(ValueError, match="pending"):
+        diagnose_labels(package, view)
