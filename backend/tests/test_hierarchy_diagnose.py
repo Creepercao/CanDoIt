@@ -60,3 +60,17 @@ def test_batch_diagnosis_separates_no_answer_and_counts_per_question_evidence(tm
     package["rows"][1]["reviewed"] = False
     with pytest.raises(ValueError, match="pending"):
         diagnose_labels(package, view)
+
+
+def test_markdown_diagnosis_escapes_labels_and_keeps_stage_evidence(tmp_path):
+    from backend.tools.hierarchy_labels import draft_annotations
+    from backend.tools.hierarchy_diagnose import diagnose_labels, render_diagnosis
+    store, snapshot, sid = corpus(tmp_path)
+    view = store.prepare()
+    package = draft_annotations([{"query": "needle|x\ny", "tags": ["售后|分组"]}], view)
+    package["rows"][0].update(reviewed=True, answerable=True, relevant_ids=[snapshot["chunks"][0]["id"]])
+    report = diagnose_labels(package, view)
+    markdown = render_diagnosis(report)
+    assert sid in markdown and report["retrieval_sha256"] in markdown
+    assert "needle&#124;x<br>y" in markdown and "售后&#124;分组" in markdown
+    assert "## 逐题证据" in markdown and "无答案题不产生相关分块追踪" in markdown
