@@ -334,6 +334,43 @@ class HierarchyView:
         return {"contexts": deepcopy(contexts), "chars": max_chars - remaining, "max_chars": max_chars,
                 "requested_chunk_ids": requested, "omitted_sections": len(parents) - len(contexts), "mode": mode}
 
+    def relevance_trace(self, query, relevant_ids, top_k=5, section_k=5, *, route="rrf"):
+        """Locate known relevant chunks through each lexical retrieval stage."""
+        self.require_chunk_ids(relevant_ids)
+        report = self.search_report(query, top_k, section_k, route=route)
+        selected = {item["id"] for item in report["diagnostics"]["selected_sections"]}
+        sections = self._section_index.search(query, max(1, len(self._sections)))
+        section_ranks = {item["id"]: rank for rank, item in enumerate(sections, 1)}
+        body, title, fused = [], [], []
+        if selected:
+            candidates, body_index, title_index = self._indexes_for(selected)
+            if candidates:
+                body = body_index.search(query, len(candidates))
+                title = title_index.search(query, len(candidates)) if route == "rrf" else []
+                fused = (reciprocal_rank_fusion([[item["id"] for item in body], [item["id"] for item in title]], len(candidates))
+                         if route == "rrf" else body)
+        ranks = [{item["id"]: rank for rank, item in enumerate(items, 1)} for items in (body, title, fused)]
+        details = []
+        for identifier in dict.fromkeys(relevant_ids):
+            chunk = self._chunks[identifier]
+            parent = chunk["parent_id"]
+            rank = ranks[2].get(identifier)
+            if not report["diagnostics"]["query_terms"]:
+                stage = "no_query_terms"
+            elif parent not in section_ranks:
+                stage = "section_no_match"
+            elif parent not in selected:
+                stage = "section_pruned"
+            elif rank is None:
+                stage = "chunk_no_match"
+            else:
+                stage = "returned" if rank <= top_k else "below_top_k"
+            details.append({"id": identifier, "parent_id": parent,
+                            "source": self._sections[parent]["source"], "stage": stage,
+                            "section_rank": section_ranks.get(parent), "body_rank": ranks[0].get(identifier),
+                            "title_rank": ranks[1].get(identifier), "rank": rank})
+        return {**report, "relevance_trace": details}
+
     def search(self, query, top_k=5, section_k=5, *, route="rrf"):
         return self.search_report(query, top_k, section_k, route=route)["hits"]
 
