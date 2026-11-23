@@ -287,6 +287,40 @@ coverage 只统计已审核标签里的相关分块，按来源和章节给出 l
 显示零证据章节及待审核问题。无答案题没有可归属的证据来源；尚未审核的候选 ID 不计入覆盖。
 它有助于发现样本集中分布，但不能证明业务主题覆盖充分或建立真实效果基线。
 
+## 检索丢失阶段诊断
+
+```powershell
+python -m backend.tools.hierarchy_store --store temp/hierarchy.sqlite diagnose "退款条件" temp/relevant-ids.json --top-k 5 --section-k 5
+python -m backend.tools.hierarchy_diagnose temp/final-labels.json --store temp/hierarchy.sqlite --output temp/diagnosis.json
+python -m backend.tools.hierarchy_diagnose temp/final-labels.json --store temp/hierarchy.sqlite --output temp/diagnosis.md --format markdown --context-chars 4000
+```
+
+单题 relevant-ids.json 是人工相关分块 ID 数组，支持 --source 或 --snapshot-id 选择语料。
+批量命令只接收已全部审核的绑定标注，自动读取其历史快照，不改变生效版本。输入使用严格
+JSON 读取器，记录实际字节 SHA-256，输出路径必须不存在；所有检索均为本地词法基线。
+
+逐个相关分块记录章节排名、正文/标题路由排名及最终排名，阶段互斥：
+
+| 阶段 | 含义 |
+| --- | --- |
+| no_query_terms | 查询经现有分词器处理后没有可用词项 |
+| section_no_match | 父章节没有正向词法匹配 |
+| section_pruned | 章节有匹配，但不在 section_k 范围内 |
+| chunk_no_match | 章节已入选，但所选正文或双路策略未匹配该分块 |
+| below_top_k | 分块进入最终排序，但排名超出 top_k |
+| returned | 分块已返回 |
+
+计数单位为“问题—相关分块”对，同一分块用于多题时重复计数；业务标签分组可重叠，分组
+计数不能简单相加。无答案题没有相关分块追踪，单独记录无答案非空返回题数。诊断是对当前
+词法检索路径的解释，不能证明分块语义不相关或自动判断标注有误；未使用模型重排或训练。
+诊断额外计算完整候选排名，适合离线复核，不代表生产查询开销。
+
+--context-chars 显式启用围绕命中的 hit 模式上下文检查，按每题全部返回分块的实际顺序共用
+字符预算。相关分块分为 not_retrieved（未返回）、complete（完整展示）、partial（部分展示）、
+omitted（已返回但窗口未覆盖）。这是对返回分块证据的展示检查，不统计窗口中恰好出现但未
+返回的其他相关分块。JSON 同时保留原文窗口与位置；未启用时不展开原文。context_configuration
+单独记录预算，retrieval_sha256 仍只描述检索语料和配置，不包含上下文截断参数。
+
 ## 无训练测试
 
 ```powershell

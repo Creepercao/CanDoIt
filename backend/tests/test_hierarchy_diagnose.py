@@ -74,3 +74,24 @@ def test_markdown_diagnosis_escapes_labels_and_keeps_stage_evidence(tmp_path):
     assert sid in markdown and report["retrieval_sha256"] in markdown
     assert "needle&#124;x<br>y" in markdown and "售后&#124;分组" in markdown
     assert "## 逐题证据" in markdown and "无答案题不产生相关分块追踪" in markdown
+
+
+def test_context_diagnosis_distinguishes_returned_evidence_from_visible_evidence(tmp_path):
+    from backend.tools.hierarchy_labels import draft_annotations
+    from backend.tools.hierarchy_diagnose import diagnose_labels, render_diagnosis
+    store, snapshot, _ = corpus(tmp_path)
+    view = store.prepare()
+    ids = [chunk["id"] for chunk in snapshot["chunks"] if chunk["parent_id"] == snapshot["sections"][0]["id"]]
+    package = draft_annotations([{"query": "needle"}], view)
+    package["rows"][0].update(reviewed=True, answerable=True, relevant_ids=ids)
+    small = diagnose_labels(package, view, top_k=200, context_chars=1)
+    assert small["stages"]["returned"] == len(ids)
+    assert small["context_states"]["complete"] == 0
+    assert small["context_states"]["omitted"] > 0
+    assert small["context_states"]["partial"] >= 1
+    full = diagnose_labels(package, view, top_k=200, context_chars=2000)
+    assert full["context_states"]["complete"] == len(ids)
+    assert full["retrieval_sha256"] == small["retrieval_sha256"]
+    assert "上下文预算（字符）：1" in render_diagnosis(small)
+    with pytest.raises(ValueError, match="positive integer"):
+        diagnose_labels(package, view, context_chars=False)

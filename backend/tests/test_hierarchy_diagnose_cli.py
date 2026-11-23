@@ -54,8 +54,9 @@ def test_markdown_cli_saves_fingerprint_and_human_readable_stages(tmp_path):
     package["rows"][0].update(reviewed=True, answerable=True, relevant_ids=[snapshot["chunks"][0]["id"]])
     source, output = tmp_path / "labels.json", tmp_path / "diagnosis.md"
     source.write_text(json.dumps(package), encoding="utf-8")
-    result = cli("hierarchy_diagnose", source, "--store", store.path, "--output", output, "--format", "markdown")
+    result = cli("hierarchy_diagnose", source, "--store", store.path, "--output", output, "--format", "markdown", "--context-chars", 1)
     assert result.returncode == 0, result.stderr
     report = output.read_text(encoding="utf-8")
     assert sid in report and hashlib.sha256(source.read_bytes()).hexdigest() in report
     assert "## 逐题证据" in report and "章节没有匹配词项" in report
+    assert "上下文预算（字符）：1" in report
