@@ -39,7 +39,13 @@ def main():
     search.add_argument("--with-context", action="store_true")
     search.add_argument("--max-chars", type=int, default=4000)
     search.add_argument("--context-mode", choices=("prefix", "hit"), default="prefix")
-    for command in (context, search, inventory):
+    diagnose = commands.add_parser("diagnose", help="Trace known relevant chunk IDs through retrieval stages")
+    diagnose.add_argument("query")
+    diagnose.add_argument("relevant_ids", type=Path, help="JSON array of human-labeled relevant chunk IDs")
+    diagnose.add_argument("--top-k", type=int, default=5)
+    diagnose.add_argument("--section-k", type=int, default=5)
+    diagnose.add_argument("--route", choices=("rrf", "body"), default="rrf")
+    for command in (context, search, inventory, diagnose):
         selection = command.add_mutually_exclusive_group()
         selection.add_argument("--source", dest="sources", action="append")
         selection.add_argument("--snapshot-id", dest="snapshot_ids", action="append")
@@ -72,6 +78,11 @@ def main():
             result = store.verify()
         elif args.command == "inventory":
             result = selected_view(store).inventory(args.preview_chars, include_text=args.full_text)
+            result["selection"] = "snapshots" if args.snapshot_ids is not None else "active"
+        elif args.command == "diagnose":
+            relevant_ids, source = read_json_input(args.relevant_ids)
+            result = selected_view(store).relevance_trace(args.query, relevant_ids, args.top_k, args.section_k, route=args.route)
+            result["input"] = source
             result["selection"] = "snapshots" if args.snapshot_ids is not None else "active"
         elif args.command == "search":
             if args.max_chars < 1:
