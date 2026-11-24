@@ -56,7 +56,7 @@ export const useChatStore = defineStore('chat', () => {
   const selectedImageModel = ref(loadSetting('imageModel'))
   const selectedVideoModel = ref(loadSetting('videoModel'))
 
-  const activeTab = ref('chat')
+  const activeTab = ref('support')
   const imageResults = ref([])
   const videoResults = ref([])
 

@@ -2,6 +2,7 @@
 import { onMounted, watch } from 'vue'
 import { useChatStore } from './stores/chat.js'
 import ChatPanel from './components/ChatPanel.vue'
+import CustomerService from './components/CustomerService.vue'
 import ImageGenerator from './components/ImageGenerator.vue'
 import VideoGenerator from './components/VideoGenerator.vue'
 import SkillManager from './components/SkillManager.vue'
@@ -25,6 +26,7 @@ onMounted(async () => {
 })
 
 const tabs = [
+  { key: 'support', label: '🛍 客服', component: CustomerService },
   { key: 'chat', label: '💬 对话', component: ChatPanel },
   { key: 'image', label: '🎨 文生图', component: ImageGenerator },
   { key: 'video', label: '🎬 文生视频', component: VideoGenerator },
@@ -51,16 +53,18 @@ async function deleteSession(session) {
       <div class="px-4 py-4 border-b border-gray-700/50">
         <div class="flex items-center gap-3">
           <span class="text-2xl">🤖</span>
-          <span class="hidden lg:block font-bold text-lg">MultiAgent</span>
+          <span class="hidden lg:block font-bold text-lg">CanDoIt</span>
         </div>
         <p class="hidden lg:block text-xs text-gray-500 mt-1">多智能体协作平台</p>
       </div>
 
       <!-- Tabs -->
-      <nav class="flex-1 py-4 space-y-1 px-2">
+      <nav class="flex-1 min-h-0 overflow-y-auto py-4 space-y-1 px-2">
         <button
           v-for="tab in tabs"
           :key="tab.key"
+          :aria-label="tab.label.slice(3)"
+          :aria-current="store.activeTab === tab.key ? 'page' : undefined"
           @click="store.activeTab = tab.key"
           :class="[
             'flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
@@ -75,7 +79,7 @@ async function deleteSession(session) {
       </nav>
 
       <!-- Sessions -->
-      <div class="hidden lg:block px-2 py-2 border-t border-gray-700/30">
+      <div v-if="store.activeTab !== 'support'" class="hidden lg:block px-2 py-2 border-t border-gray-700/30">
         <div class="flex items-center justify-between px-2 mb-1">
           <span class="text-[10px] text-gray-500 uppercase tracking-wider">Sessions</span>
           <button
@@ -118,7 +122,7 @@ async function deleteSession(session) {
       </div>
 
       <!-- Model info footer -->
-      <div class="hidden lg:block px-4 py-3 border-t border-gray-700/50 space-y-2 text-xs text-gray-500">
+      <div v-if="store.activeTab !== 'support'" class="hidden lg:block px-4 py-3 border-t border-gray-700/50 space-y-2 text-xs text-gray-500">
         <div class="flex items-center justify-between">
           <span>对话</span>
           <span class="text-gray-400 truncate ml-2 max-w-[120px]">{{ store.selectedChatModel || '未选择' }}</span>
@@ -141,7 +145,7 @@ async function deleteSession(session) {
     <!-- Main content -->
     <main class="flex-1 flex flex-col min-w-0">
       <!-- Top bar with model selectors -->
-      <header class="px-4 py-2 border-b border-gray-700/60 bg-white/85 backdrop-blur flex items-center gap-4 shrink-0 overflow-x-auto">
+      <header v-if="store.activeTab !== 'support'" class="px-4 py-2 border-b border-gray-700/60 bg-white/85 backdrop-blur flex items-center gap-4 shrink-0 overflow-x-auto">
         <div class="flex items-center gap-4 flex-1 min-w-0">
           <ModelSelector model-type="chat" class="min-w-[180px] max-w-[300px]" />
           <div class="hidden md:flex items-center gap-1 text-gray-600 text-xs">
@@ -179,7 +183,8 @@ async function deleteSession(session) {
       <!-- Tab content -->
       <div class="flex-1 min-h-0">
         <KeepAlive>
-          <ChatPanel v-if="store.activeTab === 'chat'" key="chat" />
+          <CustomerService v-if="store.activeTab === 'support'" key="support" />
+          <ChatPanel v-else-if="store.activeTab === 'chat'" key="chat" />
           <ImageGenerator v-else-if="store.activeTab === 'image'" key="image" />
           <VideoGenerator v-else-if="store.activeTab === 'video'" key="video" />
           <PPTGenerator v-else-if="store.activeTab === 'ppt'" key="ppt" />

@@ -5,6 +5,17 @@ const api = axios.create({
   timeout: 300000,
 })
 
+export async function customerServiceRequest(path, { method = 'get', token, staff, data } = {}) {
+  const response = await api.request({
+    url: `/customer-service${path}`,
+    method,
+    headers: { ...(token ? { 'X-Demo-Session': token } : {}), ...(staff ? { 'X-Demo-Staff': staff } : {}) },
+    data,
+    timeout: 10000,
+  })
+  return response.data
+}
+
 export async function fetchProviders() {
   const { data } = await api.get('/providers')
   return data
