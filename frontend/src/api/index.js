@@ -11,7 +11,7 @@ export async function customerServiceRequest(path, { method = 'get', token, staf
     method,
     headers: { ...(token ? { 'X-Demo-Session': token } : {}), ...(staff ? { 'X-Demo-Staff': staff } : {}) },
     data,
-    timeout: 10000,
+    timeout: method === 'post' && path === '/staff/quality' ? 240000 : 10000,
   })
   return response.data
 }

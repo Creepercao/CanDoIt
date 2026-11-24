@@ -21,6 +21,7 @@ const categories = { gift: '活动', returns: '售后', product: '商品' }
 const channels = { web: '品牌商城', live: '直播间' }
 const products = { cream: '舒缓面霜', cleanser: '氨基酸洁面' }
 const checkNames = { kind: '处理分支', rule_id: '规则版本', date: '规则核对日期', text: '回复内容', excerpt: '引用原文', order_id: '订单号', status: '售后状态', first_kind: '第一轮处理', private_data: '订单隔离' }
+checkNames.checks = '待核实项'
 const cases = computed(() => report.value?.cases.filter(item => !failedOnly.value || !item.passed) || [])
 
 function request(path, method = 'get', data) {
@@ -199,7 +200,8 @@ function ruleState(rule) {
           <template v-else>
             <div class="evidence"><strong>顾客诉求</strong><p>{{ active.summary }}</p>
               <p v-if="active.order">{{ active.order.id }} · {{ active.order.product }} · {{ active.order.status }}</p>
-              <details v-if="active.citation"><summary>最近查阅的规则 · {{ active.citation.title }}</summary>
+              <p v-if="active.checks?.length">待核实：{{ active.checks.join('、') }}</p>
+              <details v-if="active.citation"><summary>{{ active.checks?.length ? '本单依据' : '最近查阅的规则' }} · {{ active.citation.title }}</summary>
                 <p>{{ active.citation.excerpt }}</p><code>{{ active.citation.rule_id }}</code>
               </details>
             </div>
@@ -279,11 +281,13 @@ function ruleState(rule) {
             <label class="checkbox"><input v-model="failedOnly" type="checkbox" />仅看失败</label>
           </div>
           <p class="score" role="status"><strong>{{ report.passed }} / {{ report.total }} 通过</strong>
+            <span v-if="report.baseline_passed != null">同题旧流程 {{ report.baseline_passed }}/{{ report.total }} · 模型返回有效分类 {{ report.model_turns }} 轮</span>
             <span>规则引用命中率 {{ Math.round(report.policy_recall_at_1 * 100) }}%<template v-if="report.policy_citation_queries != null">（{{ report.policy_citation_queries }} 题）</template></span>
             <span>较上次新增失败 {{ report.regressed.length }} 项</span></p>
           <details v-for="item in cases" :key="item.id" class="record">
             <summary>{{ item.category }} · {{ item.queries[0] }} <span class="label" :class="{ fail: !item.passed }">{{ item.passed ? '通过' : '失败' }}</span></summary>
             <dl class="checks"><dt>预期</dt><dd><span v-for="(value, key) in item.expected" :key="key">{{ checkNames[key] }} {{ value }} </span></dd></dl>
+            <p v-if="item.baseline_replies" class="hint">旧流程{{ item.baseline_passed ? '通过' : '失败' }} · {{ item.baseline_replies.at(-1)?.text }}</p>
             <ol class="transcript"><li v-for="(answer, index) in item.replies" :key="index">
               <p><strong>顾客</strong> {{ item.queries[index] }}</p><p><strong>实际回复</strong> {{ answer.text }}</p>
               <p v-if="answer.citation" class="hint">{{ answer.citation.rule_id }} · {{ answer.citation.effective_date }}</p>

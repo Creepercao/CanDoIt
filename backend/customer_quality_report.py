@@ -6,7 +6,7 @@ from backend.tools.retrieval_report import _cell, _table
 CHECK_LABELS = {
     "kind": "处理分支", "rule_id": "规则版本", "date": "规则核对日期", "text": "回复内容",
     "excerpt": "引用原文", "order_id": "订单号", "status": "售后状态", "first_kind": "第一轮处理",
-    "private_data": "订单隔离",
+    "private_data": "订单隔离", "checks": "待核实项",
 }
 
 
@@ -27,9 +27,14 @@ def render_quality_report(report):
             ("较上次恢复通过", "、".join(report["recovered"]) or "无"),
         ]),
     ]
+    if "baseline_passed" in report:
+        lines += [f"同题旧流程通过 {report['baseline_passed']} / {report['total']}。"
+                  f"新流程中模型返回有效分类 {report['model_turns']} 轮。", ""]
     for item in report["cases"]:
         result = "通过" if item["passed"] else "失败"
         lines += [f"## {_cell(item['id'])} · {_cell(item['category'])} · {result}", ""]
+        if "baseline_replies" in item:
+            lines += ["旧流程末轮回复：" + _cell(item["baseline_replies"][-1]["text"]), ""]
         if item["differences"]:
             differences = "、".join(CHECK_LABELS.get(key, key) for key in item["differences"])
             lines += [f"差异项 **{_cell(differences)}**", ""]

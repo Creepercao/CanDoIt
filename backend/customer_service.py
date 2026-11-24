@@ -185,6 +185,59 @@ def conversation_turn(buyer, message, product, channel, state, rules, after_sale
     return reply, next_state
 
 
+INTENT_HINTS = {
+    "gift": "赠品", "past_gift": "下单时赠品", "shipping": "物流", "returns": "退换",
+    "progress": "售后进度", "product": "规格",
+}
+GIFT_CHECKS = ["订单实付金额", "赠品出库记录"]
+
+
+def support_turn(buyer, message, product, channel, state, rules, after_sales, classification):
+    label, source = classification
+    args = (product, channel, state, rules, after_sales)
+    reply, next_state = conversation_turn(buyer, message, *args)
+    text = unicodedata.normalize("NFKC", message).strip()
+    ids = list(dict.fromkeys(ORDER_PATTERN.findall(text.upper())))
+    order_only = ORDER_PATTERN.fullmatch(text.upper().rstrip("。？！?!"))
+    pending_gift = bool(order_only and state.get("gift_query"))
+    if pending_gift:
+        label = "missing_gift"
+    needs_intent = (
+        reply["kind"] == "order"
+        or (label == "past_gift" and reply["kind"] == "policy")
+        or (reply["kind"] == "clarify" and reply["text"].startswith("我可以帮你查"))
+    )
+    if len(ids) > 1 or needs_handoff(text) or reply["kind"] == "unavailable":
+        if pending_gift and reply["kind"] == "unavailable":
+            next_state["gift_query"] = state["gift_query"]
+    elif label == "mixed":
+        reply = {"kind": "clarify", "text": "你提到了几件事，希望我先帮你查哪一件？"}
+        next_state.pop("pending", None)
+    elif label == "handoff":
+        reply = {"kind": "handoff", "text": "可以请人工客服接手。请确认要提交的工单说明。",
+                 "order_id": next_state.get("order_id")}
+    elif label == "missing_gift":
+        order_id = ids[0] if ids else state.get("order_id")
+        query = state["gift_query"] if pending_gift else message
+        if not order_id:
+            reply = {"kind": "clarify", "text": "我可以查下单时的赠品规则，请提供你的模拟订单号。"}
+            next_state = {"gift_query": query}
+        else:
+            # Keep explicit scope in the question so conflicting channels still require clarification.
+            scope = " ".join(name for name in (*PRODUCTS.values(), *CHANNELS.values()) if name in query)
+            reply = answer_message(buyer, f"{order_id} {scope} 下单时赠品", product, channel, rules=rules)
+            if reply["kind"] == "policy":
+                reply.update(kind="gift_review", order_id=order_id, checks=list(GIFT_CHECKS),
+                             issue=query, text=f"你下单时的规则是：{reply['citation']['excerpt']} "
+                             "当前记录缺少订单实付金额和赠品出库记录，还需人工核实。")
+    elif label in INTENT_HINTS and needs_intent:
+        request = f"{text} {INTENT_HINTS[label]}"
+        if not ids and state.get("order_id") and label in ("shipping", "progress", "past_gift", "returns"):
+            request += f" {state['order_id']}"
+        reply, next_state = conversation_turn(buyer, request, *args)
+    return {**reply, "intent_source": source}, next_state
+
+
 class SupportStore:
     """Persist demo sessions and handoffs outside the public output directory."""
 
@@ -214,6 +267,10 @@ class SupportStore:
                 );
                 CREATE INDEX IF NOT EXISTS support_messages_session ON support_messages(session_id, id);
                 CREATE TABLE IF NOT EXISTS support_staff (id TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS ticket_sources (
+                    ticket_id TEXT PRIMARY KEY REFERENCES tickets(id),
+                    message_id INTEGER NOT NULL REFERENCES support_messages(id)
+                );
                 CREATE TABLE IF NOT EXISTS ticket_claims (
                     ticket_id TEXT PRIMARY KEY REFERENCES tickets(id), staff_id TEXT NOT NULL REFERENCES support_staff(id)
                 );
@@ -284,13 +341,17 @@ class SupportStore:
                     "after_sales": list(self._after_sales(db, session_id).values())}
 
     def ask(self, token, buyer, message, product, channel):
+        from backend.customer_intent import classify
+
         session_id = self.session_id(token)
+        active_query = """SELECT tickets.id FROM tickets JOIN ticket_claims ON ticket_claims.ticket_id = tickets.id
+                          WHERE session_id = ? AND status = 'in_progress'"""
+        with self.connect() as db:
+            in_handoff = db.execute(active_query, (session_id,)).fetchone()
+        classification = ("unknown", "rules") if in_handoff else classify(message)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            active = db.execute("""
-                SELECT tickets.id FROM tickets JOIN ticket_claims ON ticket_claims.ticket_id = tickets.id
-                WHERE session_id = ? AND status = 'in_progress'
-            """, (session_id,)).fetchone()
+            active = db.execute(active_query, (session_id,)).fetchone()
             row = db.execute("SELECT state FROM conversation_state WHERE session_id = ?", (session_id,)).fetchone()
             state = json.loads(row["state"]) if row else {}
             progress = any(term in message for term in PROGRESS_TERMS)
@@ -299,8 +360,8 @@ class SupportStore:
             if active and (not (progress or pending_progress) or needs_handoff(message)):
                 answer = {"kind": "human_pending", "text": "消息已交给人工客服。", "ticket_id": active["id"]}
             else:
-                answer, state = conversation_turn(buyer, message, product, channel, state,
-                                                   self._rules(db), self._after_sales(db, session_id))
+                answer, state = support_turn(buyer, message, product, channel, state,
+                                             self._rules(db), self._after_sales(db, session_id), classification)
                 db.execute("""INSERT INTO conversation_state VALUES (?, ?)
                     ON CONFLICT (session_id) DO UPDATE SET state = excluded.state
                 """, (session_id, json.dumps(state)))
@@ -308,10 +369,17 @@ class SupportStore:
                                      (session_id, message, json.dumps(answer)))
             return {**answer, "message_id": message_row.lastrowid}
 
-    def submit_ticket(self, token, request_id, order_id, summary):
+    def submit_ticket(self, token, request_id, order_id, summary, message_id=None):
         session_id = self.session_id(token)
         with self.connect() as db:
-            db.execute("""
+            db.execute("BEGIN IMMEDIATE")
+            if message_id is not None:
+                source = db.execute("SELECT answer FROM support_messages WHERE id = ? AND session_id = ?",
+                                    (message_id, session_id)).fetchone()
+                answer = json.loads(source["answer"]) if source else {}
+                if answer.get("kind") != "gift_review" or answer["order_id"] != order_id:
+                    raise ValueError("规则依据与当前会话或订单不匹配。")
+            inserted = db.execute("""
                 INSERT INTO tickets (id, session_id, request_id, order_id, summary, status, created_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT (session_id, request_id) DO NOTHING
             """, (uuid4().hex, session_id, request_id, order_id, summary, datetime.now(timezone.utc).isoformat()))
@@ -321,6 +389,12 @@ class SupportStore:
             """, (session_id, request_id)).fetchone()
             if row["summary"] != summary or row["order_id"] != order_id:
                 raise ValueError("该提交编号已用于另一份工单。")
+            if inserted.rowcount and message_id is not None:
+                db.execute("INSERT INTO ticket_sources VALUES (?, ?)", (row["id"], message_id))
+            elif not inserted.rowcount:
+                source = db.execute("SELECT message_id FROM ticket_sources WHERE ticket_id = ?", (row["id"],)).fetchone()
+                if (source["message_id"] if source else None) != message_id:
+                    raise ValueError("该提交编号已用于另一份工单。")
             return dict(row)
 
     def apply_after_sale(self, token, order_id, summary):
@@ -376,9 +450,13 @@ class SupportStore:
             buyer = db.execute("SELECT buyer FROM sessions WHERE id = ?", (row["session_id"],)).fetchone()["buyer"]
             messages = self._messages(db, row["session_id"])
             citation = next((item["answer"]["citation"] for item in reversed(messages) if item["answer"].get("citation")), None)
+            source = db.execute("""SELECT m.answer FROM ticket_sources s JOIN support_messages m ON m.id = s.message_id
+                                WHERE s.ticket_id = ?""", (ticket_id,)).fetchone()
+            evidence = json.loads(source["answer"]) if source else {}
             return {key: row[key] for key in ("id", "summary", "status", "resolution", "created_at")} | {
                 "buyer": buyer, "order": visible_order(buyer, row["order_id"]), "messages": messages,
-                "citation": citation, "assigned": row["staff_id"] is not None}
+                "citation": evidence.get("citation", citation), "checks": evidence.get("checks", []),
+                "assigned": row["staff_id"] is not None}
 
     def act_on_ticket(self, ticket_id, staff_id, action, text=None):
         with self.connect() as db:

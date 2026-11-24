@@ -26,6 +26,7 @@ const examples = computed(() => [
   '什么时候发货？',
   ...(session.value?.orders.slice(0, 1).flatMap(order => [
     `${order.id} 的物流到哪了？`, `${order.id} 下单时有什么赠品规则？`,
+    `${order.id} 那盒旅行装怎么没跟包裹一起来？`,
   ]) || []),
   '使用商品后感觉不适，想联系人工。',
 ])
@@ -97,12 +98,12 @@ async function ask(message) {
   })
 }
 
-async function prepareTicket(message = '', orderId = '') {
+async function prepareTicket(message = '', orderId = '', messageId = null) {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
   bytes[6] = (bytes[6] & 15) | 64
   bytes[8] = (bytes[8] & 63) | 128
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
-  ticketDraft.value = { request_id: hex, order_id: orderId || '', summary: message }
+  ticketDraft.value = { request_id: hex, order_id: orderId || '', summary: message, message_id: messageId }
   await nextTick()
   summaryField.value?.focus()
 }
@@ -207,7 +208,7 @@ async function showCustomer() {
               <p>{{ answer.text }}</p>
               <details v-if="answer.citation" class="receipt">
                 <summary>{{ answer.citation.title }} · 查看规则依据</summary>
-                <blockquote>{{ answer.text }}</blockquote>
+                <blockquote>{{ answer.citation.excerpt }}</blockquote>
                 <div>核对日期 {{ answer.citation.effective_date }}</div>
                 <div>生效 {{ answer.citation.start }}<span v-if="answer.citation.end">，{{ answer.citation.end }} 起失效</span></div>
                 <code>{{ answer.citation.rule_id }} · {{ answer.citation.chunk_id }}</code>
@@ -219,6 +220,8 @@ async function showCustomer() {
               </dl>
               <button v-if="answer.kind === 'handoff'" type="button" class="action mt-2" :disabled="pending"
                 @click="prepareTicket(query, answer.order_id)">填写工单</button>
+              <button v-if="answer.kind === 'gift_review'" type="button" class="action mt-2" :disabled="pending"
+                @click="prepareTicket(answer.issue, answer.order_id, id)">请人工核实赠品</button>
             </article>
           </template>
         </div>
@@ -240,7 +243,7 @@ async function showCustomer() {
         <p class="field-hint">客服接手后，回复和结单说明会出现在对话中。请使用虚构信息。</p>
         <form v-if="ticketDraft" class="ticket" @submit.prevent="submitTicket">
           <h3>提交给人工客服</h3>
-          <label>关联订单<select v-model="ticketDraft.order_id" :disabled="pending">
+          <label>关联订单<select v-model="ticketDraft.order_id" :disabled="pending || !!ticketDraft.message_id">
             <option value="">不关联订单</option>
             <option v-for="order in session.orders" :key="order.id" :value="order.id">{{ order.id }} · {{ order.product }}</option>
           </select></label>

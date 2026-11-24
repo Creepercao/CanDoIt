@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path as ApiPath, Response
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 from backend.customer_quality import run_quality
 from backend.customer_quality_report import render_quality_report
@@ -32,6 +32,7 @@ class SubmitTicket(BaseModel):
     request_id: UUID
     order_id: OrderId | None = None
     summary: Text
+    message_id: Annotated[int, Field(ge=1)] | None = None
 
 
 class AfterSale(BaseModel):
@@ -107,7 +108,8 @@ def submit_ticket(request: SubmitTicket, session: Annotated[DemoSession, Depends
     if request.order_id and visible_order(session.buyer, request.order_id) is None:
         raise HTTPException(404, "当前体验身份下查不到该订单。")
     try:
-        return session.store.submit_ticket(session.token, str(request.request_id), request.order_id, request.summary)
+        return session.store.submit_ticket(session.token, str(request.request_id), request.order_id, request.summary,
+                                          request.message_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

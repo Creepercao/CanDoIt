@@ -22,6 +22,7 @@ def create_chat_model(
     temperature: float = 0.7,
     max_tokens: int = 4096,
     provider_config: ProviderConfig | None = None,
+    **client_options,
 ) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI connected to the provider."""
     if provider_config is None:
@@ -36,6 +37,7 @@ def create_chat_model(
         openai_api_key=provider_config.api_key,
         openai_api_base=provider_config.base_url,
         callbacks=_run_callbacks(),
+        **client_options,
     )
 
 

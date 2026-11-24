@@ -3,7 +3,8 @@
 import hashlib
 import json
 
-from backend.customer_service import DEMO_DATE, conversation_turn
+from backend.customer_intent import classify
+from backend.customer_service import DEMO_DATE, conversation_turn as baseline_turn, support_turn
 from backend.tools.retrieval_eval import evaluate
 
 
@@ -14,6 +15,10 @@ def _current_rule(rules, topic, channel):
     today = DEMO_DATE.isoformat()
     return next((rule for rule in rules if (rule[1], rule[3], rule[4]) == (topic, channel, None)
                  and rule[5] <= today and (rule[6] is None or today < rule[6])), None)
+
+
+def conversation_turn(buyer, query, *args):
+    return support_turn(buyer, query, *args, classify(query))
 
 
 def run_quality(rules):
@@ -30,12 +35,45 @@ def run_quality(rules):
         ("unknown", "无匹配询问", "a", ["你们的实体店在哪里？"], {"kind": "clarify"}),
         ("after-sale", "售后追踪", "a", ["DEMO-1001 售后进度"], {"kind": "after_sale", "status": "reviewing", "text": "人工审核中"}),
     ]
+    variants = [
+        ["活动现在送啥？"], ["直播间买满多少送东西？"], ["DEMO-1001 买的时候满多少送东西？"],
+        ["这单啥时候发货呀？", "DEMO-1002"], ["DEMO-2001 签收了吗？", "那可以退吗？"],
+        ["帮忙看下 DEMO-2001 到哪了"], ["买的时候送不送小样 DEMO-2001"],
+        ["能帮忙找人工看看吗？"], ["线下哪里有店呀？"], ["查查退货进度 DEMO-1001"],
+    ]
+    cases += [(key + "-spoken", category, buyer, variant, checks)
+              for (key, category, buyer, _, checks), variant in zip(cases, variants, strict=True)]
+    gift_checks = {"kind": "gift_review", "rule_id": "gift-nov-old", "date": "2026-11-02",
+                   "order_id": "DEMO-1001", "excerpt": HISTORICAL_GIFT_TEXT,
+                   "checks": ["订单实付金额", "赠品出库记录"],
+                   "text": f"你下单时的规则是：{HISTORICAL_GIFT_TEXT} 当前记录缺少订单实付金额和赠品出库记录，还需人工核实。"}
+    cases += [
+        ("missing-gift", "赠品核实", "a", ["DEMO-1001 那盒旅行装怎么没跟包裹一起来？"], gift_checks),
+        ("missing-followup", "赠品核实", "a", ["小样是不是漏发了？", "DEMO-1001"], {**gift_checks, "first_kind": "clarify"}),
+        ("missing-foreign", "订单隔离", "a", ["DEMO-2001 的旅行装没收到"], {"kind": "unavailable"}),
+        ("missing-mixed", "多项诉求", "a", ["DEMO-1001 物流到哪了？还有赠品是不是漏发了？"], {"kind": "clarify"}),
+    ]
+    results, rankings = _evaluate(cases, rules, conversation_turn)
+    baseline, _ = _evaluate(cases, rules, baseline_turn)
+    for result, original in zip(results, baseline):
+        result["baseline_passed"] = original["passed"]
+        result["baseline_replies"] = original["replies"]
+    fingerprint = hashlib.sha256(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    citation_metrics = evaluate(rankings, k=1)
+    return {"total": len(results), "passed": sum(item["passed"] for item in results), "cases": results,
+            "baseline_passed": sum(item["passed"] for item in baseline),
+            "model_turns": sum(reply.get("intent_source") == "model" for item in results for reply in item["replies"]),
+            "policy_recall_at_1": citation_metrics["recall@1"],
+            "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
+
+
+def _evaluate(cases, rules, turn):
     results, rankings = [], []
     for identifier, category, buyer, queries, checks in cases:
         state, replies = {}, []
-        after_sales = {"DEMO-1001": {"status": "reviewing"}} if identifier == "after-sale" else {}
+        after_sales = {"DEMO-1001": {"status": "reviewing"}} if category == "售后追踪" else {}
         for query in queries:
-            response, state = conversation_turn(buyer, query, "cream", "web", state, rules, after_sales)
+            response, state = turn(buyer, query, "cream", "web", state, rules, after_sales)
             replies.append(response)
         actual = replies[-1]
         citation = actual.get("citation", {})
@@ -49,10 +87,11 @@ def run_quality(rules):
                 expected["kind"] = "handoff"
         findings = []
         actual_fields = {"kind": actual["kind"], "rule_id": citation.get("rule_id"), "date": citation.get("effective_date"),
-                         "order_id": actual.get("order", {}).get("id"), "first_kind": replies[0]["kind"],
+                         "order_id": actual.get("order_id") or actual.get("order", {}).get("id"), "first_kind": replies[0]["kind"],
+                         "checks": actual.get("checks"), "excerpt": citation.get("excerpt"),
                          "status": (actual.get("after_sale") or {}).get("status")}
         for key, value in expected.items():
-            if key == "text" and expected["kind"] == "policy":
+            if key == "text" and expected["kind"] in ("policy", "gift_review"):
                 ok = actual["text"] == value
             elif key == "text":
                 ok = value in actual["text"]
@@ -69,8 +108,4 @@ def run_quality(rules):
                              "ranked_ids": [citation["rule_id"]] if citation.get("rule_id") else []})
         results.append({"id": identifier, "category": category, "queries": queries, "expected": expected,
                         "replies": replies, "passed": not findings, "differences": findings})
-    fingerprint = hashlib.sha256(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
-    citation_metrics = evaluate(rankings, k=1)
-    return {"total": len(results), "passed": sum(item["passed"] for item in results), "cases": results,
-            "policy_recall_at_1": citation_metrics["recall@1"],
-            "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
+    return results, rankings

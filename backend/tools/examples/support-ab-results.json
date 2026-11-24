@@ -1,0 +1,1042 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "timestamp": "2026-11-24T13:53:49.119318+00:00",
+  "case_sha256": "557268e357c6dbaeaf7fc956372f3a769b34d44ae9dd806f427dd9c22b6f3ab0",
+  "summary": {
+    "cases": 24,
+    "offline_pass": 11,
+    "enabled_pass": 23,
+    "enabled_sources": {
+      "model": 22,
+      "rules": 4,
+      "fallback": 1
+    },
+    "gains": [
+      1,
+      2,
+      4,
+      5,
+      7,
+      10,
+      11,
+      12,
+      14,
+      15,
+      17,
+      19
+    ],
+    "losses": []
+  },
+  "rows": [
+    {
+      "id": 1,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "DEMO-1001 开箱只有正装，搭的那一份去哪儿了",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-old"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1001 当前已发货。模拟物流已揽收，尚无预计送达时间。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1001 开箱只有正装，搭的那一份去哪儿了",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-old"
+            },
+            "label": "missing_gift",
+            "source": "model",
+            "kind": "gift_review",
+            "rule": "gift-nov-old",
+            "text": "你下单时的规则是：活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。 当前记录缺少订单实付金额和赠品出库记录，还需人工核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "箱子里少了说好随单给的小瓶",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          },
+          {
+            "query": "DEMO-1002",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-current"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1002 当前待发货。暂无物流记录。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "箱子里少了说好随单给的小瓶",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "missing_gift",
+            "source": "model",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以查下单时的赠品规则，请提供你的模拟订单号。",
+            "passed": true
+          },
+          {
+            "query": "DEMO-1002",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-current"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "gift_review",
+            "rule": "gift-nov-current",
+            "text": "你下单时的规则是：活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。 当前记录缺少订单实付金额和赠品出库记录，还需人工核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 旅行装是不是漏装了呀",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-current"
+            },
+            "label": "missing_gift",
+            "source": "rules",
+            "kind": "gift_review",
+            "rule": "gift-nov-current",
+            "text": "你下单时的规则是：活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。 当前记录缺少订单实付金额和赠品出库记录，还需人工核实。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 旅行装是不是漏装了呀",
+            "expected": {
+              "kind": "gift_review",
+              "rule": "gift-nov-current"
+            },
+            "label": "missing_gift",
+            "source": "model",
+            "kind": "gift_review",
+            "rule": "gift-nov-current",
+            "text": "你下单时的规则是：活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。 当前记录缺少订单实付金额和赠品出库记录，还需人工核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "品牌商城现在凑到多少钱能白拿一份？",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-current"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "品牌商城现在凑到多少钱能白拿一份？",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-current"
+            },
+            "label": "gift",
+            "source": "model",
+            "kind": "policy",
+            "rule": "gift-nov-current",
+            "text": "活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "主播那边说有福利，直播间买到什么价位才送？",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-live"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "主播那边说有福利，直播间买到什么价位才送？",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-live"
+            },
+            "label": "gift",
+            "source": "model",
+            "kind": "policy",
+            "rule": "gift-live",
+            "text": "活动期间直播间单笔实付满 499 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "现在满赠是按单笔算的吗",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-current"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "policy",
+            "rule": "gift-nov-current",
+            "text": "活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "现在满赠是按单笔算的吗",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-current"
+            },
+            "label": "gift",
+            "source": "model",
+            "kind": "policy",
+            "rule": "gift-nov-current",
+            "text": "活动期间单笔实付满 399 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "DEMO-1001 我付款那天附送小瓶的门槛是多少",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-old"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1001 当前已发货。模拟物流已揽收，尚无预计送达时间。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1001 我付款那天附送小瓶的门槛是多少",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-old"
+            },
+            "label": "past_gift",
+            "source": "model",
+            "kind": "policy",
+            "rule": "gift-nov-old",
+            "text": "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "我买的时候满多少才有赠品来着？",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请在问题中带上你的模拟订单号。",
+            "passed": true
+          },
+          {
+            "query": "DEMO-1001",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-old"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "policy",
+            "rule": "gift-nov-old",
+            "text": "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "我买的时候满多少才有赠品来着？",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "past_gift",
+            "source": "model",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请在问题中带上你的模拟订单号。",
+            "passed": true
+          },
+          {
+            "query": "DEMO-1001",
+            "expected": {
+              "kind": "policy",
+              "rule": "gift-nov-old"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "policy",
+            "rule": "gift-nov-old",
+            "text": "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 有快递员取走了吗",
+            "expected": {
+              "kind": "order",
+              "order": "DEMO-1002",
+              "contains": "待发货"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1002 当前待发货。暂无物流记录。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 有快递员取走了吗",
+            "expected": {
+              "kind": "order",
+              "order": "DEMO-1002",
+              "contains": "待发货"
+            },
+            "label": "shipping",
+            "source": "model",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1002 当前待发货。暂无物流记录。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "我那件东西出仓了吗",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          },
+          {
+            "query": "DEMO-1001",
+            "expected": {
+              "kind": "order",
+              "order": "DEMO-1001",
+              "contains": "已发货"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1001 当前已发货。模拟物流已揽收，尚无预计送达时间。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "我那件东西出仓了吗",
+            "expected": {
+              "kind": "clarify",
+              "contains": "订单号"
+            },
+            "label": "shipping",
+            "source": "model",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请在问题中带上你的模拟订单号。",
+            "passed": true
+          },
+          {
+            "query": "DEMO-1001",
+            "expected": {
+              "kind": "order",
+              "order": "DEMO-1001",
+              "contains": "已发货"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1001 当前已发货。模拟物流已揽收，尚无预计送达时间。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "这罐面霜有多重啊",
+            "expected": {
+              "kind": "policy",
+              "rule": "cream-info"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "这罐面霜有多重啊",
+            "expected": {
+              "kind": "policy",
+              "rule": "cream-info"
+            },
+            "label": "product",
+            "source": "model",
+            "kind": "policy",
+            "rule": "cream-info",
+            "text": "舒缓面霜为 50 克罐装，商品详情页可查看完整配料表。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "氨基酸洁面一管装多少？",
+            "expected": {
+              "kind": "policy",
+              "rule": "cleanser-info"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "氨基酸洁面一管装多少？",
+            "expected": {
+              "kind": "policy",
+              "rule": "cleanser-info"
+            },
+            "label": "product",
+            "source": "model",
+            "kind": "policy",
+            "rule": "cleanser-info",
+            "text": "氨基酸洁面为 100 毫升软管装，商品详情页可查看完整配料表。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "这个的配料上哪儿看呀",
+            "expected": {
+              "kind": "policy",
+              "rule": "cream-info"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "policy",
+            "rule": "cream-info",
+            "text": "舒缓面霜为 50 克罐装，商品详情页可查看完整配料表。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "这个的配料上哪儿看呀",
+            "expected": {
+              "kind": "policy",
+              "rule": "cream-info"
+            },
+            "label": "product",
+            "source": "model",
+            "kind": "policy",
+            "rule": "cream-info",
+            "text": "舒缓面霜为 50 克罐装，商品详情页可查看完整配料表。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "还没开封，不想留了，要走什么流程",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-web"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "还没开封，不想留了，要走什么流程",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-web"
+            },
+            "label": "returns",
+            "source": "model",
+            "kind": "policy",
+            "rule": "returns-web",
+            "text": "通过订单详情提交退换申请，由人工根据商品状态和订单记录核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "直播间拍的不合适要怎么寄回去",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-live"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "直播间拍的不合适要怎么寄回去",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-live"
+            },
+            "label": "returns",
+            "source": "model",
+            "kind": "policy",
+            "rule": "returns-live",
+            "text": "从直播间订单详情提交售后申请，由人工核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "退换要店里先核实吗",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-web"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "policy",
+            "rule": "returns-web",
+            "text": "通过订单详情提交退换申请，由人工根据商品状态和订单记录核实。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "退换要店里先核实吗",
+            "expected": {
+              "kind": "policy",
+              "rule": "returns-web"
+            },
+            "label": "returns",
+            "source": "model",
+            "kind": "policy",
+            "rule": "returns-web",
+            "text": "通过订单详情提交退换申请，由人工根据商品状态和订单记录核实。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "DEMO-1001 昨天交的售后单子现在谁在处理",
+            "expected": {
+              "kind": "after_sale",
+              "contains": "人工审核中"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "order",
+            "rule": null,
+            "text": "订单 DEMO-1001 当前已发货。模拟物流已揽收，尚无预计送达时间。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1001 昨天交的售后单子现在谁在处理",
+            "expected": {
+              "kind": "after_sale",
+              "contains": "人工审核中"
+            },
+            "label": "progress",
+            "source": "model",
+            "kind": "after_sale",
+            "rule": null,
+            "text": "订单 DEMO-1001 的售后状态为人工审核中。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 18,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 帮看下售后进度呗",
+            "expected": {
+              "kind": "after_sale",
+              "contains": "暂无售后申请"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "after_sale",
+            "rule": null,
+            "text": "订单 DEMO-1002 暂无售后申请。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1002 帮看下售后进度呗",
+            "expected": {
+              "kind": "after_sale",
+              "contains": "暂无售后申请"
+            },
+            "label": "progress",
+            "source": "model",
+            "kind": "after_sale",
+            "rule": null,
+            "text": "订单 DEMO-1002 暂无售后申请。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "让个真人接一下，这事我想直接聊",
+            "expected": {
+              "kind": "handoff"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "让个真人接一下，这事我想直接聊",
+            "expected": {
+              "kind": "handoff"
+            },
+            "label": "handoff",
+            "source": "model",
+            "kind": "handoff",
+            "rule": null,
+            "text": "可以请人工客服接手。请确认要提交的工单说明。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "面霜用了刺痛，麻烦帮忙处理",
+            "expected": {
+              "kind": "handoff"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "handoff",
+            "rule": null,
+            "text": "这条反馈需要人工接手。你可以提交售后工单，并补充需要客服了解的情况。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "面霜用了刺痛，麻烦帮忙处理",
+            "expected": {
+              "kind": "handoff"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "handoff",
+            "rule": null,
+            "text": "这条反馈需要人工接手。你可以提交售后工单，并补充需要客服了解的情况。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-2001 这个包裹有人取走了没",
+            "expected": {
+              "kind": "unavailable"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "unavailable",
+            "rule": null,
+            "text": "当前体验身份下查不到该订单，请核对订单号。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-2001 这个包裹有人取走了没",
+            "expected": {
+              "kind": "unavailable"
+            },
+            "label": "shipping",
+            "source": "model",
+            "kind": "unavailable",
+            "rule": null,
+            "text": "当前体验身份下查不到该订单，请核对订单号。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1001 和 DEMO-1002 都查下现在到哪一步了",
+            "expected": {
+              "kind": "clarify",
+              "contains": "一个订单号"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请一次提供一个订单号。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "DEMO-1001 和 DEMO-1002 都查下现在到哪一步了",
+            "expected": {
+              "kind": "clarify",
+              "contains": "一个订单号"
+            },
+            "label": "progress",
+            "source": "model",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请一次提供一个订单号。",
+            "passed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "offline": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "我那件出了仓没？顺带问下不合适咋寄回去？",
+            "expected": {
+              "kind": "clarify",
+              "multiple": true
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": false
+          }
+        ]
+      },
+      "enabled": {
+        "passed": false,
+        "turns": [
+          {
+            "query": "我那件出了仓没？顺带问下不合适咋寄回去？",
+            "expected": {
+              "kind": "clarify",
+              "multiple": true
+            },
+            "label": "progress",
+            "source": "model",
+            "kind": "clarify",
+            "rule": null,
+            "text": "请在问题中带上你的模拟订单号。",
+            "passed": false
+          }
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "offline": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "你们周日线下几点关门呀",
+            "expected": {
+              "kind": "clarify"
+            },
+            "label": "unknown",
+            "source": "rules",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": true
+          }
+        ]
+      },
+      "enabled": {
+        "passed": true,
+        "turns": [
+          {
+            "query": "你们周日线下几点关门呀",
+            "expected": {
+              "kind": "clarify"
+            },
+            "label": "unknown",
+            "source": "fallback",
+            "kind": "clarify",
+            "rule": null,
+            "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。",
+            "passed": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -40,5 +40,5 @@ def test_citation_denominator_excludes_intentional_campaign_gap():
     report = customer_quality.run_quality(paused)
     case = next(item for item in report["cases"] if item["id"] == "current-web")
     assert case["passed"] and case["expected"]["kind"] == "handoff"
-    assert report["policy_citation_queries"] == active["policy_citation_queries"] - 1
+    assert report["policy_citation_queries"] == active["policy_citation_queries"] - 2
     assert report["catalog_sha256"] != active["catalog_sha256"]

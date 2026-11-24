@@ -43,6 +43,7 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - SUPPORT_INTENT_MODEL=${SUPPORT_INTENT_MODEL:-}
       # Dispatch runs to the worker; set to "inline" to run everything here.
       - MQ_BACKEND=${MQ_BACKEND:-celery}
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//

@@ -37,6 +37,63 @@ def staff_session(api):
     return {"X-Demo-Staff": response.json()["token"]}
 
 
+def test_confirmed_gift_review_keeps_original_evidence(api, monkeypatch):
+    monkeypatch.delenv("SUPPORT_INTENT_MODEL", raising=False)
+    customer, _ = session(api)
+    other, _ = session(api)
+    assert ask(api, customer, "小样是不是漏发了？")["kind"] == "clarify"
+    assert ask(api, customer, "DEMO-2001")["kind"] == "unavailable"
+    answer = ask(api, customer, "DEMO-1001")
+    assert answer["kind"] == "gift_review" and answer["issue"] == "小样是不是漏发了？"
+    assert answer["citation"]["rule_id"] == "gift-nov-old"
+    ask(api, customer, "现在的赠品规则？")
+    assert api.get(PREFIX + "/session", headers=customer).json()["tickets"] == []
+    body = {"request_id": str(uuid4()), "summary": answer["issue"], "order_id": "DEMO-1001",
+            "message_id": answer["message_id"]}
+    path = PREFIX + "/tickets"
+    assert api.post(path, headers=other, json=body).status_code == 409
+    assert api.post(path, headers=customer, json={**body, "order_id": "DEMO-1002"}).status_code == 409
+    ticket = api.post(path, headers=customer, json=body).json()
+    assert api.post(path, headers=customer, json=body).json() == ticket
+    assert api.post(path, headers=customer, json={**body, "message_id": None}).status_code == 409
+    detail = api.get(PREFIX + "/staff/tickets/" + ticket["id"], headers=staff_session(api)).json()
+    assert detail["citation"] == answer["citation"]
+    assert detail["checks"] == ["订单实付金额", "赠品出库记录"]
+
+
+@pytest.mark.parametrize("mode", ["valid", "timeout", "invalid"])
+def test_model_classification_transport_and_fallback(api, monkeypatch, mode):
+    import httpx
+    import json
+    from backend import config
+    from backend.models import provider
+
+    monkeypatch.setenv("SUPPORT_INTENT_MODEL", "test/chat")
+    monkeypatch.setattr(config, "PROVIDERS", [config.ProviderConfig(name="test", base_url="http://test/v1", api_key="demo")])
+    calls = []
+
+    def respond(request):
+        calls.append(json.loads(request.content))
+        if mode == "timeout":
+            raise httpx.ReadTimeout("test timeout", request=request)
+        label = "missing_gift" if mode == "valid" else "已批准退款"
+        return httpx.Response(200, json={"id": "test", "model": "test/chat", "created": 1,
+            "object": "chat.completion", "choices": [{"index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "content": label}}]})
+
+    factory = provider.create_chat_model
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(provider, "create_chat_model", lambda *a, **kw: factory(*a, **kw, http_client=client))
+        customer, _ = session(api)
+        query = "结账时说随箱附的小东西怎么开箱只见正装" if mode == "valid" else "旅行装没收到"
+        answer = ask(api, customer, "DEMO-1001 " + query)
+    assert len(calls) == 1
+    assert calls[0]["model"] == "test/chat"
+    assert calls[0]["messages"][-1]["content"] == "[订单号] " + query
+    assert answer["intent_source"] == ("model" if mode == "valid" else "fallback")
+    assert answer["kind"] == "gift_review" and answer["citation"]["rule_id"] == "gift-nov-old"
+
+
 def test_policy_uses_effective_versions_and_own_order_scope(api):
     headers, _ = session(api)
     current = ask(api, headers, "现在满299元有赠品吗？")
