@@ -7,6 +7,9 @@ from backend.customer_service import DEMO_DATE, conversation_turn
 from backend.tools.retrieval_eval import evaluate
 
 
+HISTORICAL_GIFT_TEXT = "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。"
+
+
 def _current_rule(rules, topic, channel):
     today = DEMO_DATE.isoformat()
     return next((rule for rule in rules if (rule[1], rule[3], rule[4]) == (topic, channel, None)
@@ -18,7 +21,7 @@ def run_quality(rules):
     cases = [
         ("current-web", "政策版本", "a", ["当前活动有什么赠品？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "web"), "date": today}),
         ("current-live", "政策版本", "b", ["直播间赠品门槛是什么？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "live"), "date": today}),
-        ("historical", "政策版本", "a", ["DEMO-1001 下单时有什么赠品规则？"], {"kind": "policy", "rule_id": "gift-nov-old", "text": "299 元", "date": "2026-11-02"}),
+        ("historical", "政策版本", "a", ["DEMO-1001 下单时有什么赠品规则？"], {"kind": "policy", "rule_id": "gift-nov-old", "text": HISTORICAL_GIFT_TEXT, "date": "2026-11-02"}),
         ("clarify-order", "多轮对话", "a", ["什么时候发货？", "DEMO-1002"], {"kind": "order", "order_id": "DEMO-1002", "text": "待发货", "first_kind": "clarify"}),
         ("follow-up", "多轮对话", "b", ["DEMO-2001 物流到哪了？", "那能退吗？"], {"kind": "policy", "rule": _current_rule(rules, "returns", "live"), "date": today, "first_kind": "order"}),
         ("foreign-order", "订单隔离", "a", ["DEMO-2001 的物流"], {"kind": "unavailable"}),
@@ -49,9 +52,16 @@ def run_quality(rules):
                          "order_id": actual.get("order", {}).get("id"), "first_kind": replies[0]["kind"],
                          "status": (actual.get("after_sale") or {}).get("status")}
         for key, value in expected.items():
-            ok = value in actual["text"] if key == "text" else actual_fields[key] == value
+            if key == "text" and expected["kind"] == "policy":
+                ok = actual["text"] == value
+            elif key == "text":
+                ok = value in actual["text"]
+            else:
+                ok = actual_fields[key] == value
             if not ok:
                 findings.append(key)
+        if expected["kind"] == "policy" and citation.get("excerpt") != expected["text"]:
+            findings.append("excerpt")
         if expected["kind"] == "unavailable" and ("order" in actual or "citation" in actual):
             findings.append("private_data")
         if "rule_id" in expected:
@@ -62,4 +72,5 @@ def run_quality(rules):
     fingerprint = hashlib.sha256(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
     citation_metrics = evaluate(rankings, k=1)
     return {"total": len(results), "passed": sum(item["passed"] for item in results), "cases": results,
-            "policy_recall_at_1": citation_metrics["recall@1"], "catalog_sha256": fingerprint}
+            "policy_recall_at_1": citation_metrics["recall@1"],
+            "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
