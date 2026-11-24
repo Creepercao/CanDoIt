@@ -207,3 +207,35 @@ def test_quality_retains_failure_evidence_and_reports_regression(api, monkeypatc
     assert bad["regressed"] == ["historical"]
     assert "rule_id" in next(case["differences"] for case in bad["cases"] if case["id"] == "historical")
     assert len(api.get(path, headers=operator).json()) == 2
+
+
+def test_quality_report_download_preserves_the_selected_run(api, monkeypatch):
+    import backend.customer_quality as quality
+    operator = staff_session(api)
+    path = PREFIX + "/staff/quality"
+    first = api.post(path, headers=operator).json()
+    original = quality.conversation_turn
+
+    def bad_historical_amount(buyer, message, *args):
+        answer, state = original(buyer, message, *args)
+        if message.startswith("DEMO-1001 下单时"):
+            answer["text"] = "实付满 1299 元 | 错误示例"
+        return answer, state
+
+    monkeypatch.setattr(quality, "conversation_turn", bad_historical_amount)
+    second = api.post(path, headers=operator).json()
+    assert first["id"] != second["id"]
+    assert first == api.get(path, headers=operator).json()[1]
+    first_path = f"{path}/{first['id']}/report"
+    assert api.get(first_path).status_code == 401
+    original_report = api.get(first_path, headers=operator)
+    current = api.get(f"{path}/{second['id']}/report", headers=operator)
+    assert original_report.status_code == current.status_code == 200
+    assert "text/markdown" in current.headers["Content-Type"]
+    assert current.headers["Cache-Control"] == "no-store"
+    assert f"customer-quality-{second['id']}.md" in current.headers["Content-Disposition"]
+    assert "historical · 政策版本 · 通过" in original_report.text
+    assert "historical · 政策版本 · 失败" in current.text
+    assert second["catalog_sha256"] in current.text
+    assert "实付满 1299 元 &#124; 错误示例" in current.text
+    assert api.get(f"{path}/98765/report", headers=operator).status_code == 404

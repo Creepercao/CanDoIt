@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Path as ApiPath, Response
 from pydantic import BaseModel, StringConstraints
 
 from backend.customer_quality import run_quality
+from backend.customer_quality_report import render_quality_report
 from backend.customer_service import CHANNELS, DEMO_DATE, ORDERS, PRODUCTS, SupportStore, visible_order
 
 router = APIRouter(prefix="/customer-service", tags=["customer-service"])
@@ -229,3 +230,14 @@ def quality_history(staff: Staff):
 @router.post("/staff/quality", status_code=201)
 def run_regression(staff: Staff):
     return staff.store.record_quality(run_quality(staff.store.rules()))
+
+
+@router.get("/staff/quality/{run_id}/report")
+def export_regression_report(run_id: Annotated[int, ApiPath(ge=1, le=2**63 - 1)], staff: Staff):
+    report = staff.store.get_quality_run(run_id)
+    if report is None:
+        raise HTTPException(404, "找不到该次评估。")
+    return Response(render_quality_report(report), media_type="text/markdown", headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": f'attachment; filename="customer-quality-{run_id}.md"',
+    })

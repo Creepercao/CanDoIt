@@ -514,10 +514,16 @@ class SupportStore:
             report["regressed"] = [item["id"] for item in report["cases"] if previous_cases.get(item["id"]) and not item["passed"]]
             report["recovered"] = [item["id"] for item in report["cases"] if previous_cases.get(item["id"]) is False and item["passed"]]
             report["created_at"] = datetime.now(timezone.utc).isoformat()
-            db.execute("INSERT INTO support_quality_runs (created_at, report) VALUES (?, ?)",
-                       (report["created_at"], json.dumps(report)))
-            return report
+            cursor = db.execute("INSERT INTO support_quality_runs (created_at, report) VALUES (?, ?)",
+                                (report["created_at"], json.dumps(report)))
+            return {**report, "id": cursor.lastrowid}
 
     def quality_history(self):
         with self.connect() as db:
-            return [json.loads(row["report"]) for row in db.execute("SELECT report FROM support_quality_runs ORDER BY id DESC LIMIT 10")]
+            rows = db.execute("SELECT id, report FROM support_quality_runs ORDER BY id DESC LIMIT 10")
+            return [{**json.loads(row["report"]), "id": row["id"]} for row in rows]
+
+    def get_quality_run(self, run_id):
+        with self.connect() as db:
+            row = db.execute("SELECT report FROM support_quality_runs WHERE id = ?", (run_id,)).fetchone()
+            return {**json.loads(row["report"]), "id": run_id} if row else None

@@ -142,6 +142,21 @@ async function runQuality() {
   })
 }
 
+async function downloadReport() {
+  await perform(async () => {
+    const id = report.value.id
+    const content = await request(`/quality/${id}/report`)
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
+    const download = document.createElement('a')
+    download.href = url
+    download.download = `customer-quality-${id}.md`
+    document.body.append(download)
+    download.click()
+    download.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  })
+}
+
 function timeLabel(value) {
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
 }
@@ -251,7 +266,10 @@ function ruleState(rule) {
       </div>
 
       <section v-else-if="tab === 'quality'" class="panel quality">
-        <header><h2>客服质检</h2><button class="primary" :disabled="busy" @click="runQuality">运行回归评估</button></header>
+        <header><h2>客服质检</h2><div class="quality-buttons">
+          <button v-if="report" :disabled="busy" @click="downloadReport">下载评估报告</button>
+          <button class="primary" :disabled="busy" @click="runQuality">运行回归评估</button>
+        </div></header>
         <p v-if="!report" class="hint">用模拟用例检验当前发布的规则和客服流程。</p>
         <template v-else>
           <div class="quality-controls">
@@ -283,7 +301,7 @@ function ruleState(rule) {
 
 <style scoped>
 .operations { margin: auto; max-width: 88rem; }
-.ops-nav, header, .queue-meta, .actions, .quality-controls, .score { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.ops-nav, header, .queue-meta, .actions, .quality-controls, .quality-buttons, .score { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
 .ops-nav { margin-bottom: .8rem; }
 .ops-nav [aria-current], .queue-row[aria-pressed='true'] { background: #e3efeb; border-color: #81aaa1; }
 .split { display: grid; grid-template-columns: minmax(14rem, 1fr) minmax(0, 1.7fr); gap: 1rem; align-items: start; }
