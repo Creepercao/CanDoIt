@@ -65,6 +65,24 @@ def test_order_lookup_does_not_reveal_another_buyer_order(api):
     assert api.get(PREFIX + "/session").status_code == 401
 
 
+def test_order_policy_verifies_ownership_and_rejects_conflicting_scope(api):
+    a, _ = session(api)
+    b, _ = session(api, "b")
+    assert ask(api, a, "DEMO-2001 退换规则是什么？")["kind"] == "unavailable"
+    assert ask(api, b, "DEMO-2001 退换规则是什么？")["citation"]["rule_id"] == "returns-live"
+    conflicting = ask(api, b, "DEMO-2001 的品牌商城退换规则是什么？")
+    assert conflicting["kind"] == "clarify" and "citation" not in conflicting
+    assert ask(api, b, "品牌商城退换规则是什么？")["citation"]["rule_id"] == "returns-web"
+
+
+def test_handoff_takes_priority_over_status_query(api):
+    headers, _ = session(api)
+    mixed = ask(api, headers, "DEMO-1001 用过以后感觉不适，顺便查一下售后进度。")
+    assert mixed["kind"] == "handoff" and mixed["order_id"] == "DEMO-1001"
+    status = ask(api, headers, "DEMO-1001 售后进度是人工审核中吗？")
+    assert status["kind"] == "after_sale"
+
+
 def test_handoff_has_explicit_creation_order_ownership_and_lifecycle(api):
     headers, _ = session(api)
     other, _ = session(api)

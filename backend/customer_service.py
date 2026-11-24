@@ -51,6 +51,8 @@ TOPIC_TERMS = {
 }
 TOPIC_QUERIES = {"gift": "满赠", "returns": "退换处理", "product": "规格"}
 ORDER_PATTERN = re.compile(r"(?<![A-Z0-9-])DEMO-\d{4}(?![A-Z0-9-])", re.ASCII)
+HANDOFF_TERMS = ("过敏", "不适", "红肿", "刺痛", "呼吸困难", "起疹", "投诉", "申请退款", "申请退货",
+                 "转人工", "人工客服", "找人工", "联系人工", "需要人工")
 
 
 def visible_order(buyer, order_id):
@@ -59,6 +61,14 @@ def visible_order(buyer, order_id):
         return None
     return {"id": order_id, "product": PRODUCTS[order["product"]], "channel": CHANNELS[order["channel"]],
             **{key: order[key] for key in ("purchased", "status", "shipping")}}
+
+
+def needs_handoff(text):
+    return text.strip().rstrip("。？！?!") == "人工" or any(term in text for term in HANDOFF_TERMS)
+
+
+def unavailable_order():
+    return {"kind": "unavailable", "text": "当前体验身份下查不到该订单，请核对订单号。"}
 
 
 @lru_cache(maxsize=12)
@@ -82,9 +92,11 @@ def answer_message(buyer, message, product, channel, *, rules=RULES):
     order = visible_order(buyer, order_id)
 
     # Unstructured comments can request a human, but cannot trigger refunds or order writes.
-    if any(term in text for term in ("过敏", "不适", "红肿", "刺痛", "呼吸困难", "起疹", "人工", "投诉", "申请退款", "申请退货")):
+    if needs_handoff(text):
         return {"kind": "handoff", "text": "这条反馈需要人工接手。你可以提交售后工单，并补充需要客服了解的情况。",
                 "order_id": order_id if order else None}
+    if order_id and order is None:
+        return unavailable_order()
 
     topics = [topic for topic, terms in TOPIC_TERMS.items() if any(term in text for term in terms)]
     if len(topics) > 1:
@@ -96,24 +108,23 @@ def answer_message(buyer, message, product, channel, *, rules=RULES):
     if historical or shipping or (order_id is not None and not topics):
         if order_id is None:
             return {"kind": "clarify", "text": "请在问题中带上你的模拟订单号。"}
-        if order is None:
-            return {"kind": "unavailable", "text": "当前体验身份下查不到该订单，请核对订单号。"}
         if not historical or not topics:
             return {"kind": "order", "text": f"订单 {order_id} 当前{order['status']}。{order['shipping']}", "order": order}
     if not topics:
         return {"kind": "clarify", "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。"}
 
     topic = topics[0]
-    effective_date = DEMO_DATE.isoformat()
-    if historical:
-        effective_date = order["purchased"]
-        channel = ORDERS[order_id]["channel"]
+    effective_date = order["purchased"] if historical else DEMO_DATE.isoformat()
+    mentioned_products = [key for key, name in PRODUCTS.items() if name in text]
+    mentioned_channels = [key for key, name in CHANNELS.items() if name in text]
+    if len(mentioned_products) > 1 or len(mentioned_channels) > 1:
+        return {"kind": "clarify", "text": "请一次咨询一个商品和渠道。"}
+    if order:
         product = ORDERS[order_id]["product"]
+        channel = ORDERS[order_id]["channel"]
+        if (mentioned_products and product not in mentioned_products) or (mentioned_channels and channel not in mentioned_channels):
+            return {"kind": "clarify", "text": "问题里的商品或渠道与订单记录不一致，请核对后再问。"}
     else:
-        mentioned_products = [key for key, name in PRODUCTS.items() if name in text]
-        mentioned_channels = [key for key, name in CHANNELS.items() if name in text]
-        if len(mentioned_products) > 1 or len(mentioned_channels) > 1:
-            return {"kind": "clarify", "text": "请一次咨询一个商品和渠道。"}
         product = mentioned_products[0] if mentioned_products else product
         channel = mentioned_channels[0] if mentioned_channels else channel
     eligible = tuple(rule for rule in rules if rule[1] == topic
@@ -154,9 +165,9 @@ def conversation_turn(buyer, message, product, channel, state, rules, after_sale
     if any(word in text for word in ("能退", "可以退", "能不能退")):
         request += " 退换"
     uses_progress = any(word in request for word in PROGRESS_TERMS)
-    if uses_progress and len(identifiers) <= 1:
+    if uses_progress and len(identifiers) <= 1 and not needs_handoff(request):
         if last_order is None:
-            reply = {"kind": "unavailable", "text": "当前体验身份下查不到该订单，请核对订单号。"} if explicit else {
+            reply = unavailable_order() if explicit else {
                 "kind": "clarify", "text": "请在问题中带上你的模拟订单号。"}
         else:
             item = after_sales.get(last_order)
@@ -164,8 +175,6 @@ def conversation_turn(buyer, message, product, channel, state, rules, after_sale
                 f"订单 {last_order} 的售后状态为{AFTER_SALE_LABELS[item['status']]}。" if item else
                 f"订单 {last_order} 暂无售后申请。"), "after_sale": item}
     else:
-        if last_order and last_order in request.upper():
-            product, channel = (ORDERS[last_order][key] for key in ("product", "channel"))
         reply = answer_message(buyer, request, product, channel, rules=rules)
 
     next_state = {"order_id": last_order}
@@ -287,7 +296,7 @@ class SupportStore:
             progress = any(term in message for term in PROGRESS_TERMS)
             order_only = ORDER_PATTERN.fullmatch(unicodedata.normalize("NFKC", message).upper().rstrip("。？！?!"))
             pending_progress = order_only and any(term in state.get("pending", "") for term in PROGRESS_TERMS)
-            if active and not (progress or pending_progress):
+            if active and (not (progress or pending_progress) or needs_handoff(message)):
                 answer = {"kind": "human_pending", "text": "消息已交给人工客服。", "ticket_id": active["id"]}
             else:
                 answer, state = conversation_turn(buyer, message, product, channel, state,
