@@ -1,0 +1,171 @@
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.api.customer_service import get_store
+from backend.customer_service import SupportStore
+from backend.main import app
+
+
+@pytest.fixture
+def api(tmp_path, monkeypatch):
+    store = tmp_path / "support.sqlite"
+    monkeypatch.setitem(app.dependency_overrides, get_store, lambda: SupportStore(store))
+    return TestClient(app)
+
+
+PREFIX = "/api/customer-service"
+
+
+def session(api, buyer="a"):
+    response = api.post(PREFIX + "/sessions", json={"buyer": buyer})
+    assert response.status_code == 201
+    data = response.json()
+    return {"X-Demo-Session": data["token"]}, data
+
+
+def ask(api, headers, text, **options):
+    response = api.post(PREFIX + "/messages", headers=headers, json={"message": text, **options})
+    assert response.status_code == 200
+    return response.json()
+
+
+def staff_session(api):
+    response = api.post(PREFIX + "/staff/sessions")
+    assert response.status_code == 201
+    return {"X-Demo-Staff": response.json()["token"]}
+
+
+def test_policy_uses_effective_versions_and_own_order_scope(api):
+    headers, _ = session(api)
+    current = ask(api, headers, "现在满299元有赠品吗？")
+    assert "399" in current["text"] and "299" not in current["text"]
+    assert current["citation"]["rule_id"] == "gift-nov-current"
+    historical = ask(api, headers, "DEMO-1001 下单时有什么赠品规则？", channel="live")
+    assert "299" in historical["text"]
+    assert historical["citation"]["effective_date"] == "2026-11-02"
+    assert historical["citation"]["snapshot_id"] != current["citation"]["snapshot_id"]
+    assert historical["text"] in historical["citation"]["excerpt"]
+    assert "499" in ask(api, headers, "直播间的赠品规则？")["text"]
+    assert "100 毫升" in ask(api, headers, "氨基酸洁面的规格？")["text"]
+
+
+def test_order_lookup_does_not_reveal_another_buyer_order(api):
+    a, data = session(api)
+    b, _ = session(api, "b")
+    assert {order["id"] for order in data["orders"]} == {"DEMO-1001", "DEMO-1002"}
+    assert ask(api, b, "DEMO-2001 的物流")["order"]["status"] == "已签收"
+    denied = ask(api, a, "查 DEMO-2001 的物流")
+    unknown = ask(api, a, "查 DEMO-9999 的物流")
+    assert denied["kind"] == unknown["kind"] == "unavailable"
+    assert denied["text"] == unknown["text"] and "order" not in denied
+    assert ask(api, a, "DEMO-2001 下单时的赠品")["kind"] == "unavailable"
+    assert ask(api, a, "物流到哪了？")["kind"] == "clarify"
+    assert api.get(PREFIX + "/session").status_code == 401
+
+
+def test_handoff_has_explicit_creation_order_ownership_and_lifecycle(api):
+    headers, _ = session(api)
+    other, _ = session(api)
+    result = ask(api, headers, "DEMO-1001 使用面霜后觉得不适，怎么退款？")
+    assert result["kind"] == "handoff" and result["order_id"] == "DEMO-1001"
+    assert api.get(PREFIX + "/session", headers=headers).json()["tickets"] == []
+    body = {"request_id": uuid4().hex, "order_id": result["order_id"], "summary": "虚构售后反馈"}
+    assert api.post(PREFIX + "/tickets", headers=headers, json={**body, "order_id": "DEMO-2001"}).status_code == 404
+    created = api.post(PREFIX + "/tickets", headers=headers, json=body)
+    assert created.status_code == 201
+    ticket = created.json()
+    assert api.post(PREFIX + "/tickets", headers=headers, json=body).json() == ticket
+    assert api.post(PREFIX + "/tickets", headers=headers, json={**body, "summary": "不同内容"}).status_code == 409
+    path = PREFIX + "/staff/tickets/" + ticket["id"]
+    staff = staff_session(api)
+    other_staff = staff_session(api)
+    assert api.get(PREFIX + "/session", headers=other).json()["tickets"] == []
+    assert api.get(path, headers=other).status_code == 401
+    assert api.get(path, headers=staff).json()["order"]["id"] == "DEMO-1001"
+    assert api.post(path + "/actions", headers=staff, json={"action": "resolve", "text": "已接手"}).status_code == 409
+    assert api.post(path + "/actions", headers=staff, json={"action": "claim"}).json()["status"] == "in_progress"
+    assert api.get(path, headers=other_staff).status_code == 404
+    assert ask(api, headers, "还有一个问题")["kind"] == "human_pending"
+    assert api.post(path + "/actions", headers=staff, json={"action": "reply", "text": "已查看记录"}).status_code == 200
+    closed = api.post(path + "/actions", headers=staff, json={"action": "resolve", "text": "已记录并回复顾客"}).json()
+    assert closed["status"] == "resolved"
+    customer = api.get(PREFIX + "/session", headers=headers).json()
+    assert customer["tickets"][0]["status"] == "resolved"
+    assert [item["answer"]["text"] for item in customer["messages"] if item["answer"]["kind"] == "human"] == ["已查看记录", "已记录并回复顾客"]
+    assert ask(api, headers, "送赠品吗？")["kind"] == "policy"
+
+
+def test_multi_turn_carries_pending_intent_and_latest_verified_order(api):
+    b, _ = session(api, "b")
+    assert ask(api, b, "多久发货？")["kind"] == "clarify"
+    assert ask(api, b, "DEMO-1001")["kind"] == "unavailable"
+    assert ask(api, b, "ＤＥＭＯ－２００１。")["order"]["status"] == "已签收"
+    follow_up = ask(api, b, "那能退吗？")
+    assert follow_up["citation"]["rule_id"] == "returns-live"
+    a, _ = session(api, "a")
+    assert ask(api, a, "刚买的时候送什么赠品？")["kind"] == "clarify"
+    assert ask(api, a, "DEMO-1001")["citation"]["rule_id"] == "gift-nov-old"
+    assert len(api.get(PREFIX + "/session", headers=a).json()["messages"]) == 2
+
+
+def test_aftersales_is_idempotent_and_tracks_claim_and_resolution(api):
+    customer, _ = session(api)
+    operator = staff_session(api)
+    path = PREFIX + "/after-sales"
+    body = {"order_id": "DEMO-1001", "summary": "模拟退换"}
+    assert api.post(path, headers=customer, json={**body, "order_id": "DEMO-2001"}).status_code == 404
+    sale = api.post(path, headers=customer, json=body).json()
+    assert sale["status"] == "submitted"
+    assert api.post(path, headers=customer, json=body).json()["id"] == sale["id"]
+    ticket = PREFIX + f"/staff/tickets/{sale['ticket_id']}/actions"
+    assert api.post(ticket, headers=operator, json={"action": "claim"}).status_code == 200
+    current = ask(api, customer, "DEMO-1001 售后进度")
+    assert current["after_sale"]["status"] == "reviewing"
+    assert api.post(ticket, headers=operator, json={"action": "resolve", "text": "已处理模拟申请"}).status_code == 200
+    assert ask(api, customer, "那申请进度呢？")["after_sale"]["status"] == "completed"
+    assert len(api.get(PREFIX + "/session", headers=customer).json()["after_sales"]) == 1
+
+
+def test_rule_draft_preview_publish_and_historical_preservation(api):
+    customer, _ = session(api)
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    model = {"base_rule_id": "gift-nov-current", "starts_at": "2026-11-23", "ends_at": "2026-12-01", "body": "实付满 459 元赠旅行装。"}
+    assert api.post(root + "/drafts", headers=customer, json=model).status_code == 401
+    assert api.post(root + "/drafts", headers=operator, json={**model, "starts_at": "2026-11-22"}).status_code == 409
+    preview = api.post(root + "/drafts", headers=operator, json=model).json()
+    assert "399" in preview["previous"]["body"]
+    assert "399" in ask(api, customer, "现在满多少送赠品？")["text"]
+    path = root + "/drafts/" + preview["draft"]["id"]
+    amended = {**model, "body": "实付满 469 元赠旅行装。\n# 赠品说明\n以订单页为准。"}
+    new = api.patch(path, headers=operator, json=amended).json()
+    assert api.post(path + "/publish", headers=operator, json={"draft_sha256": preview["draft_sha256"]}).status_code == 409
+    published = api.post(path + "/publish", headers=operator, json={"draft_sha256": new["draft_sha256"]}).json()
+    assert api.patch(path, headers=operator, json=model).status_code == 409
+    current = ask(api, customer, "现在满多少送赠品？")
+    assert current["text"] == amended["body"]
+    assert current["citation"]["rule_id"] == published["published"]["id"]
+    assert "299" in ask(api, customer, "DEMO-1001 下单时有什么赠品规则？")["text"]
+    assert "399" in ask(api, customer, "DEMO-1002 下单时有什么赠品规则？")["text"]
+    report = api.post(PREFIX + "/staff/quality", headers=operator).json()
+    assert report["passed"] == report["total"] and report["policy_recall_at_1"] == 1
+
+
+def test_quality_retains_failure_evidence_and_reports_regression(api, monkeypatch):
+    import backend.customer_quality as quality
+    operator = staff_session(api)
+    path = PREFIX + "/staff/quality"
+    good = api.post(path, headers=operator).json()
+    original = quality.conversation_turn
+    def regress(buyer, message, *args):
+        if message.startswith("DEMO-1001 下单时"):
+            return {"kind": "clarify", "text": "演示规则缺失"}, {}
+        return original(buyer, message, *args)
+    monkeypatch.setattr(quality, "conversation_turn", regress)
+    bad = api.post(path, headers=operator).json()
+    assert bad["passed"] == good["passed"] - 1
+    assert bad["regressed"] == ["historical"]
+    assert "rule_id" in next(case["differences"] for case in bad["cases"] if case["id"] == "historical")
+    assert len(api.get(path, headers=operator).json()) == 2

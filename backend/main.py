@@ -22,6 +22,7 @@ from backend.api.safety import router as safety_router
 from backend.api.runs import router as runs_router
 from backend.api.run_events import router as run_events_router
 from backend.api.memory import router as memory_router
+from backend.api.customer_service import router as customer_service_router
 
 # Allow up to 200 MB file uploads (skill packages)
 MultiPartParser.max_file_size = 200 * 1024 * 1024
@@ -58,6 +59,7 @@ app.include_router(safety_router, prefix="/api")
 app.include_router(runs_router, prefix="/api")
 app.include_router(run_events_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
+app.include_router(customer_service_router, prefix="/api")
 
 
 @app.on_event("startup")
