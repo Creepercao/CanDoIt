@@ -396,9 +396,15 @@ class SupportStore:
                 return
             if ticket["staff_id"] != staff_id or ticket["status"] != "in_progress":
                 raise ValueError("请先受理这张工单。")
+            if action == "release":
+                db.execute("DELETE FROM ticket_claims WHERE ticket_id = ?", (ticket_id,))
+                db.execute("UPDATE tickets SET status = 'pending' WHERE id = ?", (ticket_id,))
+                answer = {"kind": "system", "text": "工单已回到待受理队列，新的客服接手后会继续处理。",
+                          "ticket_id": ticket_id}
+            else:
+                answer = {"kind": "human", "text": text, "ticket_id": ticket_id, "resolved": action == "resolve"}
             if action == "resolve":
                 db.execute("UPDATE tickets SET status = 'resolved', resolution = ? WHERE id = ?", (text, ticket_id))
-            answer = {"kind": "human", "text": text, "ticket_id": ticket_id, "resolved": action == "resolve"}
             db.execute("INSERT INTO support_messages (session_id, query, answer) VALUES (?, NULL, ?)",
                        (session_id, json.dumps(answer)))
 

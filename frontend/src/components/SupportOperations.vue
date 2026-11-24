@@ -86,9 +86,10 @@ async function showTicket(ticket) {
 
 async function ticketAction(action) {
   await perform(async () => {
-    active.value = await request(`/tickets/${active.value.id}/actions`, 'post', {
-      action, text: action === 'claim' ? null : reply.value,
+    const updated = await request(`/tickets/${active.value.id}/actions`, 'post', {
+      action, text: ['reply', 'resolve'].includes(action) ? reply.value : null,
     })
+    active.value = action === 'release' ? null : updated
     reply.value = ''
     queue.value = await request('/tickets')
   })
@@ -199,6 +200,7 @@ function ruleState(rule) {
               <div class="actions">
                 <button class="primary" :disabled="busy || !reply.trim()">发送给顾客</button>
                 <button type="button" :disabled="busy || !reply.trim()" @click="ticketAction('resolve')">发送说明并结单</button>
+                <button type="button" :disabled="busy || Boolean(reply.trim())" @click="ticketAction('release')">退回待受理</button>
               </div>
             </form>
             <p v-else class="hint">结单说明 · {{ active.resolution }}</p>

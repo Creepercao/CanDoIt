@@ -39,7 +39,7 @@ class AfterSale(BaseModel):
 
 
 class StaffAction(BaseModel):
-    action: Literal["claim", "reply", "resolve"]
+    action: Literal["claim", "reply", "resolve", "release"]
     text: Text | None = None
 
 
@@ -160,10 +160,15 @@ def staff_ticket(ticket_id: UUID, staff: Staff):
 
 @router.post("/staff/tickets/{ticket_id}/actions")
 def handle_ticket(ticket_id: UUID, request: StaffAction, staff: Staff):
-    if (request.action != "claim") != bool(request.text):
+    needs_text = request.action in ("reply", "resolve")
+    if needs_text and not request.text:
         raise HTTPException(422, "回复和结单需要填写内容。")
+    if not needs_text and request.text is not None:
+        raise HTTPException(422, "受理或退回工单无需填写处理说明。")
     try:
         staff.store.act_on_ticket(ticket_id.hex, staff.id, request.action, request.text)
+        if request.action == "release":
+            return {"id": ticket_id.hex, "released": True}
         return staff.store.ticket_detail(ticket_id.hex, staff.id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

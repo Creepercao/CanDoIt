@@ -146,6 +146,26 @@ def test_aftersales_is_idempotent_and_tracks_claim_and_resolution(api):
     assert len(api.get(PREFIX + "/session", headers=customer).json()["after_sales"]) == 1
 
 
+def test_releasing_a_ticket_preserves_transcript_and_allows_another_operator(api):
+    customer, _ = session(api)
+    first, second = staff_session(api), staff_session(api)
+    sale = api.post(PREFIX + "/after-sales", headers=customer,
+                    json={"order_id": "DEMO-1001", "summary": "等待另一位客服核对"}).json()
+    path = PREFIX + f"/staff/tickets/{sale['ticket_id']}/actions"
+    assert api.post(path, headers=first, json={"action": "claim"}).status_code == 200
+    assert api.post(path, headers=first, json={"action": "reply", "text": "正在核对订单"}).status_code == 200
+    assert api.post(path, headers=second, json={"action": "release"}).status_code == 404
+    assert api.post(path, headers=first, json={"action": "release"}).json()["released"] is True
+    view = api.get(PREFIX + "/session", headers=customer).json()
+    assert view["after_sales"][0]["status"] == "submitted"
+    assert view["messages"][-1]["answer"]["kind"] == "system"
+    assert api.post(path, headers=first, json={"action": "reply", "text": "工单已退回"}).status_code == 409
+    handover = api.post(path, headers=second, json={"action": "claim"}).json()
+    assert handover["messages"][0]["answer"]["text"] == "正在核对订单"
+    assert api.post(path, headers=second, json={"action": "resolve", "text": "已核对订单"}).status_code == 200
+    assert ask(api, customer, "DEMO-1001 售后进度")["after_sale"]["status"] == "completed"
+
+
 def test_rule_draft_preview_publish_and_historical_preservation(api):
     customer, _ = session(api)
     operator = staff_session(api)
