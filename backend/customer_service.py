@@ -51,6 +51,7 @@ TOPIC_TERMS = {
 }
 TOPIC_QUERIES = {"gift": "满赠", "returns": "退换处理", "product": "规格"}
 ORDER_PATTERN = re.compile(r"(?<![A-Z0-9-])DEMO-\d{4}(?![A-Z0-9-])", re.ASCII)
+SHIPPING_TERMS = ("物流", "发货", "运单", "签收", "订单状态", "到哪")
 HANDOFF_TERMS = ("过敏", "不适", "红肿", "刺痛", "呼吸困难", "起疹", "投诉", "申请退款", "申请退货",
                  "转人工", "人工客服", "找人工", "联系人工", "需要人工")
 
@@ -102,7 +103,7 @@ def answer_message(buyer, message, product, channel, *, rules=RULES):
     if len(topics) > 1:
         return {"kind": "clarify", "text": "请先选择一项咨询：活动赠品、退换规则或商品规格。"}
     historical = any(term in text for term in ("下单时", "购买时", "买的时候"))
-    shipping = any(term in text for term in ("物流", "发货", "运单", "签收", "订单状态", "到哪"))
+    shipping = any(term in text for term in SHIPPING_TERMS)
     if shipping and topics:
         return {"kind": "clarify", "text": "请分开咨询订单物流和商品或活动规则。"}
     if historical or shipping or (order_id is not None and not topics):
@@ -220,7 +221,16 @@ def support_turn(buyer, message, product, channel, state, rules, after_sales, cl
     if len(ids) > 1 or needs_handoff(text) or reply["kind"] == "unavailable":
         if pending_gift and reply["kind"] == "unavailable":
             next_state["gift_query"] = state["gift_query"]
-    elif label == "mixed" or has_mixed_shipping_and_returns(text):
+    elif has_mixed_shipping_and_returns(text):
+        reply = {"kind": "clarify", "text": "你提到了几件事，希望我先帮你查哪一件？"}
+        next_state.pop("pending", None)
+        source = "rules"
+    elif any(term in text for term in (*PROGRESS_TERMS, *SHIPPING_TERMS)) and (
+        reply["kind"] in ("order", "after_sale") or (reply["kind"] == "clarify" and "pending" in next_state)
+    ):
+        # A model label must not replace an already resolved operational request.
+        source = "rules"
+    elif label == "mixed":
         reply = {"kind": "clarify", "text": "你提到了几件事，希望我先帮你查哪一件？"}
         next_state.pop("pending", None)
     elif label == "handoff":

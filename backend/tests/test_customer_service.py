@@ -141,6 +141,21 @@ def test_colloquial_mixed_questions_require_selection_even_when_model_picks_one(
     assert "几件事" not in single["text"]
 
 
+def test_model_cannot_replace_explicit_order_operations_or_their_followup(api, monkeypatch):
+    monkeypatch.setattr("backend.customer_intent.classify", lambda _: ("missing_gift", "model"))
+    headers, _ = session(api)
+    clarification = ask(api, headers, "查物流")
+    assert clarification["kind"] == "clarify" and clarification["intent_source"] == "rules"
+    monkeypatch.setattr("backend.customer_intent.classify", lambda query: (
+        ("unknown", "rules") if query == "DEMO-1001" else ("missing_gift", "model")
+    ))
+    assert ask(api, headers, "DEMO-1001")["order"]["id"] == "DEMO-1001"
+    shipping = ask(api, headers, "DEMO-1001 物流")
+    progress = ask(api, headers, "DEMO-1001 售后进度")
+    assert (shipping["kind"], progress["kind"]) == ("order", "after_sale")
+    assert shipping["intent_source"] == progress["intent_source"] == "rules"
+
+
 def test_handoff_takes_priority_over_status_query(api):
     headers, _ = session(api)
     mixed = ask(api, headers, "DEMO-1001 用过以后感觉不适，顺便查一下售后进度。")
