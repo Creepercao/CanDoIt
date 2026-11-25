@@ -2,8 +2,9 @@
 
 import hashlib
 import json
+from collections import Counter
 
-from backend.customer_intent import classify
+from backend.customer_intent import classify, configured_model
 from backend.customer_service import DEMO_DATE, conversation_turn as baseline_turn, support_turn
 from backend.tools.retrieval_eval import evaluate
 
@@ -23,6 +24,7 @@ def conversation_turn(buyer, query, *args):
 
 def run_quality(rules):
     today = DEMO_DATE.isoformat()
+    model_name = configured_model()
     cases = [
         ("current-web", "政策版本", "a", ["当前活动有什么赠品？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "web"), "date": today}),
         ("current-live", "政策版本", "b", ["直播间赠品门槛是什么？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "live"), "date": today}),
@@ -59,10 +61,16 @@ def run_quality(rules):
         result["baseline_passed"] = original["passed"]
         result["baseline_replies"] = original["replies"]
     fingerprint = hashlib.sha256(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    case_spec = [(key, category, buyer, queries, {name: value for name, value in checks.items() if name != "rule"})
+                 for key, category, buyer, queries, checks in cases]
+    case_hash = hashlib.sha256(json.dumps(case_spec, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode()).hexdigest()
+    sources = Counter(reply.get("intent_source", "unrecorded") for item in results for reply in item["replies"])
     citation_metrics = evaluate(rankings, k=1)
     return {"total": len(results), "passed": sum(item["passed"] for item in results), "cases": results,
             "baseline_passed": sum(item["passed"] for item in baseline),
-            "model_turns": sum(reply.get("intent_source") == "model" for item in results for reply in item["replies"]),
+            "model_turns": sources["model"], "intent_sources": dict(sources), "intent_model": model_name,
+            "case_sha256": case_hash,
             "policy_recall_at_1": citation_metrics["recall@1"],
             "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
 

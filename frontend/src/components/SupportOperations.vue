@@ -283,7 +283,8 @@ function ruleState(rule) {
           <p class="score" role="status"><strong>{{ report.passed }} / {{ report.total }} 通过</strong>
             <span v-if="report.baseline_passed != null">同题旧流程 {{ report.baseline_passed }}/{{ report.total }} · 模型返回有效分类 {{ report.model_turns }} 轮</span>
             <span>规则引用命中率 {{ Math.round(report.policy_recall_at_1 * 100) }}%<template v-if="report.policy_citation_queries != null">（{{ report.policy_citation_queries }} 题）</template></span>
-            <span>较上次新增失败 {{ report.regressed.length }} 项</span></p>
+            <span v-if="report.comparison_run_id !== null">较上次新增失败 {{ report.regressed.length }} 项</span>
+            <span v-else>暂无同条件的上次评估</span></p>
           <details v-for="item in cases" :key="item.id" class="record">
             <summary>{{ item.category }} · {{ item.queries[0] }} <span class="label" :class="{ fail: !item.passed }">{{ item.passed ? '通过' : '失败' }}</span></summary>
             <dl class="checks"><dt>预期</dt><dd><span v-for="(value, key) in item.expected" :key="key">{{ checkNames[key] }} {{ value }} </span></dd></dl>

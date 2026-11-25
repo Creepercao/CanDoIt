@@ -13,6 +13,8 @@ CHECK_LABELS = {
 def render_quality_report(report):
     rate = report["policy_recall_at_1"]
     recall = "不适用" if rate is None else f"{rate:.1%}"
+    compared = report.get("comparison_run_id")
+    can_show_delta = "comparison_run_id" not in report or compared is not None
     lines = [
         "# 客服回归评估报告", "",
         "本次评估使用模拟订单和问题，反映当前演示场景的回归结果。", "",
@@ -20,11 +22,14 @@ def render_quality_report(report):
             ("运行编号", report["id"]),
             ("评估时间（UTC）", report["created_at"]),
             ("规则目录 SHA-256", report["catalog_sha256"]),
+            ("用例 SHA-256", report.get("case_sha256", "旧版未记录")),
+            ("模型配置", (report["intent_model"] or "本地规则") if "intent_model" in report else "旧版未记录"),
+            ("上次可比评估编号", compared if compared else "无"),
             ("通过用例", f"{report['passed']} / {report['total']}"),
             ("规则引用命中率", recall),
             ("参与引用评估的问题数", report.get("policy_citation_queries", "旧版未记录")),
-            ("较上次新增失败", "、".join(report["regressed"]) or "无"),
-            ("较上次恢复通过", "、".join(report["recovered"]) or "无"),
+            ("较上次新增失败", ("、".join(report["regressed"]) or "无") if can_show_delta else "不适用"),
+            ("较上次恢复通过", ("、".join(report["recovered"]) or "无") if can_show_delta else "不适用"),
         ]),
     ]
     if "baseline_passed" in report:

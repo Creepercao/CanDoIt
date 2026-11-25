@@ -616,8 +616,12 @@ class SupportStore:
     def record_quality(self, report):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            previous = db.execute("SELECT report FROM support_quality_runs ORDER BY id DESC LIMIT 1").fetchone()
-            previous_cases = {item["id"]: item["passed"] for item in json.loads(previous["report"])["cases"]} if previous else {}
+            previous = db.execute("SELECT id, report FROM support_quality_runs ORDER BY id DESC LIMIT 1").fetchone()
+            previous_report = json.loads(previous["report"]) if previous else {}
+            comparable = bool(previous and all(report[key] == previous_report.get(key)
+                                               for key in ("catalog_sha256", "case_sha256", "intent_model")))
+            previous_cases = {item["id"]: item["passed"] for item in previous_report["cases"]} if comparable else {}
+            report["comparison_run_id"] = previous["id"] if comparable else None
             report["regressed"] = [item["id"] for item in report["cases"] if previous_cases.get(item["id"]) and not item["passed"]]
             report["recovered"] = [item["id"] for item in report["cases"] if previous_cases.get(item["id"]) is False and item["passed"]]
             report["created_at"] = datetime.now(timezone.utc).isoformat()

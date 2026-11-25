@@ -253,6 +253,7 @@ def test_releasing_a_ticket_preserves_transcript_and_allows_another_operator(api
 def test_rule_draft_preview_publish_and_historical_preservation(api):
     customer, _ = session(api)
     operator = staff_session(api)
+    before = api.post(PREFIX + "/staff/quality", headers=operator).json()
     root = PREFIX + "/staff/rules"
     model = {"base_rule_id": "gift-nov-current", "starts_at": "2026-11-23", "ends_at": "2026-12-01", "body": "实付满 459 元赠旅行装。"}
     assert api.post(root + "/drafts", headers=customer, json=model).status_code == 401
@@ -272,6 +273,8 @@ def test_rule_draft_preview_publish_and_historical_preservation(api):
     assert "299" in ask(api, customer, "DEMO-1001 下单时有什么赠品规则？")["text"]
     assert "399" in ask(api, customer, "DEMO-1002 下单时有什么赠品规则？")["text"]
     report = api.post(PREFIX + "/staff/quality", headers=operator).json()
+    assert report["catalog_sha256"] != before["catalog_sha256"]
+    assert report["case_sha256"] == before["case_sha256"] and report["comparison_run_id"] is None
     assert report["passed"] == report["total"] and report["policy_recall_at_1"] == 1
 
 
@@ -289,6 +292,7 @@ def test_quality_retains_failure_evidence_and_reports_regression(api, monkeypatc
     bad = api.post(path, headers=operator).json()
     assert bad["passed"] == good["passed"] - 1
     assert bad["regressed"] == ["historical"]
+    assert bad["comparison_run_id"] == good["id"]
     assert "rule_id" in next(case["differences"] for case in bad["cases"] if case["id"] == "historical")
     assert len(api.get(path, headers=operator).json()) == 2
 

@@ -28,11 +28,15 @@ def _model_text(text):
     return PHONE_PATTERN.sub("[手机号]", text)
 
 
+def configured_model():
+    return os.getenv("SUPPORT_INTENT_MODEL", "").strip()
+
+
 def classify(message):
     text = unicodedata.normalize("NFKC", message).strip()
     if needs_handoff(text) or ORDER_PATTERN.fullmatch(text.upper().rstrip("。？！?!")):
         return "unknown", "rules"
-    model_name = os.getenv("SUPPORT_INTENT_MODEL", "").strip()
+    model_name = configured_model()
     if model_name:
         try:
             from backend.config import PROVIDERS
