@@ -291,6 +291,7 @@ class SupportStore:
                     ticket_id TEXT PRIMARY KEY REFERENCES tickets(id),
                     message_id INTEGER NOT NULL REFERENCES support_messages(id)
                 );
+                CREATE INDEX IF NOT EXISTS ticket_sources_message ON ticket_sources(message_id);
                 CREATE TABLE IF NOT EXISTS ticket_claims (
                     ticket_id TEXT PRIMARY KEY REFERENCES tickets(id), staff_id TEXT NOT NULL REFERENCES support_staff(id)
                 );
@@ -399,23 +400,31 @@ class SupportStore:
                 answer = json.loads(source["answer"]) if source else {}
                 if answer.get("kind") != "gift_review" or answer["order_id"] != order_id:
                     raise ValueError("规则依据与当前会话或订单不匹配。")
-            inserted = db.execute("""
-                INSERT INTO tickets (id, session_id, request_id, order_id, summary, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT (session_id, request_id) DO NOTHING
-            """, (uuid4().hex, session_id, request_id, order_id, summary, datetime.now(timezone.utc).isoformat()))
-            row = db.execute("""
-                SELECT id, order_id, summary, status, resolution, created_at FROM tickets
-                WHERE session_id = ? AND request_id = ?
+            columns = "t.id, t.order_id, t.summary, t.status, t.resolution, t.created_at"
+            row = db.execute(f"""SELECT {columns}, s.message_id FROM tickets t
+                LEFT JOIN ticket_sources s ON t.id = s.ticket_id
+                WHERE t.session_id = ? AND t.request_id = ?
             """, (session_id, request_id)).fetchone()
-            if row["summary"] != summary or row["order_id"] != order_id:
-                raise ValueError("该提交编号已用于另一份工单。")
-            if inserted.rowcount and message_id is not None:
-                db.execute("INSERT INTO ticket_sources VALUES (?, ?)", (row["id"], message_id))
-            elif not inserted.rowcount:
-                source = db.execute("SELECT message_id FROM ticket_sources WHERE ticket_id = ?", (row["id"],)).fetchone()
-                if (source["message_id"] if source else None) != message_id:
+            if row:
+                if (row["summary"], row["order_id"], row["message_id"]) != (summary, order_id, message_id):
                     raise ValueError("该提交编号已用于另一份工单。")
-            return dict(row)
+                result = dict(row)
+                result.pop("message_id")
+                return result
+            if message_id is not None:
+                existing = db.execute(f"""SELECT {columns} FROM ticket_sources s JOIN tickets t ON t.id = s.ticket_id
+                    WHERE s.message_id = ? AND t.session_id = ? ORDER BY t.created_at, t.id LIMIT 1
+                """, (message_id, session_id)).fetchone()
+                if existing:
+                    return dict(existing)
+            ticket_id = uuid4().hex
+            created_at = datetime.now(timezone.utc).isoformat()
+            db.execute("INSERT INTO tickets VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)",
+                       (ticket_id, session_id, request_id, order_id, summary, created_at))
+            if message_id is not None:
+                db.execute("INSERT INTO ticket_sources VALUES (?, ?)", (ticket_id, message_id))
+            return {"id": ticket_id, "order_id": order_id, "summary": summary, "status": "pending",
+                    "resolution": None, "created_at": created_at}
 
     def apply_after_sale(self, token, order_id, summary):
         session_id = self.session_id(token)

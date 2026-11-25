@@ -55,6 +55,9 @@ def test_confirmed_gift_review_keeps_original_evidence(api, monkeypatch):
     assert api.post(path, headers=customer, json={**body, "order_id": "DEMO-1002"}).status_code == 409
     ticket = api.post(path, headers=customer, json=body).json()
     assert api.post(path, headers=customer, json=body).json() == ticket
+    duplicate = {**body, "request_id": str(uuid4()), "summary": "再次点击原消息"}
+    assert api.post(path, headers=customer, json=duplicate).json() == ticket
+    assert api.get(PREFIX + "/session", headers=customer).json()["tickets"] == [ticket]
     assert api.post(path, headers=customer, json={**body, "message_id": None}).status_code == 409
     detail = api.get(PREFIX + "/staff/tickets/" + ticket["id"], headers=staff_session(api)).json()
     assert detail["citation"] == answer["citation"]
