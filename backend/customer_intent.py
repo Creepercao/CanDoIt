@@ -17,6 +17,15 @@ LABELS = {
 }
 GIFT = re.compile(r"赠品|旅行装|小样|赠送的")
 MISSING = re.compile(r"没.{0,8}(来|收到|给|带|看见|看到|找到)|漏.{0,3}(发|寄|装)|少了|找不到|不在")
+MODEL_ORDER_PATTERN = re.compile(ORDER_PATTERN.pattern, re.IGNORECASE | re.ASCII)
+EMAIL_PATTERN = re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b", re.IGNORECASE | re.ASCII)
+PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?86[ -]?)?1[3-9]\d{9}(?!\d)", re.ASCII)
+
+
+def _model_text(text):
+    text = MODEL_ORDER_PATTERN.sub("[订单号]", text)
+    text = EMAIL_PATTERN.sub("[邮箱]", text)
+    return PHONE_PATTERN.sub("[手机号]", text)
 
 
 def classify(message):
@@ -40,7 +49,7 @@ def classify(message):
                 labels = "\n".join(f"{key} = {meaning}" for key, meaning in LABELS.items())
                 response = model.invoke([
                     ("system", "按顾客诉求分类，只返回一个英文标签。独立的多个问题选 mixed。\n" + labels),
-                    ("human", re.sub(ORDER_PATTERN.pattern, "[订单号]", text, flags=re.IGNORECASE | re.ASCII)),
+                    ("human", _model_text(text)),
                 ])
                 label = response.content.strip() if isinstance(response.content, str) else ""
                 if label in LABELS and label != "unknown":

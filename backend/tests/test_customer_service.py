@@ -86,10 +86,10 @@ def test_model_classification_transport_and_fallback(api, monkeypatch, mode):
         monkeypatch.setattr(provider, "create_chat_model", lambda *a, **kw: factory(*a, **kw, http_client=client))
         customer, _ = session(api)
         query = "结账时说随箱附的小东西怎么开箱只见正装" if mode == "valid" else "旅行装没收到"
-        answer = ask(api, customer, "DEMO-1001 " + query)
+        answer = ask(api, customer, "ｄｅｍｏ－１００１ " + query + "，电话 +86 13800138000，邮箱 buyer@example.test。")
     assert len(calls) == 1
     assert calls[0]["model"] == "test/chat"
-    assert calls[0]["messages"][-1]["content"] == "[订单号] " + query
+    assert calls[0]["messages"][-1]["content"] == "[订单号] " + query + ",电话 [手机号],邮箱 [邮箱]。"
     assert answer["intent_source"] == ("model" if mode == "valid" else "fallback")
     assert answer["kind"] == "gift_review" and answer["citation"]["rule_id"] == "gift-nov-old"
 
