@@ -145,6 +145,16 @@ def answer_message(buyer, message, product, channel, *, rules=RULES):
 AFTER_SALE_LABELS = {"submitted": "申请已提交", "reviewing": "人工审核中", "completed": "处理完成"}
 ORDER_FOLLOW_UP = re.compile(r"^(那|这单|该订单|这个订单)")
 PROGRESS_TERMS = ("售后进度", "申请进度", "退款进度", "退货进度")
+MIXED_JOIN = re.compile(r"[。？！?!；;]|(?:顺便|顺带|另外|再问|还想问|还有就是|以及)")
+SHIPPING_SIGNAL = re.compile(r"物流|发货|运单|揽收|签收|出(?:了)?仓|包裹到哪")
+RETURN_SIGNAL = re.compile(r"退换|退货|退款|换货|寄回|退回|能退|可以退")
+
+
+def has_mixed_shipping_and_returns(text):
+    """Recognize distinct logistics and returns questions across clause boundaries."""
+    parts = MIXED_JOIN.split(text)
+    return (any(SHIPPING_SIGNAL.search(part) and not RETURN_SIGNAL.search(part) for part in parts)
+            and any(RETURN_SIGNAL.search(part) for part in parts))
 
 
 def conversation_turn(buyer, message, product, channel, state, rules, after_sales):
@@ -210,7 +220,7 @@ def support_turn(buyer, message, product, channel, state, rules, after_sales, cl
     if len(ids) > 1 or needs_handoff(text) or reply["kind"] == "unavailable":
         if pending_gift and reply["kind"] == "unavailable":
             next_state["gift_query"] = state["gift_query"]
-    elif label == "mixed":
+    elif label == "mixed" or has_mixed_shipping_and_returns(text):
         reply = {"kind": "clarify", "text": "你提到了几件事，希望我先帮你查哪一件？"}
         next_state.pop("pending", None)
     elif label == "handoff":

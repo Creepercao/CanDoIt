@@ -132,6 +132,15 @@ def test_order_policy_verifies_ownership_and_rejects_conflicting_scope(api):
     assert ask(api, b, "品牌商城退换规则是什么？")["citation"]["rule_id"] == "returns-web"
 
 
+def test_colloquial_mixed_questions_require_selection_even_when_model_picks_one(api, monkeypatch):
+    monkeypatch.setattr("backend.customer_intent.classify", lambda _: ("progress", "model"))
+    headers, _ = session(api)
+    mixed = ask(api, headers, "我那件出了仓没？顺带问下不合适咋寄回去？")
+    assert mixed["kind"] == "clarify" and "先帮你查哪一件" in mixed["text"]
+    single = ask(api, headers, "DEMO-1001 退货物流进度")
+    assert "几件事" not in single["text"]
+
+
 def test_handoff_takes_priority_over_status_query(api):
     headers, _ = session(api)
     mixed = ask(api, headers, "DEMO-1001 用过以后感觉不适，顺便查一下售后进度。")
