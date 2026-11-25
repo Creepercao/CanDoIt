@@ -32,11 +32,11 @@ def configured_model():
     return os.getenv("SUPPORT_INTENT_MODEL", "").strip()
 
 
-def classify(message):
+def classify(message, *, model_name=None):
     text = unicodedata.normalize("NFKC", message).strip()
     if needs_handoff(text) or ORDER_PATTERN.fullmatch(text.upper().rstrip("。？！?!")):
         return "unknown", "rules"
-    model_name = configured_model()
+    model_name = configured_model() if model_name is None else model_name
     if model_name:
         try:
             from backend.config import PROVIDERS

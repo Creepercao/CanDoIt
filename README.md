@@ -11,7 +11,7 @@
 
 演示日期固定为 2026-11-23。适用范围、生效日期和失效日期决定规则是否用于回答。模拟数据、对话、工单、售后和规则版本保存在 `temp/customer-service.sqlite`。同一浏览器标签页可在刷新后恢复两个顾客身份及其记录。客服为独立演示身份，真实业务接入需要独立登录、权限管理和订单接口。
 
-默认使用本地规则，可离线体验。要启用模型理解口语，在平台配置 LLM 供应商，将后端环境变量 `SUPPORT_INTENT_MODEL` 设为该供应商提供的聊天模型 ID，再启动后端。使用 Docker Compose 时可将该变量写入项目的 `.env`，然后运行 `docker compose up -d --build backend frontend`。模型只接收当前问题（模拟订单号会被替换）并返回分类标签。订单归属、政策版本和工单仍由后端核实。模型请求超时或标签无效时使用本地规则。
+默认使用本地规则，可离线体验。要启用模型理解口语，在平台配置 LLM 供应商，将后端环境变量 `SUPPORT_INTENT_MODEL` 设为该供应商提供的聊天模型 ID，再启动后端。使用 Docker Compose 时可将该变量写入项目的 `.env`，然后运行 `docker compose up -d --build backend frontend`。模型只接收当前问题，并返回分类标签。发送前会替换模拟订单号、常见手机号和邮箱。订单归属、政策版本和工单仍由后端核实。模型请求超时或标签无效时使用本地规则。
 
 客服工作台的“客服质检”使用同一批问题对照旧关键词流程和当前配置。报告保留两条路径的回复，并记录模型返回有效分类的轮数；默认离线配置下该数为 0。
 
@@ -25,7 +25,10 @@
 
 ```shell
 python -m backend.tools.support_ab --model Qwen/Qwen2.5-7B-Instruct --output support-ab-local.json
+python -m backend.tools.support_ab --offline-only --output support-offline-local.json
 ```
+
+`--offline-only` 只跑规则组，即使环境中配置了分类模型也不会调用。输出使用新文件路径，已有报告不会覆盖。
 
 一个基于 **LangGraph 主干图**编排的多智能体协作 Web 应用。监督者 LLM 将用户请求拆解为分步执行计划，按波次并行分派给专业 Worker 智能体（研究员、分析师、图表师、画师、视频师、程序员、PPT 流水线），并实时流式展示智能体工作进度。
 

@@ -3,11 +3,9 @@
 import argparse
 import hashlib
 import json
-import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 from backend.customer_intent import classify
 from backend.customer_service import RULES, support_turn
@@ -48,48 +46,65 @@ CASES = [
 
 def run_arm(model):
     results = []
-    with patch.dict(os.environ, {"SUPPORT_INTENT_MODEL": model}):
-        for case in CASES:
-            state, turns = {}, []
-            for query, expected in case:
-                label, source = classify(query)
-                reply, state = support_turn("a", query, "cream", "web", state, RULES,
-                                            {"DEMO-1001": {"status": "reviewing"}}, (label, source))
-                citation = reply.get("citation", {})
-                actual = {"kind": reply["kind"], "rule": citation.get("rule_id"),
-                          "order": reply.get("order", {}).get("id"),
-                          "contains": expected.get("contains", "") in reply["text"],
-                          "multiple": any(s in reply["text"] for s in ("几件事", "分开咨询", "先选择一项"))}
-                passed = all(actual[k] == (True if k == "contains" else v) for k, v in expected.items())
-                if expected["kind"] == "gift_review":
-                    passed &= reply.get("checks") == ["订单实付金额", "赠品出库记录"]
-                turns.append(dict(query=query, expected=expected, label=label, source=source,
-                                  kind=reply["kind"], rule=citation.get("rule_id"), text=reply["text"], passed=passed))
-            results.append({"passed": all(t["passed"] for t in turns), "turns": turns})
+    for case in CASES:
+        state, turns = {}, []
+        for query, expected in case:
+            label, source = classify(query, model_name=model)
+            reply, state = support_turn("a", query, "cream", "web", state, RULES,
+                                        {"DEMO-1001": {"status": "reviewing"}}, (label, source))
+            citation = reply.get("citation", {})
+            actual = {"kind": reply["kind"], "rule": citation.get("rule_id"),
+                      "order": reply.get("order", {}).get("id"),
+                      "contains": expected.get("contains", "") in reply["text"],
+                      "multiple": any(s in reply["text"] for s in ("几件事", "分开咨询", "先选择一项"))}
+            passed = all(actual[k] == (True if k == "contains" else v) for k, v in expected.items())
+            if expected["kind"] == "gift_review":
+                passed &= reply.get("checks") == ["订单实付金额", "赠品出库记录"]
+            turns.append(dict(query=query, expected=expected, label=label, source=source,
+                              applied_source=reply["intent_source"], kind=reply["kind"],
+                              rule=citation.get("rule_id"), text=reply["text"], passed=passed))
+        results.append({"passed": all(t["passed"] for t in turns), "turns": turns})
     return results
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--model", help="Run the offline and model-enabled arms")
+    modes.add_argument("--offline-only", action="store_true", help="Run only the local rules arm")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not args.model.strip():
+    model = args.model.strip() if args.model is not None else None
+    if model == "":
         parser.error("supply a model ID for the enabled arm")
-    offline, enabled = run_arm(""), run_arm(args.model)
-    rows = [dict(id=i, offline=a, enabled=b) for i, (a, b) in enumerate(zip(offline, enabled), 1)]
-    sources = Counter(t["source"] for case in enabled for t in case["turns"])
-    summary = {"cases": len(rows), "offline_pass": sum(a["passed"] for a in offline),
-               "enabled_pass": sum(b["passed"] for b in enabled), "enabled_sources": dict(sources),
-               "gains": [r["id"] for r in rows if not r["offline"]["passed"] and r["enabled"]["passed"]],
-               "losses": [r["id"] for r in rows if r["offline"]["passed"] and not r["enabled"]["passed"]]}
-    report = dict(model=args.model, timestamp=datetime.now(timezone.utc).isoformat(),
+    if args.output.exists() or args.output.is_symlink() or not args.output.parent.is_dir():
+        parser.error("output must be a new file in an existing directory")
+    offline = run_arm("")
+    rows = [dict(id=i, offline=case) for i, case in enumerate(offline, 1)]
+    sources = Counter()
+    summary = {"cases": len(rows), "offline_pass": sum(case["passed"] for case in offline)}
+    if model is not None:
+        enabled = run_arm(model)
+        for row, case in zip(rows, enabled, strict=True):
+            row["enabled"] = case
+        sources = Counter(t["source"] for case in enabled for t in case["turns"])
+        applied_sources = Counter(t["applied_source"] for case in enabled for t in case["turns"])
+        summary.update(enabled_pass=sum(case["passed"] for case in enabled), enabled_sources=dict(sources),
+                       enabled_applied_sources=dict(applied_sources),
+                       gains=[r["id"] for r in rows if not r["offline"]["passed"] and r["enabled"]["passed"]],
+                       losses=[r["id"] for r in rows if r["offline"]["passed"] and not r["enabled"]["passed"]])
+    report = dict(model=model, run_mode="offline" if model is None else "paired", timestamp=datetime.now(timezone.utc).isoformat(),
                   case_sha256=hashlib.sha256(json.dumps(CASES, ensure_ascii=False).encode()).hexdigest(),
                   summary=summary, rows=rows)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        with args.output.open("x", encoding="utf-8") as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as error:
+        parser.error(str(error))
     print(json.dumps(summary))
-    if not sources["model"]:
-        raise SystemExit("No model labels used. The enabled arm does not demonstrate live inference.")
+    if model is not None and not sources["model"]:
+        raise SystemExit("No valid model label returned. The enabled arm does not demonstrate live inference.")
 
 
 if __name__ == "__main__":
