@@ -516,13 +516,17 @@ class SupportStore:
                        (session_id, json.dumps(answer)))
 
     @staticmethod
+    def _replace_rule(base, rule_id, start, end, body):
+        cutoff = min(base[6], start) if base[6] else start
+        return (*base[:6], cutoff, base[7]), (rule_id, *base[1:5], start, end, body)
+
+    @staticmethod
     def _rules(db):
         rules = {rule[0]: rule for rule in RULES}
         for row in db.execute("SELECT * FROM support_rule_versions ORDER BY rowid"):
             base = rules[row["base_rule_id"]]
-            end = min(base[6], row["starts_at"]) if base[6] else row["starts_at"]
-            rules[base[0]] = (*base[:6], end, base[7])
-            rules[row["id"]] = (row["id"], *base[1:5], row["starts_at"], row["ends_at"], row["body"])
+            rules[base[0]], rules[row["id"]] = SupportStore._replace_rule(
+                base, row["id"], row["starts_at"], row["ends_at"], row["body"])
         return tuple(rules.values())
 
     def rules(self):
@@ -588,7 +592,19 @@ class SupportStore:
                 raise LookupError("找不到该规则草稿。")
             rules = self._rules(db)
             base = next(rule for rule in rules if rule[0] == draft["base_rule_id"])
+            impact = None
+            if not draft["published_id"]:
+                try:
+                    self._validate_rule_change(rules, base[0], draft["starts_at"], draft["ends_at"])
+                except ValueError as exc:
+                    impact = {"publishable": False, "reason": str(exc)}
+                else:
+                    previous, _ = self._replace_rule(base, draft["id"], draft["starts_at"], draft["ends_at"], draft["body"])
+                    impact = {"publishable": True, "old_ends_at": previous[6], "new_starts_at": draft["starts_at"],
+                              "gap": {"starts_at": previous[6], "ends_at": draft["starts_at"]}
+                              if previous[6] < draft["starts_at"] else None}
             return {"draft": dict(draft), "draft_sha256": self._draft_hash(draft), "previous": self._rule_dict(base),
+                    "impact": impact,
                     "published": next((self._rule_dict(rule) for rule in rules if rule[0] == draft["published_id"]), None)}
 
     @staticmethod

@@ -260,12 +260,19 @@ def test_rule_draft_preview_publish_and_historical_preservation(api):
     assert api.post(root + "/drafts", headers=operator, json={**model, "starts_at": "2026-11-22"}).status_code == 409
     preview = api.post(root + "/drafts", headers=operator, json=model).json()
     assert "399" in preview["previous"]["body"]
+    assert preview["impact"] == {"publishable": True, "old_ends_at": "2026-11-23", "new_starts_at": "2026-11-23", "gap": None}
+    scheduled = api.post(root + "/drafts", headers=operator, json={
+        **model, "starts_at": "2026-12-03", "ends_at": None,
+    }).json()
+    assert scheduled["impact"]["gap"] == {"starts_at": "2026-12-01", "ends_at": "2026-12-03"}
     assert "399" in ask(api, customer, "现在满多少送赠品？")["text"]
     path = root + "/drafts/" + preview["draft"]["id"]
     amended = {**model, "body": "实付满 469 元赠旅行装。\n# 赠品说明\n以订单页为准。"}
     new = api.patch(path, headers=operator, json=amended).json()
     assert api.post(path + "/publish", headers=operator, json={"draft_sha256": preview["draft_sha256"]}).status_code == 409
     published = api.post(path + "/publish", headers=operator, json={"draft_sha256": new["draft_sha256"]}).json()
+    stale = api.get(f"{root}/drafts/{scheduled['draft']['id']}", headers=operator).json()
+    assert not stale["impact"]["publishable"]
     assert api.patch(path, headers=operator, json=model).status_code == 409
     current = ask(api, customer, "现在满多少送赠品？")
     assert current["text"] == amended["body"]
