@@ -109,9 +109,9 @@ function startDraft(rule) {
 
 async function saveDraft() {
   await perform(async () => {
-    const { id, base_rule_id, starts_at, ends_at, body } = editor.value
+    const { id, base_rule_id, starts_at, ends_at, body, draft_sha256 } = editor.value
     preview.value = await request(id ? `/rules/drafts/${id}` : '/rules/drafts', id ? 'patch' : 'post', {
-      base_rule_id, starts_at, ends_at: ends_at || null, body,
+      base_rule_id, starts_at, ends_at: ends_at || null, body, ...(id ? { draft_sha256 } : {}),
     })
     draftQuality.value = null
     editor.value = null
@@ -139,7 +139,8 @@ async function publishRule() {
 
 function editPreview() {
   draftQuality.value = null
-  editor.value = { ...preview.value.draft, title: preview.value.previous.title, ends_at: preview.value.draft.ends_at || '' }
+  editor.value = { ...preview.value.draft, draft_sha256: preview.value.draft_sha256,
+    title: preview.value.previous.title, ends_at: preview.value.draft.ends_at || '' }
 }
 
 async function compareDraft() {

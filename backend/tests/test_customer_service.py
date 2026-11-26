@@ -268,12 +268,15 @@ def test_rule_draft_preview_publish_and_historical_preservation(api):
     assert "399" in ask(api, customer, "现在满多少送赠品？")["text"]
     path = root + "/drafts/" + preview["draft"]["id"]
     amended = {**model, "body": "实付满 469 元赠旅行装。\n# 赠品说明\n以订单页为准。"}
-    new = api.patch(path, headers=operator, json=amended).json()
+    assert api.patch(path, headers=operator, json=amended).status_code == 422
+    new = api.patch(path, headers=operator, json={**amended, "draft_sha256": preview["draft_sha256"]}).json()
+    assert api.patch(path, headers=staff_session(api), json={**model, "draft_sha256": preview["draft_sha256"]}).status_code == 409
+    assert api.get(path, headers=operator).json()["draft"]["body"] == amended["body"]
     assert api.post(path + "/publish", headers=operator, json={"draft_sha256": preview["draft_sha256"]}).status_code == 409
     published = api.post(path + "/publish", headers=operator, json={"draft_sha256": new["draft_sha256"]}).json()
     stale = api.get(f"{root}/drafts/{scheduled['draft']['id']}", headers=operator).json()
     assert not stale["impact"]["publishable"]
-    assert api.patch(path, headers=operator, json=model).status_code == 409
+    assert api.patch(path, headers=operator, json={**model, "draft_sha256": new["draft_sha256"]}).status_code == 409
     current = ask(api, customer, "现在满多少送赠品？")
     assert current["text"] == amended["body"]
     assert current["citation"]["rule_id"] == published["published"]["id"]

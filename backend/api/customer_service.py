@@ -16,6 +16,7 @@ from backend.customer_service import CHANNELS, DEMO_DATE, ORDERS, PRODUCTS, Supp
 router = APIRouter(prefix="/customer-service", tags=["customer-service"])
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 OrderId = Annotated[str, StringConstraints(pattern=r"^DEMO-\d{4}$")]
+DraftHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
 class StartSession(BaseModel):
@@ -53,7 +54,11 @@ class RuleDraft(BaseModel):
 
 
 class PublishRule(BaseModel):
-    draft_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    draft_sha256: DraftHash
+
+
+class EditRuleDraft(RuleDraft):
+    draft_sha256: DraftHash
 
 
 def get_store():
@@ -190,14 +195,15 @@ def save_draft(request: RuleDraft, staff: Staff):
 
 
 @router.patch("/staff/rules/drafts/{draft_id}")
-def edit_draft(draft_id: UUID, request: RuleDraft, staff: Staff):
-    return write_draft(request, staff.store, draft_id.hex)
+def edit_draft(draft_id: UUID, request: EditRuleDraft, staff: Staff):
+    return write_draft(request, staff.store, draft_id.hex, request.draft_sha256)
 
 
-def write_draft(request, store, draft_id=None):
+def write_draft(request, store, draft_id=None, reviewed_hash=None):
     try:
         draft_id = store.save_rule_draft(request.base_rule_id, request.starts_at.isoformat(),
-                                         request.ends_at.isoformat() if request.ends_at else None, request.body, draft_id)
+                                         request.ends_at.isoformat() if request.ends_at else None, request.body,
+                                         draft_id, reviewed_hash=reviewed_hash)
         return store.preview_rule(draft_id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

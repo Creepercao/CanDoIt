@@ -565,7 +565,7 @@ class SupportStore:
             raise ValueError("生效日期须晚于上版开始日期且不早于演示日期，失效日期须晚于生效日期。")
         return base
 
-    def save_rule_draft(self, base_id, starts_at, ends_at, body, draft_id=None):
+    def save_rule_draft(self, base_id, starts_at, ends_at, body, draft_id=None, *, reviewed_hash=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if draft_id:
@@ -574,6 +574,8 @@ class SupportStore:
                     raise LookupError("找不到该规则草稿。")
                 if previous["published_id"] or previous["base_rule_id"] != base_id:
                     raise ValueError("该草稿已发布，或拟更新的规则版本不匹配。")
+                if self._draft_hash(previous) != reviewed_hash:
+                    raise ValueError("草稿已被更新，请从草稿列表重新打开后编辑。")
             self._validate_rule_change(self._rules(db), base_id, starts_at, ends_at)
             if draft_id:
                 db.execute("UPDATE support_rule_drafts SET starts_at = ?, ends_at = ?, body = ? WHERE id = ?",
