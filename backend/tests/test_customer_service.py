@@ -274,6 +274,12 @@ def test_rule_draft_preview_publish_and_historical_preservation(api):
     assert api.get(path, headers=operator).json()["draft"]["body"] == amended["body"]
     assert api.post(path + "/publish", headers=operator, json={"draft_sha256": preview["draft_sha256"]}).status_code == 409
     published = api.post(path + "/publish", headers=operator, json={"draft_sha256": new["draft_sha256"]}).json()
+    lineage = {rule["id"]: rule for rule in api.get(root, headers=operator).json()["versions"]}
+    new_rule_id = published["published"]["id"]
+    assert lineage["gift-nov-old"]["next_id"] == "gift-nov-current"
+    assert lineage["gift-nov-current"]["next_id"] == new_rule_id
+    assert lineage[new_rule_id]["previous_id"] == "gift-nov-current" and lineage[new_rule_id]["replaceable"]
+    assert lineage["gift-live"]["next_id"] is None
     stale = api.get(f"{root}/drafts/{scheduled['draft']['id']}", headers=operator).json()
     assert not stale["impact"]["publishable"]
     assert api.patch(path, headers=operator, json={**model, "draft_sha256": new["draft_sha256"]}).status_code == 409

@@ -541,15 +541,18 @@ class SupportStore:
     def rule_catalog(self):
         with self.connect() as db:
             db.execute("BEGIN")
-            successors = {row["base_rule_id"] for row in db.execute("SELECT base_rule_id FROM support_rule_versions")}
             rules = self._rules(db)
-            # Seed versions already have a later sibling in the same scope.
-            latest_by_scope = {}
+            grouped = {}
             for rule in sorted(rules, key=lambda row: row[5]):
-                latest_by_scope[(rule[1], rule[3], rule[4])] = rule[0]
+                grouped.setdefault((rule[1], rule[3], rule[4]), []).append(rule[0])
+            lineage = {}
+            for versions in grouped.values():
+                for i, rule_id in enumerate(versions):
+                    lineage[rule_id] = {"previous_id": versions[i - 1] if i else None,
+                                        "next_id": versions[i + 1] if i + 1 < len(versions) else None,
+                                        "replaceable": i == len(versions) - 1}
             return {"demo_date": DEMO_DATE.isoformat(),
-                    "versions": [{**self._rule_dict(rule), "replaceable": rule[0] in latest_by_scope.values() and rule[0] not in successors}
-                                 for rule in reversed(rules)],
+                    "versions": [{**self._rule_dict(rule), **lineage[rule[0]]} for rule in reversed(rules)],
                     "drafts": [dict(row) for row in db.execute("SELECT * FROM support_rule_drafts ORDER BY rowid DESC")]}
 
     @staticmethod

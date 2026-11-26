@@ -143,6 +143,14 @@ function editPreview() {
     title: preview.value.previous.title, ends_at: preview.value.draft.ends_at || '' }
 }
 
+function openRuleVersion(id) {
+  const version = document.getElementById(`support-rule-${id}`)
+  if (!version) return
+  version.open = true
+  version.querySelector('summary')?.focus()
+  version.scrollIntoView({ block: 'nearest' })
+}
+
 async function compareDraft() {
   await perform(async () => {
     draftQuality.value = null
@@ -247,11 +255,15 @@ function ruleState(rule) {
       <div v-else-if="tab === 'rules' && catalog" class="split">
         <section class="panel">
           <header><h2>发布记录</h2><span class="hint">{{ catalog.demo_date }}</span></header>
-          <details v-for="rule in catalog.versions" :key="rule.id" class="record">
+          <details v-for="rule in catalog.versions" :id="`support-rule-${rule.id}`" :key="rule.id" class="record">
             <summary>{{ rule.title }} <span class="label">{{ ruleState(rule) }}</span></summary>
             <small>{{ categories[rule.topic] }} · {{ channels[rule.channel] || '全渠道' }} · {{ products[rule.product] || '全商品' }}</small>
             <p>{{ rule.starts_at }} 生效<span v-if="rule.ends_at">，{{ rule.ends_at }} 起失效</span></p>
             <p>{{ rule.body }}</p><code>{{ rule.id }}</code>
+            <div v-if="rule.previous_id || rule.next_id" class="actions">
+              <button v-if="rule.previous_id" @click="openRuleVersion(rule.previous_id)">查看上一版</button>
+              <button v-if="rule.next_id" @click="openRuleVersion(rule.next_id)">查看下一版</button>
+            </div>
             <button v-if="rule.replaceable" class="block-button" :disabled="busy" @click="startDraft(rule)">新建版本草稿</button>
           </details>
         </section>
