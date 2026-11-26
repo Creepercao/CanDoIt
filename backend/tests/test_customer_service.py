@@ -304,6 +304,35 @@ def test_quality_retains_failure_evidence_and_reports_regression(api, monkeypatc
     assert len(api.get(path, headers=operator).json()) == 2
 
 
+def test_draft_quality_previews_live_text_without_publishing_or_calling_model(api, monkeypatch):
+    from backend import customer_quality
+
+    monkeypatch.setenv("SUPPORT_INTENT_MODEL", "configured-but-not-called")
+    original_classify = customer_quality.classify
+
+    def offline_only(query, *, model_name=None):
+        assert model_name == ""
+        return original_classify(query, model_name=model_name)
+
+    monkeypatch.setattr(customer_quality, "classify", offline_only)
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    draft = api.post(root + "/drafts", headers=operator, json={
+        "base_rule_id": "gift-nov-current", "starts_at": "2026-11-23", "body": "实付满 459 元赠旅行装。",
+    }).json()
+    path = f"{root}/drafts/{draft['draft']['id']}"
+    evaluated = api.get(path + "/quality", headers=operator).json()
+    assert evaluated["draft_sha256"] == draft["draft_sha256"]
+    by_id = {item["id"]: item for item in evaluated["changes"]}
+    assert "399" in by_id["current-web"]["current_replies"][-1]["text"]
+    assert "459" in by_id["current-web"]["proposed_replies"][-1]["text"]
+    assert "historical" not in by_id
+    assert api.get(root, headers=operator).json()["drafts"][0]["published_id"] is None
+    assert api.get(PREFIX + "/staff/quality", headers=operator).json() == []
+    published = api.post(path + "/publish", headers=operator, json={"draft_sha256": draft["draft_sha256"]}).json()
+    assert published["published"]["id"] == by_id["current-web"]["proposed_replies"][-1]["citation"]["rule_id"]
+
+
 def test_quality_report_download_preserves_the_selected_run(api, monkeypatch):
     import backend.customer_quality as quality
     operator = staff_session(api)

@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Path as ApiPath, Response
 from pydantic import BaseModel, Field, StringConstraints
 
-from backend.customer_quality import run_quality
+from backend.customer_quality import compare_draft_quality, run_quality
 from backend.customer_quality_report import render_quality_report
 from backend.customer_service import CHANNELS, DEMO_DATE, ORDERS, PRODUCTS, SupportStore, visible_order
 
@@ -222,6 +222,17 @@ def publish_draft(draft_id: UUID, request: PublishRule, staff: Staff):
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/staff/rules/drafts/{draft_id}/quality")
+def preview_draft_quality(draft_id: UUID, staff: Staff):
+    try:
+        current, proposed, draft_hash = staff.store.draft_quality_catalogs(draft_id.hex)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {**compare_draft_quality(current, proposed), "draft_sha256": draft_hash}
 
 
 @router.get("/staff/quality")

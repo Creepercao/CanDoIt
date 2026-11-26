@@ -612,6 +612,21 @@ class SupportStore:
         content = [draft[key] for key in ("id", "base_rule_id", "starts_at", "ends_at", "body")]
         return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode("utf-8")).hexdigest()
 
+    def draft_quality_catalogs(self, draft_id):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            draft = db.execute("SELECT * FROM support_rule_drafts WHERE id = ?", (draft_id,)).fetchone()
+            if draft is None:
+                raise LookupError("找不到该规则草稿。")
+            if draft["published_id"]:
+                raise ValueError("该草稿已发布，无法试算发布前影响。")
+            current = self._rules(db)
+            base = self._validate_rule_change(current, draft["base_rule_id"], draft["starts_at"], draft["ends_at"])
+            previous, candidate = self._replace_rule(base, f"policy-{draft_id}", draft["starts_at"],
+                                                     draft["ends_at"], draft["body"])
+            proposed = tuple(previous if rule[0] == base[0] else rule for rule in current) + (candidate,)
+            return current, proposed, self._draft_hash(draft)
+
     def publish_rule(self, draft_id, reviewed_hash):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -623,7 +638,7 @@ class SupportStore:
             if draft["published_id"]:
                 return draft["published_id"]
             self._validate_rule_change(self._rules(db), draft["base_rule_id"], draft["starts_at"], draft["ends_at"])
-            rule_id = f"policy-{uuid4().hex}"
+            rule_id = f"policy-{draft_id}"
             db.execute("INSERT INTO support_rule_versions VALUES (?, ?, ?, ?, ?)",
                        (rule_id, draft["base_rule_id"], draft["starts_at"], draft["ends_at"], draft["body"]))
             db.execute("UPDATE support_rule_drafts SET published_id = ? WHERE id = ?", (rule_id, draft_id))

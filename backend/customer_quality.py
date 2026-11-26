@@ -22,9 +22,13 @@ def conversation_turn(buyer, query, *args):
     return support_turn(buyer, query, *args, classify(query))
 
 
-def run_quality(rules):
+def offline_turn(buyer, query, *args):
+    return support_turn(buyer, query, *args, classify(query, model_name=""))
+
+
+def run_quality(rules, *, offline=False):
     today = DEMO_DATE.isoformat()
-    model_name = configured_model()
+    model_name = "" if offline else configured_model()
     cases = [
         ("current-web", "政策版本", "a", ["当前活动有什么赠品？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "web"), "date": today}),
         ("current-live", "政策版本", "b", ["直播间赠品门槛是什么？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "live"), "date": today}),
@@ -55,7 +59,7 @@ def run_quality(rules):
         ("missing-foreign", "订单隔离", "a", ["DEMO-2001 的旅行装没收到"], {"kind": "unavailable"}),
         ("missing-mixed", "多项诉求", "a", ["DEMO-1001 物流到哪了？还有赠品是不是漏发了？"], {"kind": "clarify"}),
     ]
-    results, rankings = _evaluate(cases, rules, conversation_turn)
+    results, rankings = _evaluate(cases, rules, offline_turn if offline else conversation_turn)
     baseline, _ = _evaluate(cases, rules, baseline_turn)
     for result, original in zip(results, baseline):
         result["baseline_passed"] = original["passed"]
@@ -73,6 +77,20 @@ def run_quality(rules):
             "case_sha256": case_hash,
             "policy_recall_at_1": citation_metrics["recall@1"],
             "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
+
+
+def compare_draft_quality(current, proposed):
+    before, after = (run_quality(rules, offline=True) for rules in (current, proposed))
+    changes = []
+    for old, new in zip(before["cases"], after["cases"], strict=True):
+        if old["replies"] != new["replies"] or old["passed"] != new["passed"]:
+            changes.append({"id": old["id"], "queries": old["queries"], "current_replies": old["replies"],
+                            "proposed_replies": new["replies"], "current_passed": old["passed"],
+                            "proposed_passed": new["passed"]})
+    return {"demo_date": DEMO_DATE.isoformat(), "total": before["total"], "current_passed": before["passed"],
+            "proposed_passed": after["passed"], "changes": changes,
+            "regressed": [item["id"] for item in changes if item["current_passed"] and not item["proposed_passed"]],
+            "current_catalog_sha256": before["catalog_sha256"], "proposed_catalog_sha256": after["catalog_sha256"]}
 
 
 def _evaluate(cases, rules, turn):
