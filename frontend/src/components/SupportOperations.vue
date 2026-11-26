@@ -13,6 +13,7 @@ const reply = ref('')
 const catalog = ref(null)
 const editor = ref(null)
 const preview = ref(null)
+const draftQuality = ref(null)
 const runs = ref([])
 const report = ref(null)
 const failedOnly = ref(false)
@@ -98,6 +99,7 @@ async function ticketAction(action) {
 
 function startDraft(rule) {
   preview.value = null
+  draftQuality.value = null
   editor.value = {
     base_rule_id: rule.id, title: rule.title, body: rule.body,
     starts_at: catalog.value.demo_date,
@@ -111,6 +113,7 @@ async function saveDraft() {
     preview.value = await request(id ? `/rules/drafts/${id}` : '/rules/drafts', id ? 'patch' : 'post', {
       base_rule_id, starts_at, ends_at: ends_at || null, body,
     })
+    draftQuality.value = null
     editor.value = null
     catalog.value = await request('/rules')
   })
@@ -119,6 +122,7 @@ async function saveDraft() {
 async function loadDraft(id) {
   await perform(async () => {
     preview.value = await request(`/rules/drafts/${id}`)
+    draftQuality.value = null
     editor.value = null
   })
 }
@@ -128,12 +132,26 @@ async function publishRule() {
     preview.value = await request(`/rules/drafts/${preview.value.draft.id}/publish`, 'post', {
       draft_sha256: preview.value.draft_sha256,
     })
+    draftQuality.value = null
     catalog.value = await request('/rules')
   })
 }
 
 function editPreview() {
+  draftQuality.value = null
   editor.value = { ...preview.value.draft, title: preview.value.previous.title, ends_at: preview.value.draft.ends_at || '' }
+}
+
+async function compareDraft() {
+  await perform(async () => {
+    draftQuality.value = null
+    const result = await request(`/rules/drafts/${preview.value.draft.id}/quality`)
+    if (result.draft_sha256 !== preview.value.draft_sha256) {
+      error.value = '草稿已更新，请重新打开草稿后试跑。'
+      return
+    }
+    draftQuality.value = result
+  })
 }
 
 async function runQuality() {
@@ -261,9 +279,23 @@ function ruleState(rule) {
             <p v-else-if="preview.impact?.publishable === false" class="fail" role="status">{{ preview.impact.reason }}</p>
             <div v-if="!preview.published" class="actions">
               <button :disabled="busy || preview.impact?.publishable === false" @click="editPreview">继续编辑</button>
+              <button :disabled="busy || !preview.impact?.publishable" @click="compareDraft">离线试跑草稿</button>
               <button class="primary" :disabled="busy || preview.impact?.publishable === false" @click="publishRule">发布规则版本</button>
             </div>
             <p v-else class="hint" role="status">新版本已发布。</p>
+            <section v-if="draftQuality" class="evidence" aria-label="草稿试跑结果">
+              <p role="status">{{ draftQuality.demo_date }} 规则试跑。现行 {{ draftQuality.current_passed }}/{{ draftQuality.total }}，草稿 {{ draftQuality.proposed_passed }}/{{ draftQuality.total }}。</p>
+              <p v-if="draftQuality.regressed.length" class="fail">新增失败 {{ draftQuality.regressed.length }} 题</p>
+              <p v-if="!draftQuality.changes.length">本组用例的回复没有变化。</p>
+              <details v-for="item in draftQuality.changes" :key="item.id" class="record">
+                <summary>{{ item.queries[0] }} · 草稿{{ item.proposed_passed ? '通过' : '失败' }}</summary>
+                <template v-for="(query, turn) in item.queries" :key="turn">
+                  <p v-if="item.queries.length > 1" class="hint">{{ query }}</p>
+                  <p><strong>现行</strong> {{ item.current_replies[turn].text }}</p>
+                  <p><strong>草稿</strong> {{ item.proposed_replies[turn].text }}</p>
+                </template>
+              </details>
+            </section>
           </div>
           <p v-else class="hint">展开发布记录中的规则，可为最新版本建立草稿。</p>
           <button v-for="item in catalog.drafts" :key="item.id" class="queue-row" :disabled="busy" @click="loadDraft(item.id)">
