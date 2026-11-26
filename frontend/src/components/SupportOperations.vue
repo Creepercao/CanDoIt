@@ -252,9 +252,16 @@ function ruleState(rule) {
             <div class="evidence"><strong>新版本</strong><p>{{ preview.draft.body }}</p>
               <small>{{ preview.draft.starts_at }} 生效<span v-if="preview.draft.ends_at">，{{ preview.draft.ends_at }} 起失效</span></small>
             </div>
+            <div v-if="preview.impact?.publishable" class="evidence" aria-label="生效时间">
+              <p>发布后，上一版在 {{ preview.impact.old_ends_at }} 起失效，新版在 {{ preview.impact.new_starts_at }} 生效。</p>
+              <p v-if="preview.impact.gap" class="fail" role="status">
+                {{ preview.impact.gap.starts_at }} 起至 {{ preview.impact.gap.ends_at }} 生效前没有适用规则，相关咨询会转人工。
+              </p>
+            </div>
+            <p v-else-if="preview.impact?.publishable === false" class="fail" role="status">{{ preview.impact.reason }}</p>
             <div v-if="!preview.published" class="actions">
-              <button :disabled="busy" @click="editPreview">继续编辑</button>
-              <button class="primary" :disabled="busy" @click="publishRule">发布规则版本</button>
+              <button :disabled="busy || preview.impact?.publishable === false" @click="editPreview">继续编辑</button>
+              <button class="primary" :disabled="busy || preview.impact?.publishable === false" @click="publishRule">发布规则版本</button>
             </div>
             <p v-else class="hint" role="status">新版本已发布。</p>
           </div>
