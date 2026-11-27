@@ -380,6 +380,26 @@ def test_scheduled_draft_quality_checks_at_start_and_exclusive_end(api):
     assert expired["changes"] == []
 
 
+def test_draft_quality_reports_lost_rule_coverage_even_when_both_paths_pass(api):
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    draft = api.post(root + "/drafts", headers=operator, json={
+        "base_rule_id": "gift-nov-current", "starts_at": "2026-11-24", "ends_at": "2026-11-25",
+        "body": "实付满 469 元赠旅行装。",
+    }).json()
+    path = f"{root}/drafts/{draft['draft']['id']}/quality"
+    active = api.get(path, headers=operator, params={"as_of": "2026-11-24"}).json()
+    assert active["coverage_lost"] == []
+
+    expired = api.get(path, headers=operator, params={"as_of": "2026-11-25"}).json()
+    assert set(expired["coverage_lost"]) == {"current-web", "current-web-spoken"}
+    assert not expired["regressed"]
+    case = next(item for item in expired["changes"] if item["id"] == "current-web")
+    assert case["current_passed"] and case["proposed_passed"]
+    assert case["current_replies"][-1]["kind"] == "policy"
+    assert case["proposed_replies"][-1]["kind"] == "handoff"
+
+
 def test_quality_report_download_preserves_the_selected_run(api, monkeypatch):
     import backend.customer_quality as quality
     operator = staff_session(api)

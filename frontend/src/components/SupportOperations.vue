@@ -315,9 +315,12 @@ function ruleState(rule) {
             <section v-if="draftQuality" class="evidence" aria-label="草稿试跑结果">
               <p role="status">{{ draftQuality.evaluation_date }} 规则试跑。现行 {{ draftQuality.current_passed }}/{{ draftQuality.total }}，草稿 {{ draftQuality.proposed_passed }}/{{ draftQuality.total }}。</p>
               <p v-if="draftQuality.regressed.length" class="fail">新增失败 {{ draftQuality.regressed.length }} 题</p>
+              <p v-if="draftQuality.coverage_lost?.length" class="fail">规则空档需转人工 {{ draftQuality.coverage_lost.length }} 题</p>
               <p v-if="!draftQuality.changes.length">本组用例的回复没有变化。</p>
               <details v-for="item in draftQuality.changes" :key="item.id" class="record">
-                <summary>{{ item.queries[0] }} · 草稿{{ item.proposed_passed ? '通过' : '失败' }}</summary>
+                <summary>{{ item.queries[0] }} · 草稿{{ item.proposed_passed ? '通过' : '失败' }}
+                  <span v-if="item.coverage_lost"> · 规则空档</span>
+                </summary>
                 <template v-for="(query, turn) in item.queries" :key="turn">
                   <p v-if="item.queries.length > 1" class="hint">{{ query }}</p>
                   <p><strong>现行</strong> {{ item.current_replies[turn].text }}</p>
