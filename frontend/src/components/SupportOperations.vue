@@ -14,6 +14,7 @@ const catalog = ref(null)
 const editor = ref(null)
 const preview = ref(null)
 const draftQuality = ref(null)
+const draftEvaluationDate = ref('')
 const runs = ref([])
 const report = ref(null)
 const failedOnly = ref(false)
@@ -113,7 +114,7 @@ async function saveDraft() {
     preview.value = await request(id ? `/rules/drafts/${id}` : '/rules/drafts', id ? 'patch' : 'post', {
       base_rule_id, starts_at, ends_at: ends_at || null, body, ...(id ? { draft_sha256 } : {}),
     })
-    draftQuality.value = null
+    selectDraftDate(preview.value.draft.starts_at)
     editor.value = null
     catalog.value = await request('/rules')
   })
@@ -122,7 +123,7 @@ async function saveDraft() {
 async function loadDraft(id) {
   await perform(async () => {
     preview.value = await request(`/rules/drafts/${id}`)
-    draftQuality.value = null
+    selectDraftDate(preview.value.draft.starts_at)
     editor.value = null
   })
 }
@@ -154,13 +155,19 @@ function openRuleVersion(id) {
 async function compareDraft() {
   await perform(async () => {
     draftQuality.value = null
-    const result = await request(`/rules/drafts/${preview.value.draft.id}/quality`)
+    const params = new URLSearchParams({ as_of: draftEvaluationDate.value })
+    const result = await request(`/rules/drafts/${preview.value.draft.id}/quality?${params}`)
     if (result.draft_sha256 !== preview.value.draft_sha256) {
       error.value = '草稿已更新，请重新打开草稿后试跑。'
       return
     }
     draftQuality.value = result
   })
+}
+
+function selectDraftDate(value) {
+  draftEvaluationDate.value = value
+  draftQuality.value = null
 }
 
 async function runQuality() {
@@ -290,14 +297,23 @@ function ruleState(rule) {
               </p>
             </div>
             <p v-else-if="preview.impact?.publishable === false" class="fail" role="status">{{ preview.impact.reason }}</p>
+            <div v-if="preview.impact?.publishable" class="evidence">
+              <label>试跑日期<input :value="draftEvaluationDate" type="date" :disabled="busy"
+                @input="selectDraftDate($event.target.value)" /></label>
+              <div class="actions">
+                <button :disabled="busy" @click="selectDraftDate(catalog.demo_date)">演示日期</button>
+                <button :disabled="busy" @click="selectDraftDate(preview.draft.starts_at)">生效日</button>
+                <button v-if="preview.draft.ends_at" :disabled="busy" @click="selectDraftDate(preview.draft.ends_at)">失效日</button>
+              </div>
+            </div>
             <div v-if="!preview.published" class="actions">
               <button :disabled="busy || preview.impact?.publishable === false" @click="editPreview">继续编辑</button>
-              <button :disabled="busy || !preview.impact?.publishable" @click="compareDraft">离线试跑草稿</button>
+              <button :disabled="busy || !preview.impact?.publishable || !draftEvaluationDate" @click="compareDraft">离线试跑草稿</button>
               <button class="primary" :disabled="busy || preview.impact?.publishable === false" @click="publishRule">发布规则版本</button>
             </div>
             <p v-else class="hint" role="status">新版本已发布。</p>
             <section v-if="draftQuality" class="evidence" aria-label="草稿试跑结果">
-              <p role="status">{{ draftQuality.demo_date }} 规则试跑。现行 {{ draftQuality.current_passed }}/{{ draftQuality.total }}，草稿 {{ draftQuality.proposed_passed }}/{{ draftQuality.total }}。</p>
+              <p role="status">{{ draftQuality.evaluation_date }} 规则试跑。现行 {{ draftQuality.current_passed }}/{{ draftQuality.total }}，草稿 {{ draftQuality.proposed_passed }}/{{ draftQuality.total }}。</p>
               <p v-if="draftQuality.regressed.length" class="fail">新增失败 {{ draftQuality.regressed.length }} 题</p>
               <p v-if="!draftQuality.changes.length">本组用例的回复没有变化。</p>
               <details v-for="item in draftQuality.changes" :key="item.id" class="record">
