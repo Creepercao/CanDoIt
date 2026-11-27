@@ -84,7 +84,7 @@ def _rule_view(rules):
     return HierarchyView(records)
 
 
-def answer_message(buyer, message, product, channel, *, rules=RULES):
+def answer_message(buyer, message, product, channel, *, rules=RULES, as_of=DEMO_DATE):
     text = unicodedata.normalize("NFKC", message).strip()
     identifiers = list(dict.fromkeys(ORDER_PATTERN.findall(text.upper())))
     if len(identifiers) > 1:
@@ -115,7 +115,7 @@ def answer_message(buyer, message, product, channel, *, rules=RULES):
         return {"kind": "clarify", "text": "我可以帮你查活动赠品、商品规格、退换规则或订单物流。也可以输入“转人工”。"}
 
     topic = topics[0]
-    effective_date = order["purchased"] if historical else DEMO_DATE.isoformat()
+    effective_date = order["purchased"] if historical else as_of.isoformat()
     mentioned_products = [key for key, name in PRODUCTS.items() if name in text]
     mentioned_channels = [key for key, name in CHANNELS.items() if name in text]
     if len(mentioned_products) > 1 or len(mentioned_channels) > 1:
@@ -158,7 +158,7 @@ def has_mixed_shipping_and_returns(text):
             and any(RETURN_SIGNAL.search(part) for part in parts))
 
 
-def conversation_turn(buyer, message, product, channel, state, rules, after_sales):
+def conversation_turn(buyer, message, product, channel, state, rules, after_sales, *, as_of=DEMO_DATE):
     """Resolve carried order/question context without trusting client-side IDs."""
     text = unicodedata.normalize("NFKC", message).strip()
     identifiers = list(dict.fromkeys(ORDER_PATTERN.findall(text.upper())))
@@ -186,7 +186,7 @@ def conversation_turn(buyer, message, product, channel, state, rules, after_sale
                 f"订单 {last_order} 的售后状态为{AFTER_SALE_LABELS[item['status']]}。" if item else
                 f"订单 {last_order} 暂无售后申请。"), "after_sale": item}
     else:
-        reply = answer_message(buyer, request, product, channel, rules=rules)
+        reply = answer_message(buyer, request, product, channel, rules=rules, as_of=as_of)
 
     next_state = {"order_id": last_order}
     if reply["kind"] == "clarify" and reply["text"] == "请在问题中带上你的模拟订单号。":
@@ -203,10 +203,10 @@ INTENT_HINTS = {
 GIFT_CHECKS = ["订单实付金额", "赠品出库记录"]
 
 
-def support_turn(buyer, message, product, channel, state, rules, after_sales, classification):
+def support_turn(buyer, message, product, channel, state, rules, after_sales, classification, *, as_of=DEMO_DATE):
     label, source = classification
     args = (product, channel, state, rules, after_sales)
-    reply, next_state = conversation_turn(buyer, message, *args)
+    reply, next_state = conversation_turn(buyer, message, *args, as_of=as_of)
     text = unicodedata.normalize("NFKC", message).strip()
     ids = list(dict.fromkeys(ORDER_PATTERN.findall(text.upper())))
     order_only = ORDER_PATTERN.fullmatch(text.upper().rstrip("。？！?!"))
@@ -245,7 +245,7 @@ def support_turn(buyer, message, product, channel, state, rules, after_sales, cl
         else:
             # Keep explicit scope in the question so conflicting channels still require clarification.
             scope = " ".join(name for name in (*PRODUCTS.values(), *CHANNELS.values()) if name in query)
-            reply = answer_message(buyer, f"{order_id} {scope} 下单时赠品", product, channel, rules=rules)
+            reply = answer_message(buyer, f"{order_id} {scope} 下单时赠品", product, channel, rules=rules, as_of=as_of)
             if reply["kind"] == "policy":
                 reply.update(kind="gift_review", order_id=order_id, checks=list(GIFT_CHECKS),
                              issue=query, text=f"你下单时的规则是：{reply['citation']['excerpt']} "
@@ -254,7 +254,7 @@ def support_turn(buyer, message, product, channel, state, rules, after_sales, cl
         request = f"{text} {INTENT_HINTS[label]}"
         if not ids and state.get("order_id") and label in ("shipping", "progress", "past_gift", "returns"):
             request += f" {state['order_id']}"
-        reply, next_state = conversation_turn(buyer, request, *args)
+        reply, next_state = conversation_turn(buyer, request, *args, as_of=as_of)
     return {**reply, "intent_source": source}, next_state
 
 

@@ -111,6 +111,25 @@ def test_policy_uses_effective_versions_and_own_order_scope(api):
     assert "100 毫升" in ask(api, headers, "氨基酸洁面的规格？")["text"]
 
 
+def test_simulated_policy_date_flows_through_intent_routing_without_changing_order_date():
+    from datetime import date
+    from backend.customer_service import RULES, support_turn
+
+    def ask_at(query, label, as_of):
+        reply, _ = support_turn("a", query, "cream", "web", {}, RULES, {},
+                                (label, "model"), as_of=as_of)
+        return reply
+
+    revised = ask_at("现在有什么福利？", "gift", date(2026, 11, 15))
+    assert revised["citation"]["rule_id"] == "gift-nov-current"
+    assert revised["citation"]["effective_date"] == "2026-11-15"
+    assert ask_at("现在有什么福利？", "gift", date(2026, 12, 1))["kind"] == "handoff"
+    historical = ask_at("DEMO-1001 旅行装没收到", "missing_gift", date(2026, 12, 1))
+    assert historical["kind"] == "gift_review"
+    assert historical["citation"]["rule_id"] == "gift-nov-old"
+    assert historical["citation"]["effective_date"] == "2026-11-02"
+
+
 def test_order_lookup_does_not_reveal_another_buyer_order(api):
     a, data = session(api)
     b, _ = session(api, "b")
