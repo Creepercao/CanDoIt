@@ -21,6 +21,7 @@ def render_quality_report(report):
         *_table(["项目", "结果"], [
             ("运行编号", report["id"]),
             ("评估时间（UTC）", report["created_at"]),
+            ("规则模拟日期", report.get("evaluation_date", "旧版未记录")),
             ("规则目录 SHA-256", report["catalog_sha256"]),
             ("用例 SHA-256", report.get("case_sha256", "旧版未记录")),
             ("模型配置", (report["intent_model"] or "本地规则") if "intent_model" in report else "旧版未记录"),

@@ -319,10 +319,10 @@ def test_quality_retains_failure_evidence_and_reports_regression(api, monkeypatc
     path = PREFIX + "/staff/quality"
     good = api.post(path, headers=operator).json()
     original = quality.conversation_turn
-    def regress(buyer, message, *args):
+    def regress(buyer, message, *args, **kwargs):
         if message.startswith("DEMO-1001 下单时"):
             return {"kind": "clarify", "text": "演示规则缺失"}, {}
-        return original(buyer, message, *args)
+        return original(buyer, message, *args, **kwargs)
     monkeypatch.setattr(quality, "conversation_turn", regress)
     bad = api.post(path, headers=operator).json()
     assert bad["passed"] == good["passed"] - 1
@@ -368,8 +368,8 @@ def test_quality_report_download_preserves_the_selected_run(api, monkeypatch):
     first = api.post(path, headers=operator).json()
     original = quality.conversation_turn
 
-    def bad_historical_amount(buyer, message, *args):
-        answer, state = original(buyer, message, *args)
+    def bad_historical_amount(buyer, message, *args, **kwargs):
+        answer, state = original(buyer, message, *args, **kwargs)
         if message.startswith("DEMO-1001 下单时"):
             answer["text"] = "实付满 1299 元 | 错误示例"
         return answer, state

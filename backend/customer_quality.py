@@ -12,29 +12,28 @@ from backend.tools.retrieval_eval import evaluate
 HISTORICAL_GIFT_TEXT = "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。"
 
 
-def _current_rule(rules, topic, channel):
-    today = DEMO_DATE.isoformat()
+def _current_rule(rules, topic, channel, today):
     return next((rule for rule in rules if (rule[1], rule[3], rule[4]) == (topic, channel, None)
                  and rule[5] <= today and (rule[6] is None or today < rule[6])), None)
 
 
-def conversation_turn(buyer, query, *args):
-    return support_turn(buyer, query, *args, classify(query))
+def conversation_turn(buyer, query, *args, as_of=DEMO_DATE):
+    return support_turn(buyer, query, *args, classify(query), as_of=as_of)
 
 
-def offline_turn(buyer, query, *args):
-    return support_turn(buyer, query, *args, classify(query, model_name=""))
+def offline_turn(buyer, query, *args, as_of=DEMO_DATE):
+    return support_turn(buyer, query, *args, classify(query, model_name=""), as_of=as_of)
 
 
-def run_quality(rules, *, offline=False):
-    today = DEMO_DATE.isoformat()
+def run_quality(rules, *, offline=False, as_of=DEMO_DATE):
+    today = as_of.isoformat()
     model_name = "" if offline else configured_model()
     cases = [
-        ("current-web", "政策版本", "a", ["当前活动有什么赠品？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "web"), "date": today}),
-        ("current-live", "政策版本", "b", ["直播间赠品门槛是什么？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "live"), "date": today}),
+        ("current-web", "政策版本", "a", ["当前活动有什么赠品？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "web", today), "date": today}),
+        ("current-live", "政策版本", "b", ["直播间赠品门槛是什么？"], {"kind": "policy", "rule": _current_rule(rules, "gift", "live", today), "date": today}),
         ("historical", "政策版本", "a", ["DEMO-1001 下单时有什么赠品规则？"], {"kind": "policy", "rule_id": "gift-nov-old", "text": HISTORICAL_GIFT_TEXT, "date": "2026-11-02"}),
         ("clarify-order", "多轮对话", "a", ["什么时候发货？", "DEMO-1002"], {"kind": "order", "order_id": "DEMO-1002", "text": "待发货", "first_kind": "clarify"}),
-        ("follow-up", "多轮对话", "b", ["DEMO-2001 物流到哪了？", "那能退吗？"], {"kind": "policy", "rule": _current_rule(rules, "returns", "live"), "date": today, "first_kind": "order"}),
+        ("follow-up", "多轮对话", "b", ["DEMO-2001 物流到哪了？", "那能退吗？"], {"kind": "policy", "rule": _current_rule(rules, "returns", "live", today), "date": today, "first_kind": "order"}),
         ("foreign-order", "订单隔离", "a", ["DEMO-2001 的物流"], {"kind": "unavailable"}),
         ("foreign-history", "订单隔离", "a", ["DEMO-2001 下单时的赠品规则"], {"kind": "unavailable"}),
         ("handoff", "人工交接", "a", ["使用后感觉不适，想转人工"], {"kind": "handoff"}),
@@ -59,8 +58,8 @@ def run_quality(rules, *, offline=False):
         ("missing-foreign", "订单隔离", "a", ["DEMO-2001 的旅行装没收到"], {"kind": "unavailable"}),
         ("missing-mixed", "多项诉求", "a", ["DEMO-1001 物流到哪了？还有赠品是不是漏发了？"], {"kind": "clarify"}),
     ]
-    results, rankings = _evaluate(cases, rules, offline_turn if offline else conversation_turn)
-    baseline, _ = _evaluate(cases, rules, baseline_turn)
+    results, rankings = _evaluate(cases, rules, offline_turn if offline else conversation_turn, as_of)
+    baseline, _ = _evaluate(cases, rules, baseline_turn, as_of)
     for result, original in zip(results, baseline):
         result["baseline_passed"] = original["passed"]
         result["baseline_replies"] = original["replies"]
@@ -74,7 +73,7 @@ def run_quality(rules, *, offline=False):
     return {"total": len(results), "passed": sum(item["passed"] for item in results), "cases": results,
             "baseline_passed": sum(item["passed"] for item in baseline),
             "model_turns": sources["model"], "intent_sources": dict(sources), "intent_model": model_name,
-            "case_sha256": case_hash,
+            "case_sha256": case_hash, "evaluation_date": today,
             "policy_recall_at_1": citation_metrics["recall@1"],
             "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
 
@@ -93,13 +92,13 @@ def compare_draft_quality(current, proposed):
             "current_catalog_sha256": before["catalog_sha256"], "proposed_catalog_sha256": after["catalog_sha256"]}
 
 
-def _evaluate(cases, rules, turn):
+def _evaluate(cases, rules, turn, as_of):
     results, rankings = [], []
     for identifier, category, buyer, queries, checks in cases:
         state, replies = {}, []
         after_sales = {"DEMO-1001": {"status": "reviewing"}} if category == "售后追踪" else {}
         for query in queries:
-            response, state = turn(buyer, query, "cream", "web", state, rules, after_sales)
+            response, state = turn(buyer, query, "cream", "web", state, rules, after_sales, as_of=as_of)
             replies.append(response)
         actual = replies[-1]
         citation = actual.get("citation", {})
