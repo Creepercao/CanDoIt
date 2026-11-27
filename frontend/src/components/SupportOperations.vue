@@ -297,7 +297,7 @@ function ruleState(rule) {
               </p>
             </div>
             <p v-else-if="preview.impact?.publishable === false" class="fail" role="status">{{ preview.impact.reason }}</p>
-            <div v-if="preview.impact?.publishable" class="evidence">
+            <div v-if="!preview.published && preview.impact?.publishable" class="evidence">
               <label>试跑日期<input :value="draftEvaluationDate" type="date" :disabled="busy"
                 @input="selectDraftDate($event.target.value)" /></label>
               <div class="actions">
@@ -323,8 +323,13 @@ function ruleState(rule) {
                 </summary>
                 <template v-for="(query, turn) in item.queries" :key="turn">
                   <p v-if="item.queries.length > 1" class="hint">{{ query }}</p>
-                  <p><strong>现行</strong> {{ item.current_replies[turn].text }}</p>
-                  <p><strong>草稿</strong> {{ item.proposed_replies[turn].text }}</p>
+                  <template v-for="[label, reply] in [['现行', item.current_replies[turn]], ['草稿', item.proposed_replies[turn]]]" :key="label">
+                    <p><strong>{{ label }}</strong> {{ reply.text }}</p>
+                    <p v-if="reply.citation" class="hint">
+                      规则 {{ reply.citation.rule_id }} · 核对日期 {{ reply.citation.effective_date }}
+                      · {{ reply.citation.start }} 生效<span v-if="reply.citation.end">，{{ reply.citation.end }} 起失效</span>
+                    </p>
+                  </template>
                 </template>
               </details>
             </section>
