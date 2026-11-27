@@ -231,14 +231,14 @@ def publish_draft(draft_id: UUID, request: PublishRule, staff: Staff):
 
 
 @router.get("/staff/rules/drafts/{draft_id}/quality")
-def preview_draft_quality(draft_id: UUID, staff: Staff):
+def preview_draft_quality(draft_id: UUID, staff: Staff, as_of: date = DEMO_DATE):
     try:
         current, proposed, draft_hash = staff.store.draft_quality_catalogs(draft_id.hex)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return {**compare_draft_quality(current, proposed), "draft_sha256": draft_hash}
+    return {**compare_draft_quality(current, proposed, as_of=as_of), "draft_sha256": draft_hash}
 
 
 @router.get("/staff/quality")

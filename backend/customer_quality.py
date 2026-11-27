@@ -78,15 +78,16 @@ def run_quality(rules, *, offline=False, as_of=DEMO_DATE):
             "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
 
 
-def compare_draft_quality(current, proposed):
-    before, after = (run_quality(rules, offline=True) for rules in (current, proposed))
+def compare_draft_quality(current, proposed, *, as_of=DEMO_DATE):
+    before, after = (run_quality(rules, offline=True, as_of=as_of) for rules in (current, proposed))
     changes = []
     for old, new in zip(before["cases"], after["cases"], strict=True):
         if old["replies"] != new["replies"] or old["passed"] != new["passed"]:
             changes.append({"id": old["id"], "queries": old["queries"], "current_replies": old["replies"],
                             "proposed_replies": new["replies"], "current_passed": old["passed"],
                             "proposed_passed": new["passed"]})
-    return {"demo_date": DEMO_DATE.isoformat(), "total": before["total"], "current_passed": before["passed"],
+    return {"demo_date": DEMO_DATE.isoformat(), "evaluation_date": as_of.isoformat(),
+            "total": before["total"], "current_passed": before["passed"],
             "proposed_passed": after["passed"], "changes": changes,
             "regressed": [item["id"] for item in changes if item["current_passed"] and not item["proposed_passed"]],
             "current_catalog_sha256": before["catalog_sha256"], "proposed_catalog_sha256": after["catalog_sha256"]}

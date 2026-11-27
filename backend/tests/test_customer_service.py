@@ -361,6 +361,25 @@ def test_draft_quality_previews_live_text_without_publishing_or_calling_model(ap
     assert published["published"]["id"] == by_id["current-web"]["proposed_replies"][-1]["citation"]["rule_id"]
 
 
+def test_scheduled_draft_quality_checks_at_start_and_exclusive_end(api):
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    draft = api.post(root + "/drafts", headers=operator, json={
+        "base_rule_id": "gift-nov-current", "starts_at": "2026-12-03", "ends_at": "2026-12-08",
+        "body": "实付满 469 元赠旅行装。",
+    }).json()
+    path = f"{root}/drafts/{draft['draft']['id']}/quality"
+    assert api.get(path, headers=operator).json()["changes"] == []
+    assert api.get(path, headers=operator, params={"as_of": "2026-12-32"}).status_code == 422
+    active = api.get(path, headers=operator, params={"as_of": "2026-12-03"}).json()
+    campaign = next(item for item in active["changes"] if item["id"] == "current-web")
+    assert active["evaluation_date"] == "2026-12-03"
+    assert campaign["current_replies"][-1]["kind"] == "handoff"
+    assert "469" in campaign["proposed_replies"][-1]["text"]
+    expired = api.get(path, headers=operator, params={"as_of": "2026-12-08"}).json()
+    assert expired["changes"] == []
+
+
 def test_quality_report_download_preserves_the_selected_run(api, monkeypatch):
     import backend.customer_quality as quality
     operator = staff_session(api)
