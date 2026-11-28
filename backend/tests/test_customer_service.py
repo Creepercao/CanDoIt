@@ -414,6 +414,39 @@ def test_draft_boundary_quality_uses_one_snapshot_and_is_read_only(api, monkeypa
     assert api.get(PREFIX + "/staff/quality", headers=operator).json() == []
 
 
+def test_boundary_report_exports_reviewed_result_and_rejects_a_new_catalog(api):
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules/drafts"
+    model = {"base_rule_id": "gift-nov-current", "starts_at": "2026-11-24", "ends_at": "2026-11-25",
+             "body": "实付满 469 元赠旅行装。\n以 | 订单页为准。"}
+    draft = api.post(root, headers=operator, json=model).json()
+    path = f"{root}/{draft['draft']['id']}/quality/boundaries"
+    review = api.get(path, headers=operator).json()
+    report_path = path + "/report"
+    params = {"review_sha256": review["review_sha256"]}
+    assert api.get(report_path, params=params).status_code == 401
+    report = api.get(report_path, params=params, headers=operator)
+    assert report.status_code == 200
+    assert "text/markdown" in report.headers["Content-Type"]
+    assert report.headers["Cache-Control"] == "no-store"
+    assert f"customer-draft-{draft['draft']['id']}.md" in report.headers["Content-Disposition"]
+    assert review["review_sha256"] in report.text and review["draft_sha256"] in report.text
+    assert "现行版原定失效日" in report.text
+    assert "current-web · 规则空档" in report.text
+    assert "实付满 469 元赠旅行装。<br>以 &#124; 订单页为准。" in report.text
+
+    other = api.post(root, headers=operator, json={**model, "base_rule_id": "gift-live"}).json()
+    response = api.post(f"{root}/{other['draft']['id']}/publish", headers=operator,
+                        json={"draft_sha256": other["draft_sha256"]})
+    assert response.status_code == 200
+    assert api.get(report_path, params=params, headers=operator).status_code == 409
+    updated = api.get(path, headers=operator).json()
+    assert updated["draft_sha256"] == review["draft_sha256"]
+    assert updated["review_sha256"] != review["review_sha256"]
+    assert api.get(report_path, params={"review_sha256": updated["review_sha256"]},
+                   headers=operator).status_code == 200
+
+
 @pytest.mark.parametrize(("base", "case_id", "body"), [
     ("returns-web", "returns-web", "请在订单详情页登记退换，并注明拆封状态。"),
     ("cream-info", "product-cream", "舒缓面霜规格为 60 克。"),

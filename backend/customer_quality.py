@@ -106,6 +106,14 @@ def draft_boundary_dates(base_end, cutoff, starts_at, ends_at):
     return sorted(dates.items())
 
 
+def review_draft_boundaries(current, proposed, draft_hash, window):
+    checks = [{"markers": markers, **compare_draft_quality(current, proposed, as_of=day)}
+              for day, markers in draft_boundary_dates(**window)]
+    result = {"draft_sha256": draft_hash, "marker_labels": BOUNDARY_MARKERS, "checks": checks}
+    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {**result, "review_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest()}
+
+
 def compare_draft_quality(current, proposed, *, as_of=DEMO_DATE):
     before, after = (run_quality(rules, offline=True, as_of=as_of) for rules in (current, proposed))
     changes = []

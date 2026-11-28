@@ -9,8 +9,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Path as ApiPath, Response
 from pydantic import BaseModel, Field, StringConstraints
 
-from backend.customer_quality import BOUNDARY_MARKERS, compare_draft_quality, draft_boundary_dates, run_quality
-from backend.customer_quality_report import render_quality_report
+from backend.customer_quality import compare_draft_quality, review_draft_boundaries, run_quality
+from backend.customer_quality_report import render_boundary_report, render_quality_report
 from backend.customer_service import CHANNELS, DEMO_DATE, ORDERS, PRODUCTS, SupportStore, visible_order
 
 router = APIRouter(prefix="/customer-service", tags=["customer-service"])
@@ -247,10 +247,15 @@ def preview_draft_quality(draft_id: UUID, staff: Staff, as_of: date = DEMO_DATE)
 
 @router.get("/staff/rules/drafts/{draft_id}/quality/boundaries")
 def preview_draft_boundaries(draft_id: UUID, staff: Staff):
-    current, proposed, draft_hash, window = draft_quality_snapshot(draft_id, staff)
-    checks = [{"markers": markers, **compare_draft_quality(current, proposed, as_of=day)}
-              for day, markers in draft_boundary_dates(**window)]
-    return {"draft_sha256": draft_hash, "marker_labels": BOUNDARY_MARKERS, "checks": checks}
+    return review_draft_boundaries(*draft_quality_snapshot(draft_id, staff))
+
+
+@router.get("/staff/rules/drafts/{draft_id}/quality/boundaries/report")
+def export_draft_boundary_report(draft_id: UUID, staff: Staff, review_sha256: DraftHash):
+    result = review_draft_boundaries(*draft_quality_snapshot(draft_id, staff))
+    if result["review_sha256"] != review_sha256:
+        raise HTTPException(409, "规则或试跑结果已更新，请重新试跑全部关键日期。")
+    return markdown_download(render_boundary_report(result), f"customer-draft-{draft_id.hex}.md")
 
 
 @router.get("/staff/quality")
@@ -268,7 +273,11 @@ def export_regression_report(run_id: Annotated[int, ApiPath(ge=1, le=2**63 - 1)]
     report = staff.store.get_quality_run(run_id)
     if report is None:
         raise HTTPException(404, "找不到该次评估。")
-    return Response(render_quality_report(report), media_type="text/markdown", headers={
+    return markdown_download(render_quality_report(report), f"customer-quality-{run_id}.md")
+
+
+def markdown_download(content, filename):
+    return Response(content, media_type="text/markdown", headers={
         "Cache-Control": "no-store",
-        "Content-Disposition": f'attachment; filename="customer-quality-{run_id}.md"',
+        "Content-Disposition": f'attachment; filename="{filename}"',
     })
