@@ -380,6 +380,40 @@ def test_scheduled_draft_quality_checks_at_start_and_exclusive_end(api):
     assert expired["changes"] == []
 
 
+def test_draft_boundary_quality_uses_one_snapshot_and_is_read_only(api, monkeypatch):
+    from backend import customer_quality
+
+    def offline_only(query, *, model_name=None):
+        assert model_name == ""
+        return classify(query, model_name=model_name)
+
+    classify = customer_quality.classify
+    monkeypatch.setenv("SUPPORT_INTENT_MODEL", "configured-but-not-called")
+    monkeypatch.setattr(customer_quality, "classify", offline_only)
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    draft = api.post(root + "/drafts", headers=operator, json={
+        "base_rule_id": "gift-nov-current", "starts_at": "2026-12-03", "ends_at": "2026-12-04",
+        "body": "实付满 469 元赠旅行装。",
+    }).json()
+    path = f"{root}/drafts/{draft['draft']['id']}/quality/boundaries"
+    assert api.get(path).status_code == 401
+    result = api.get(path, headers=operator).json()
+    assert result["draft_sha256"] == draft["draft_sha256"]
+    assert [item["evaluation_date"] for item in result["checks"]] == [
+        "2026-12-01", "2026-12-02", "2026-12-03", "2026-12-04",
+    ]
+    before, _, active, expired = result["checks"]
+    assert set(before["markers"]) == {"base_cutoff", "base_expires"}
+    assert set(active["markers"]) == {"starts", "last_active"}
+    assert any("469" in item["proposed_replies"][-1]["text"] for item in active["changes"])
+    assert expired["changes"] == []
+    assert len({item["current_catalog_sha256"] for item in result["checks"]}) == 1
+    assert len({item["proposed_catalog_sha256"] for item in result["checks"]}) == 1
+    assert api.get(root, headers=operator).json()["drafts"][0]["published_id"] is None
+    assert api.get(PREFIX + "/staff/quality", headers=operator).json() == []
+
+
 def test_draft_quality_reports_lost_rule_coverage_even_when_both_paths_pass(api):
     operator = staff_session(api)
     root = PREFIX + "/staff/rules"

@@ -630,7 +630,9 @@ class SupportStore:
             previous, candidate = self._replace_rule(base, f"policy-{draft_id}", draft["starts_at"],
                                                      draft["ends_at"], draft["body"])
             proposed = tuple(previous if rule[0] == base[0] else rule for rule in current) + (candidate,)
-            return current, proposed, self._draft_hash(draft)
+            window = {"base_end": base[6], "cutoff": previous[6],
+                      "starts_at": candidate[5], "ends_at": candidate[6]}
+            return current, proposed, self._draft_hash(draft), window
 
     def publish_rule(self, draft_id, reviewed_hash):
         with self.connect() as db:

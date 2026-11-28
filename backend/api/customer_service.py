@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Path as ApiPath, Response
 from pydantic import BaseModel, Field, StringConstraints
 
-from backend.customer_quality import compare_draft_quality, run_quality
+from backend.customer_quality import compare_draft_quality, draft_boundary_dates, run_quality
 from backend.customer_quality_report import render_quality_report
 from backend.customer_service import CHANNELS, DEMO_DATE, ORDERS, PRODUCTS, SupportStore, visible_order
 
@@ -230,15 +230,27 @@ def publish_draft(draft_id: UUID, request: PublishRule, staff: Staff):
         raise HTTPException(409, str(exc)) from exc
 
 
-@router.get("/staff/rules/drafts/{draft_id}/quality")
-def preview_draft_quality(draft_id: UUID, staff: Staff, as_of: date = DEMO_DATE):
+def draft_quality_snapshot(draft_id, staff):
     try:
-        current, proposed, draft_hash = staff.store.draft_quality_catalogs(draft_id.hex)
+        return staff.store.draft_quality_catalogs(draft_id.hex)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/staff/rules/drafts/{draft_id}/quality")
+def preview_draft_quality(draft_id: UUID, staff: Staff, as_of: date = DEMO_DATE):
+    current, proposed, draft_hash, _ = draft_quality_snapshot(draft_id, staff)
     return {**compare_draft_quality(current, proposed, as_of=as_of), "draft_sha256": draft_hash}
+
+
+@router.get("/staff/rules/drafts/{draft_id}/quality/boundaries")
+def preview_draft_boundaries(draft_id: UUID, staff: Staff):
+    current, proposed, draft_hash, window = draft_quality_snapshot(draft_id, staff)
+    checks = [{"markers": markers, **compare_draft_quality(current, proposed, as_of=day)}
+              for day, markers in draft_boundary_dates(**window)]
+    return {"draft_sha256": draft_hash, "checks": checks}
 
 
 @router.get("/staff/quality")
