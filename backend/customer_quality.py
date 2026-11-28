@@ -13,8 +13,8 @@ from backend.tools.retrieval_eval import evaluate
 HISTORICAL_GIFT_TEXT = "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。"
 
 
-def _current_rule(rules, topic, channel, today):
-    return next((rule for rule in rules if (rule[1], rule[3], rule[4]) == (topic, channel, None)
+def _current_rule(rules, topic, channel, today, *, product=None):
+    return next((rule for rule in rules if (rule[1], rule[3], rule[4]) == (topic, channel, product)
                  and rule[5] <= today and (rule[6] is None or today < rule[6])), None)
 
 
@@ -58,6 +58,12 @@ def run_quality(rules, *, offline=False, as_of=DEMO_DATE):
         ("missing-followup", "赠品核实", "a", ["小样是不是漏发了？", "DEMO-1001"], {**gift_checks, "first_kind": "clarify"}),
         ("missing-foreign", "订单隔离", "a", ["DEMO-2001 的旅行装没收到"], {"kind": "unavailable"}),
         ("missing-mixed", "多项诉求", "a", ["DEMO-1001 物流到哪了？还有赠品是不是漏发了？"], {"kind": "clarify"}),
+        ("returns-web", "政策版本", "a", ["品牌商城拆封后能退换吗？"],
+         {"kind": "policy", "rule": _current_rule(rules, "returns", "web", today), "date": today}),
+        ("product-cream", "商品规格", "a", ["舒缓面霜的净含量是多少？"],
+         {"kind": "policy", "rule": _current_rule(rules, "product", None, today, product="cream"), "date": today}),
+        ("product-cleanser", "商品规格", "a", ["氨基酸洁面的容量是多少？"],
+         {"kind": "policy", "rule": _current_rule(rules, "product", None, today, product="cleanser"), "date": today}),
     ]
     results, rankings = _evaluate(cases, rules, offline_turn if offline else conversation_turn, as_of)
     baseline, _ = _evaluate(cases, rules, baseline_turn, as_of)

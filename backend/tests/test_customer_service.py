@@ -414,6 +414,27 @@ def test_draft_boundary_quality_uses_one_snapshot_and_is_read_only(api, monkeypa
     assert api.get(PREFIX + "/staff/quality", headers=operator).json() == []
 
 
+@pytest.mark.parametrize(("base", "case_id", "body"), [
+    ("returns-web", "returns-web", "请在订单详情页登记退换，并注明拆封状态。"),
+    ("cream-info", "product-cream", "舒缓面霜规格为 60 克。"),
+    ("cleanser-info", "product-cleanser", "氨基酸洁面规格为 120 毫升。"),
+])
+def test_boundary_quality_covers_each_product_and_storefront_returns(api, base, case_id, body):
+    operator = staff_session(api)
+    root = PREFIX + "/staff/rules"
+    draft = api.post(root + "/drafts", headers=operator, json={
+        "base_rule_id": base, "starts_at": "2026-11-24", "ends_at": "2026-11-25", "body": body,
+    }).json()
+    path = f"{root}/drafts/{draft['draft']['id']}/quality/boundaries"
+    before, active, expired = api.get(path, headers=operator).json()["checks"]
+    assert all(case["proposed_passed"] == case["total"] for case in (before, active, expired))
+    assert before["coverage_lost"] == []
+    case = next(item for item in active["changes"] if item["id"] == case_id)
+    assert case["current_replies"][-1]["citation"]["rule_id"] == base
+    assert case["proposed_replies"][-1]["text"] == body
+    assert expired["coverage_lost"] == [case_id]
+
+
 def test_draft_quality_reports_lost_rule_coverage_even_when_both_paths_pass(api):
     operator = staff_session(api)
     root = PREFIX + "/staff/rules"
