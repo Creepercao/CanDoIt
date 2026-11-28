@@ -11,6 +11,10 @@ from backend.tools.retrieval_eval import evaluate
 
 
 HISTORICAL_GIFT_TEXT = "活动期间单笔实付满 299 元赠旅行装一份，以订单结算页显示为准。"
+BOUNDARY_MARKERS = {
+    "before_start": "生效前一天", "starts": "草稿生效日", "base_cutoff": "发布后上版停止适用",
+    "base_expires": "现行版原定失效日", "last_active": "草稿最后有效日", "expires": "草稿失效日",
+}
 
 
 def _current_rule(rules, topic, channel, today, *, product=None):

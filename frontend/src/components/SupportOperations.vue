@@ -15,6 +15,7 @@ const editor = ref(null)
 const preview = ref(null)
 const draftQuality = ref(null)
 const draftEvaluationDate = ref('')
+const boundaryReview = ref(null)
 const runs = ref([])
 const report = ref(null)
 const failedOnly = ref(false)
@@ -100,7 +101,7 @@ async function ticketAction(action) {
 
 function startDraft(rule) {
   preview.value = null
-  draftQuality.value = null
+  resetDraftReview('')
   editor.value = {
     base_rule_id: rule.id, title: rule.title, body: rule.body,
     starts_at: catalog.value.demo_date,
@@ -114,7 +115,7 @@ async function saveDraft() {
     preview.value = await request(id ? `/rules/drafts/${id}` : '/rules/drafts', id ? 'patch' : 'post', {
       base_rule_id, starts_at, ends_at: ends_at || null, body, ...(id ? { draft_sha256 } : {}),
     })
-    selectDraftDate(preview.value.draft.starts_at)
+    resetDraftReview(preview.value.draft.starts_at)
     editor.value = null
     catalog.value = await request('/rules')
   })
@@ -123,7 +124,7 @@ async function saveDraft() {
 async function loadDraft(id) {
   await perform(async () => {
     preview.value = await request(`/rules/drafts/${id}`)
-    selectDraftDate(preview.value.draft.starts_at)
+    resetDraftReview(preview.value.draft.starts_at)
     editor.value = null
   })
 }
@@ -133,13 +134,13 @@ async function publishRule() {
     preview.value = await request(`/rules/drafts/${preview.value.draft.id}/publish`, 'post', {
       draft_sha256: preview.value.draft_sha256,
     })
-    draftQuality.value = null
+    resetDraftReview('')
     catalog.value = await request('/rules')
   })
 }
 
 function editPreview() {
-  draftQuality.value = null
+  resetDraftReview(preview.value.draft.starts_at)
   editor.value = { ...preview.value.draft, draft_sha256: preview.value.draft_sha256,
     title: preview.value.previous.title, ends_at: preview.value.draft.ends_at || '' }
 }
@@ -156,13 +157,39 @@ async function compareDraft() {
   await perform(async () => {
     draftQuality.value = null
     const params = new URLSearchParams({ as_of: draftEvaluationDate.value })
-    const result = await request(`/rules/drafts/${preview.value.draft.id}/quality?${params}`)
-    if (result.draft_sha256 !== preview.value.draft_sha256) {
-      error.value = '草稿已更新，请重新打开草稿后试跑。'
-      return
-    }
-    draftQuality.value = result
+    draftQuality.value = await requestDraftReview(`?${params}`)
   })
+}
+
+async function requestDraftReview(suffix) {
+  const result = await request(`/rules/drafts/${preview.value.draft.id}/quality${suffix}`)
+  if (result.draft_sha256 !== preview.value.draft_sha256) {
+    resetDraftReview(preview.value.draft.starts_at)
+    error.value = '草稿已更新，请重新打开草稿后试跑。'
+    return null
+  }
+  return result
+}
+
+async function compareBoundaries() {
+  await perform(async () => {
+    resetDraftReview(draftEvaluationDate.value)
+    boundaryReview.value = await requestDraftReview('/boundaries')
+    if (!boundaryReview.value) return
+    const checks = boundaryReview.value.checks
+    showBoundary(checks.find(check => check.regressed.length || check.coverage_lost.length) ||
+      checks.find(check => check.markers.includes('starts')))
+  })
+}
+
+function showBoundary(check) {
+  draftEvaluationDate.value = check.evaluation_date
+  draftQuality.value = check
+}
+
+function resetDraftReview(value) {
+  boundaryReview.value = null
+  selectDraftDate(value)
 }
 
 function selectDraftDate(value) {
@@ -309,9 +336,21 @@ function ruleState(rule) {
             <div v-if="!preview.published" class="actions">
               <button :disabled="busy || preview.impact?.publishable === false" @click="editPreview">继续编辑</button>
               <button :disabled="busy || !preview.impact?.publishable || !draftEvaluationDate" @click="compareDraft">离线试跑草稿</button>
+              <button :disabled="busy || !preview.impact?.publishable" @click="compareBoundaries">试跑全部关键日期</button>
               <button class="primary" :disabled="busy || preview.impact?.publishable === false" @click="publishRule">发布规则版本</button>
             </div>
             <p v-else class="hint" role="status">新版本已发布。</p>
+            <section v-if="boundaryReview" class="evidence" aria-label="关键日期试跑">
+              <p role="status">已试跑 {{ boundaryReview.checks.length }} 个关键日期</p>
+              <button v-for="check in boundaryReview.checks" :key="check.evaluation_date" class="queue-row"
+                :disabled="busy" :aria-pressed="draftQuality === check" @click="showBoundary(check)">
+                <span class="queue-meta">{{ check.evaluation_date }}<span>{{ check.proposed_passed }}/{{ check.total }} 通过</span></span>
+                <small>{{ check.markers.map(marker => boundaryReview.marker_labels[marker]).join('、') }}</small>
+                <small v-if="check.regressed.length || check.coverage_lost.length" class="fail">
+                  新增失败 {{ check.regressed.length }} 题 · 规则空档 {{ check.coverage_lost.length }} 题
+                </small>
+              </button>
+            </section>
             <section v-if="draftQuality" class="evidence" aria-label="草稿试跑结果">
               <p role="status">{{ draftQuality.evaluation_date }} 规则试跑。现行 {{ draftQuality.current_passed }}/{{ draftQuality.total }}，草稿 {{ draftQuality.proposed_passed }}/{{ draftQuality.total }}。</p>
               <p v-if="draftQuality.regressed.length" class="fail">新增失败 {{ draftQuality.regressed.length }} 题</p>
