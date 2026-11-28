@@ -208,15 +208,28 @@ async function downloadReport() {
   await perform(async () => {
     const id = report.value.id
     const content = await request(`/quality/${id}/report`)
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
-    const download = document.createElement('a')
-    download.href = url
-    download.download = `customer-quality-${id}.md`
-    document.body.append(download)
-    download.click()
-    download.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    downloadMarkdown(content, `customer-quality-${id}.md`)
   })
+}
+
+async function downloadBoundaryReport() {
+  await perform(async () => {
+    const id = preview.value.draft.id
+    const params = new URLSearchParams({ review_sha256: boundaryReview.value.review_sha256 })
+    const content = await request(`/rules/drafts/${id}/quality/boundaries/report?${params}`)
+    downloadMarkdown(content, `customer-draft-${id}.md`)
+  })
+}
+
+function downloadMarkdown(content, filename) {
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
+  const download = document.createElement('a')
+  download.href = url
+  download.download = filename
+  document.body.append(download)
+  download.click()
+  download.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function timeLabel(value) {
@@ -342,6 +355,7 @@ function ruleState(rule) {
             <p v-else class="hint" role="status">新版本已发布。</p>
             <section v-if="boundaryReview" class="evidence" aria-label="关键日期试跑">
               <p role="status">已试跑 {{ boundaryReview.checks.length }} 个关键日期</p>
+              <button :disabled="busy" @click="downloadBoundaryReport">下载草稿试跑报告</button>
               <button v-for="check in boundaryReview.checks" :key="check.evaluation_date" class="queue-row"
                 :disabled="busy" :aria-pressed="draftQuality === check" @click="showBoundary(check)">
                 <span class="queue-meta">{{ check.evaluation_date }}<span>{{ check.proposed_passed }}/{{ check.total }} 通过</span></span>
