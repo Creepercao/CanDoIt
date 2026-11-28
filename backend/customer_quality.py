@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections import Counter
+from datetime import date, timedelta
 
 from backend.customer_intent import classify, configured_model
 from backend.customer_service import DEMO_DATE, conversation_turn as baseline_turn, support_turn
@@ -76,6 +77,23 @@ def run_quality(rules, *, offline=False, as_of=DEMO_DATE):
             "case_sha256": case_hash, "evaluation_date": today,
             "policy_recall_at_1": citation_metrics["recall@1"],
             "policy_citation_queries": citation_metrics["answerable_queries"], "catalog_sha256": fingerprint}
+
+
+def draft_boundary_dates(base_end, cutoff, starts_at, ends_at):
+    start = date.fromisoformat(starts_at)
+    end = date.fromisoformat(ends_at) if ends_at else None
+    one_day = timedelta(days=1)
+    checkpoints = [
+        (start - one_day, "before_start"), (start, "starts"),
+        (date.fromisoformat(cutoff), "base_cutoff"),
+        (date.fromisoformat(base_end) if base_end else None, "base_expires"),
+        (end - one_day if end else None, "last_active"), (end, "expires"),
+    ]
+    dates = {}
+    for day, marker in checkpoints:
+        if day is not None:
+            dates.setdefault(day, []).append(marker)
+    return sorted(dates.items())
 
 
 def compare_draft_quality(current, proposed, *, as_of=DEMO_DATE):

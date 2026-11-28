@@ -6,6 +6,19 @@ from backend import customer_quality
 from backend.customer_service import RULES
 
 
+def test_draft_boundary_dates_group_adjacent_checkpoints_and_handle_open_end():
+    assert customer_quality.draft_boundary_dates("2026-12-01", "2026-11-24", "2026-11-24", "2026-11-25") == [
+        (date(2026, 11, 23), ["before_start"]),
+        (date(2026, 11, 24), ["starts", "base_cutoff", "last_active"]),
+        (date(2026, 11, 25), ["expires"]),
+        (date(2026, 12, 1), ["base_expires"]),
+    ]
+    assert customer_quality.draft_boundary_dates(None, "2026-12-01", "2026-12-01", None) == [
+        (date(2026, 11, 30), ["before_start"]),
+        (date(2026, 12, 1), ["starts", "base_cutoff"]),
+    ]
+
+
 @pytest.mark.parametrize(("case_id", "query_prefix", "change", "difference"), [
     ("historical", "DEMO-1001 下单时", "amount", "text"),
     ("current-web", "当前活动", "promise", "text"),
